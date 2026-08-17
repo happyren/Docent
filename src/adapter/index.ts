@@ -1,6 +1,7 @@
 export { ExcalidrawCanvas } from "./excalidraw";
 export type {
   DocentCanvasHandle,
+  EdgeGeometry,
   ElementInfo,
   ExcalidrawCanvasProps,
   FrameInfo,

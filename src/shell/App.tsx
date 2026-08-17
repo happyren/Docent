@@ -2,7 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
 import { CameraEngine } from "../camera/engine";
+import { CommandAPI } from "../command/api";
 import { exportScene } from "../export";
+import { OverlayLayer } from "../overlay/OverlayLayer";
+import { OverlayStore } from "../overlay/state";
 import {
   downloadSceneFile,
   ensureExtension,
@@ -30,6 +33,11 @@ export function App() {
   const [docVersion, setDocVersion] = useState(0);
 
   const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
+  const overlayStore = useMemo(() => new OverlayStore(), []);
+  const commands = useMemo(
+    () => (canvas && camera ? new CommandAPI(canvas, camera, overlayStore) : null),
+    [canvas, camera, overlayStore],
+  );
   const presentation = usePresentation(canvas, camera);
   const drill = useDrill(canvas, camera);
 
@@ -137,6 +145,7 @@ export function App() {
         exportScene: () => exportScene(canvas.getSceneSnapshot()),
         canvas,
         camera,
+        commands,
       };
     }
 
@@ -157,7 +166,7 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [canvas, camera, markClean]);
+  }, [canvas, camera, commands, markClean]);
 
   // File shortcuts (always active).
   useEffect(() => {
@@ -293,6 +302,32 @@ export function App() {
           </nav>
         )}
         <div className="docent-actions">
+          {!presentation.active && selectedIds.length > 0 && commands && (
+            <>
+              <button
+                onClick={() => commands.highlight({ ids: selectedIds, style: "glow" })}
+              >
+                Glow
+              </button>
+              <button
+                onClick={() =>
+                  commands.highlight({ ids: selectedIds, style: "spotlight" })
+                }
+              >
+                Spotlight
+              </button>
+              <button
+                onClick={() =>
+                  void commands
+                    .flow({ path: selectedIds })
+                    .catch((err) => window.alert(String(err)))
+                }
+              >
+                Flow
+              </button>
+              <button onClick={() => commands.clearEffects()}>Clear FX</button>
+            </>
+          )}
           {singleSelected &&
             (singleSelected.detailFrameId ? (
               <button onClick={() => drill.dive(singleSelected.id)}>
@@ -348,6 +383,9 @@ export function App() {
             onExportSidecar: exportSidecarFile,
           }}
         />
+        {canvas && (
+          <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
+        )}
         {singleSelected && canvas && (
           <IntentPanel
             key={`${singleSelected.id}:${docVersion}`}

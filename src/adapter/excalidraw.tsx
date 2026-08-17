@@ -58,11 +58,23 @@ export interface FrameInfo {
   bounds: SceneBounds;
 }
 
+export interface EdgeGeometry {
+  /** Anchor-relative points in scene units, as drawn. */
+  points: [number, number][];
+  /** Anchor (element x/y) in scene coordinates. */
+  x: number;
+  y: number;
+  /** Excalidraw roundness type (null = sharp corners). */
+  rounded: boolean;
+  elbowed: boolean;
+}
+
 export interface ElementInfo {
   id: string;
   type: string;
   label: string | null;
   bounds: SceneBounds;
+  angle: number;
   frameId: string | null;
   /** Declared detail diagram (customData.docent.detail.frameId), if any. */
   detailFrameId: string | null;
@@ -138,6 +150,11 @@ export interface DocentCanvasHandle {
   ): void;
   /** Declared legend rules (from the legend carrier element). */
   getLegend(): LegendRule[];
+
+  /** Drawn geometry of a linear element (for overlay path parity, D4). */
+  getEdgeGeometry(elementId: string): EdgeGeometry | null;
+  /** Subscribe to viewport moves (scroll/zoom). Returns unsubscribe. */
+  onViewportChange(callback: (viewport: Viewport) => void): () => void;
   /**
    * Replace the legend. Rules live on a locked text element on the canvas —
    * human-readable text, machine-readable `customData.docent.legend` — so
@@ -264,6 +281,7 @@ function toElementInfo(
     type: element.type,
     label: labelOf(element, elements),
     bounds: boundsOf(element),
+    angle: element.angle ?? 0,
     frameId: element.frameId ?? null,
     detailFrameId: detailFrameIdOf(element, elements),
     tags: tagsOf(element),
@@ -587,6 +605,31 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
     },
+
+    getEdgeGeometry: (elementId) => {
+      const el = liveElements(api).find((e) => e.id === elementId);
+      if (!el || (el.type !== "arrow" && el.type !== "line")) return null;
+      const linear = el as ExcalidrawElement & {
+        points?: readonly (readonly number[])[];
+        elbowed?: boolean;
+      };
+      const points = (linear.points ?? []).map(
+        (p) => [p[0], p[1]] as [number, number],
+      );
+      if (points.length < 2) return null;
+      return {
+        points,
+        x: el.x,
+        y: el.y,
+        rounded: el.roundness !== null && el.roundness !== undefined,
+        elbowed: linear.elbowed === true,
+      };
+    },
+
+    onViewportChange: (callback) =>
+      api.onScrollChange((scrollX, scrollY, zoom) =>
+        callback({ scrollX, scrollY, zoom: zoom.value }),
+      ),
   };
 }
 

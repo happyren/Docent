@@ -124,6 +124,13 @@ body {
   content: "› ";
 }
 
+.docent-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
 .docent-hud {
   position: absolute;
   left: 50%;
