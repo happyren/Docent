@@ -235,6 +235,12 @@ export function App() {
     if (import.meta.env.DEV) {
       // Dev-only hook for scripted verification; not part of the app surface.
       (window as unknown as Record<string, unknown>).__docent = {
+        measurePerformance: (windowMs?: number) =>
+          camera && commands
+            ? import("./perf").then((m) =>
+                m.measurePerformance(canvas, camera, commands, windowMs),
+              )
+            : Promise.reject(new Error("Not ready")),
         serializeScene: () => canvas.serializeScene(),
         loadSceneJSON: (json: string) =>
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
