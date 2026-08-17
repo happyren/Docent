@@ -1,0 +1,7 @@
+services:
+  docent:
+    build: .
+    image: docent
+    ports:
+      - "3000:80"
+    restart: unless-stopped
