@@ -1,0 +1,179 @@
+# Docent Constitution
+
+This document governs delivery. It is binding on every contributor — human or agent.
+When code and constitution conflict, the constitution wins and the code is the bug.
+Specifics over slogans; every rule here is checkable.
+
+---
+
+## 1. Purpose
+
+Docent makes one diagram serve three audiences:
+
+1. **Humans watching** — continuous-camera presentations over Excalidraw frames.
+2. **AI reading** — deterministic, token-efficient semantic export (Mermaid + compact JSON).
+3. **AI driving** — an MCP-exposed Command API for camera, highlighting, flow animation, and narrated tours.
+
+Anything that does not serve one of these three is out of scope by default.
+
+---
+
+## 2. Invariants
+
+These hold at every commit. A PR that violates one is rejected regardless of what it delivers.
+
+**I1 — Upstream is sacred.**
+`@excalidraw/excalidraw` is a pinned npm dependency. Never fork it, never patch it,
+never modify `node_modules`, never vendor modified copies. If a capability seems to
+require touching core, the design is wrong — redesign against the public API
+(`excalidrawAPI`, props, `onChange`).
+
+**I2 — The overlay never writes.**
+All visual effects (highlight, spotlight, dim, flow pulses, tour cues) render on the
+overlay layer. No effect may mutate scene elements, element `version`/`versionNonce`,
+or the undo history. Test: run any sequence of Command API calls, then diff the
+serialized scene — it must be byte-identical to before.
+
+**I3 — Export is deterministic.**
+The same scene always produces byte-identical export output: stable element ordering
+(by ID), sorted JSON keys, no timestamps, no randomness. Test: export twice, `diff`
+is empty.
+
+**I4 — Inference is always labeled.**
+The exporter resolves unsnapped arrows by proximity heuristic, but every inferred
+connection carries `"binding": "inferred"`. The export never presents a guess as a fact.
+
+**I5 — Agents live in ID-space.**
+Every Command API parameter that references the diagram uses scene-graph IDs from
+`get_scene_graph`. No pixel coordinates in the agent surface. Unknown IDs return an
+explicit error; commands never silently no-op.
+
+**I6 — IDs are stable.**
+Scene-graph IDs derive from Excalidraw element IDs and survive re-export, viewport
+changes, and styling edits. An agent that cached a graph five minutes ago can still
+address the same components (modulo user deletions, which error per I5).
+
+**I7 — Dependencies are deliberate.**
+No new runtime dependency without an entry in the Decision Log (§6). Dev dependencies
+are free; runtime weight is not.
+
+**I8 — Animation degrades, never blocks.**
+All motion runs on `requestAnimationFrame`, is interruptible, and respects
+`prefers-reduced-motion` (tweens collapse to instant transitions). No animation may
+block input or the agent command loop.
+
+---
+
+## 3. Scope — v1 (locked)
+
+### In scope
+
+| # | Capability | Definition of done |
+|---|-----------|--------------------|
+| S1 | Self-host shell | `docker compose up` serves the canvas; load/save `.excalidraw` files; Excalidraw version pinned |
+| S2 | Presentation mode | Frames as ordered waypoints (name-order, manifest override); eased pan/zoom tweens; next/prev/overview keyboard controls |
+| S3 | Scene graph | Live extraction of `{nodes, edges, frames, groups}` with labels resolved from bound text (`containerId`) and connections from arrow bindings |
+| S4 | Exporters | Mermaid emitter (primary) + compact JSON sidecar; ≥60% token reduction vs raw scene JSON, measured and reported in CI |
+| S5 | Overlay renderer | Viewport-synced SVG layer; sync verified across pan/zoom/resize |
+| S6 | Highlight | `glow`, `spotlight` (dim-others), `outline`; idempotent; clearable |
+| S7 | Flow animation | End-to-end pulse along an edge; multi-hop chaining across an ordered edge path; straight, curved, and elbow arrows |
+| S8 | Command API + MCP | `get_scene_graph`, `focus`, `highlight`, `flow`, `tour`, `narrate` over a local MCP server |
+| S9 | Narration panel | Text panel rendering `narrate` output during tours |
+
+### Out of scope for v1 (locked out — do not build, do not scaffold "for later")
+
+- **Agent authoring** (`add_node`, `add_edge`, element mutation) — deferred to v2 by design.
+  The scene graph's ID model must not preclude it, but no v1 code implements it.
+- Forking/patching Excalidraw core (I1 — permanent, not just v1)
+- Multiplayer, collaboration, presence
+- Auth, accounts, multi-tenancy — Docent v1 is single-user self-hosted
+- Viewport rotation (Prezi's rotating camera)
+- Pixel-perfect tracing of roughjs strokes (see D3)
+- TTS narration; mobile layouts; custom Excalidraw element types
+- Persistence beyond `.excalidraw` files (no database)
+
+Scope changes require amending this document first (§7), code second.
+
+---
+
+## 4. Architecture boundaries
+
+Five subsystems, with dependency direction enforced top-down:
+
+```
+shell → { camera, overlay, command-api } → scene-graph → excalidraw adapter
+mcp-server → command-api
+exporters → scene-graph
+```
+
+**B1** — Only the **excalidraw adapter** module imports from `@excalidraw/excalidraw` or
+reads raw element shapes. Everything above it consumes the scene graph or the adapter's
+typed surface. When upstream changes its element schema, exactly one module changes.
+
+**B2** — The **camera engine** is the only writer of viewport state. Presentation mode
+and agent `focus`/`tour` are both clients of it — no second tween implementation.
+
+**B3** — The **overlay renderer** is the only place effects draw. Highlight, flow, and
+tour cues are overlay programs, not separate rendering paths.
+
+**B4** — The **command API** is the single choke point for agent actions. The MCP server
+is a thin transport over it; no logic in the transport layer.
+
+**B5** — **Exporters** are pure functions of the scene graph. No I/O, no viewport
+awareness, no side effects.
+
+---
+
+## 5. Quality bars
+
+- **Q1** — Geometry parity: for every arrow type (straight, curved, elbow), the overlay
+  path's deviation from Excalidraw's rendered centerline stays within the glow radius.
+  Fixture scenes with all arrow types live in the repo; parity checked visually per
+  release and by bounding tests in CI.
+- **Q2** — Export golden tests: fixture scenes with committed expected Mermaid/JSON
+  output. Upstream version bumps must pass goldens before merge.
+- **Q3** — Scene-diff test (per I2) runs in CI against a scripted command sequence.
+- **Q4** — 60fps target for tweens and pulses on a mid-range laptop with a 200-element
+  scene; measured, not asserted.
+- **Q5** — Every MCP tool has a docstring with one worked example; `get_scene_graph`
+  output is self-describing enough that an agent needs no other documentation to drive.
+
+---
+
+## 6. Decision Log (locked)
+
+| # | Decision | Rationale |
+|---|----------|-----------|
+| D1 | Wrapper, never fork | Forks rot; upstream velocity is high; everything needed is reachable via public API |
+| D2 | Non-destructive overlay | Document integrity and clean undo are non-negotiable; effects are ephemeral by nature |
+| D3 | **Neon-over-pencil** — flow pulses render as a wider soft glow *over* the sketchy stroke, not a trace of roughjs jitter | Approved. Reads better aesthetically and is robust to upstream rendering changes |
+| D4 | **Path-math parity** — curved/elbow arrow geometry replicated from `element.points` + roundness/elbow routing, not naive point-connecting | Approved. The glow must follow the visible path; naive polylines visibly diverge on elbows |
+| D5 | Mermaid primary + JSON sidecar | Models parse Mermaid natively; sidecar carries spatial/structural context Mermaid can't express |
+| D6 | MIT license | Excalidraw-compatible; maximum adoption; zero legal friction |
+| D7 | Agent surface = MCP over Command API, ID-space only | Interoperable with any MCP client; IDs decouple agents from rendering |
+| D8 | v1 = read + drive; authoring = v2 | Ship the demoable core; authoring doubles the correctness surface (layout, collision, styling) and must not delay it |
+
+New decisions append here with a number, a one-line rationale, and a date.
+
+---
+
+## 7. Amendment process
+
+1. Propose the change as a PR editing this file only.
+2. State what it unlocks and what it costs (scope, dependency weight, upstream risk).
+3. Maintainer (Kaixiang) approves or rejects. Approval lands the amendment; only then
+   may implementing code merge.
+4. Invariants I1–I5 are entrenched: amending them requires demonstrating the demo
+   scenario (§1) is impossible without the change.
+
+---
+
+## 8. Delivery order
+
+Milestones ship strictly in order — each is independently demoable:
+
+**M0 Shell → M1 Longtake → M2 Scene Graph + Export → M3 Overlay FX → M4 Agent control.**
+
+Rationale for the order: the scene graph (M2) is the address space; it must exist and be
+golden-tested before effects (M3) and agents (M4) reference its IDs. No milestone starts
+before the previous one's definition of done (§3) is met. Partial credit is not credit.
