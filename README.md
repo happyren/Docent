@@ -89,8 +89,8 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 │           │                           │              │
 │   ┌───────┴────────┐         ┌────────┴───────┐      │
 │   │  Scene Graph   │         │   MCP Server   │      │
-│   │  + Exporters   │         │ (local, stdio/ │      │
-│   │ (Mermaid/JSON) │         │   websocket)   │      │
+│   │  + Exporters   │         │ (local, stdio  │      │
+│   │ (Mermaid/JSON) │         │  + SSE bridge) │      │
 │   └───────┬────────┘         └────────────────┘      │
 │           │                                          │
 │   ┌───────┴──────────────────────────────────────┐   │
@@ -177,14 +177,26 @@ Provenance levels: `explicit` — read from the drawing · `declared` — author
 # self-host
 docker compose up
 # → http://localhost:3000  (canvas)
-# → MCP server on stdio / ws://localhost:3001
 
 # or dev mode
 pnpm install
 pnpm dev
 ```
 
-Point your MCP client at the Docent server, ask it to `get_scene_graph`, and start touring.
+**Agent control:** run the MCP server (stdio) and open the canvas — it attaches to the
+server's bridge on `http://localhost:3001` automatically:
+
+```bash
+pnpm mcp
+```
+
+Point any MCP client at that process, ask it to `get_scene_graph`, and start touring.
+
+```bash
+# quality gates
+pnpm test            # determinism, goldens, token reduction, command invariants
+pnpm comprehension   # Q6: scores a reference model given only the export
+```
 
 ---
 

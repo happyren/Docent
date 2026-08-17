@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
+import { connectAgentBridge } from "../agent/bridge";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
 import { exportScene } from "../export";
@@ -32,12 +33,33 @@ export function App() {
   // Bumped on document changes so selection-derived UI re-reads element intent.
   const [docVersion, setDocVersion] = useState(0);
 
+  const [narration, setNarration] = useState<string | null>(null);
   const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
   const overlayStore = useMemo(() => new OverlayStore(), []);
   const commands = useMemo(
-    () => (canvas && camera ? new CommandAPI(canvas, camera, overlayStore) : null),
+    () =>
+      canvas && camera
+        ? new CommandAPI(canvas, camera, overlayStore, { narrate: setNarration })
+        : null,
     [canvas, camera, overlayStore],
   );
+
+  // Agent bridge (S8): attach to a local MCP server when one is running.
+  useEffect(() => {
+    if (!commands) return;
+    return connectAgentBridge(commands);
+  }, [commands]);
+
+  // Esc interrupts an agent tour outside presentation mode.
+  const presentationActiveForEscRef = useRef(false);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || presentationActiveForEscRef.current) return;
+      commands?.stopTour();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [commands]);
   const presentation = usePresentation(canvas, camera);
   const drill = useDrill(canvas, camera);
 
@@ -230,6 +252,7 @@ export function App() {
   // clicks from view-mode panning.
   const presentationActiveRef = useRef(false);
   presentationActiveRef.current = presentation.active;
+  presentationActiveForEscRef.current = presentation.active;
   const canvasHostRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const host = canvasHostRef.current;
@@ -392,6 +415,18 @@ export function App() {
             canvas={canvas}
             selection={singleSelected}
           />
+        )}
+        {narration && (
+          <div className="docent-narration">
+            <span className="docent-narration-text">{narration}</span>
+            <button
+              className="docent-narration-close"
+              title="Stop narration"
+              onClick={() => commands?.stopTour()}
+            >
+              ✕
+            </button>
+          </div>
         )}
         {presentation.active && (
           <div className="docent-hud">

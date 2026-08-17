@@ -36,11 +36,50 @@ export interface SceneReader {
 /** Scene-units per second at speed 1.0. */
 const FLOW_UNITS_PER_SECOND = 500;
 
+/** Where narrate() text goes (S9) — the shell's narration panel. */
+export interface NarrationSink {
+  narrate(text: string | null): void;
+}
+
+export interface TourStep {
+  /** Graph id to fly to (node, edge, or frame). */
+  focus?: string;
+  /** Graph ids to highlight for this step. */
+  highlight?: string[];
+  highlightStyle?: HighlightStyle;
+  /** Ordered edge ids to pulse for this step. */
+  flow?: string[];
+  /**
+   * Narration text. When omitted and `focus` targets a frame with a
+   * declared narrative, the narrative narrates the step (D10, S9).
+   */
+  narrate?: string;
+}
+
 export class CommandAPI {
+  private tourGeneration = 0;
+  private wakeTour: (() => void) | null = null;
+
+  /** Interruptible sleep — stopTour() resolves it immediately. */
+  private dwell(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.wakeTour = null;
+        resolve();
+      }, ms);
+      this.wakeTour = () => {
+        clearTimeout(timer);
+        this.wakeTour = null;
+        resolve();
+      };
+    });
+  }
+
   constructor(
     private readonly reader: SceneReader,
     private readonly camera: CameraEngine,
     private readonly overlay: OverlayStore,
+    private readonly narration: NarrationSink = { narrate: () => {} },
   ) {}
 
   /** The agent-facing address space: nodes/edges/frames with stable ids. */
@@ -130,5 +169,68 @@ export class CommandAPI {
   /** Clear all overlay effects. */
   clearEffects(): void {
     this.overlay.clear();
+  }
+
+  /** Render text in the narration panel (S9). Null/empty hides it. */
+  narrate(params: { text: string | null }): void {
+    this.narration.narrate(params.text || null);
+  }
+
+  /**
+   * Run a narrated walkthrough (S8/S9): each step may focus, highlight,
+   * pulse a flow, and narrate — frame narratives narrate frame-focus steps
+   * by default. Interruptible via stopTour(); resolves with the number of
+   * steps completed.
+   */
+  async tour(params: { steps: TourStep[]; stepMs?: number }): Promise<number> {
+    this.tourGeneration += 1;
+    const generation = this.tourGeneration;
+    let completed = 0;
+    try {
+      for (const step of params.steps) {
+        if (generation !== this.tourGeneration) break;
+        let narration = step.narrate ?? null;
+        if (step.focus) {
+          if (narration === null) {
+            const graph = this.getSceneGraph();
+            const frame = graph.frames.find(
+              (f) => f.id === step.focus || f.sourceId === step.focus,
+            );
+            narration = frame?.narrative ?? null;
+          }
+          await this.focus({ id: step.focus });
+        }
+        if (generation !== this.tourGeneration) break;
+        if (narration !== null) this.narration.narrate(narration);
+        if (step.highlight) {
+          this.highlight({ ids: step.highlight, style: step.highlightStyle });
+        }
+        if (step.flow?.length) {
+          await this.flow({ path: step.flow });
+        }
+        if (generation !== this.tourGeneration) break;
+        // Reading time scales with narration length; always interruptible.
+        const readMs =
+          params.stepMs ?? Math.min(1200 + (narration?.length ?? 0) * 35, 8000);
+        await this.dwell(readMs);
+        if (generation !== this.tourGeneration) break;
+        completed += 1;
+      }
+    } finally {
+      if (generation === this.tourGeneration) {
+        this.narration.narrate(null);
+        this.overlay.clear();
+      }
+    }
+    return completed;
+  }
+
+  /** Interrupt a running tour; effects and narration clear immediately. */
+  stopTour(): void {
+    this.tourGeneration += 1;
+    this.wakeTour?.();
+    this.narration.narrate(null);
+    this.overlay.clear();
+    this.camera.stop();
   }
 }
