@@ -133,8 +133,21 @@ export interface DocentCanvasHandle {
    * Create a detail frame for an element and link it via
    * `customData.docent.detail` — one undoable step (drill authoring is intent
    * capture per D14; the overlay-never-writes invariant I2 is untouched).
+   * `placement` positions the frame (callers compute tier-band placement);
+   * defaults to below the scene bounds.
    */
-  createAndLinkDetailFrame(elementId: string): { frameId: string; bounds: SceneBounds };
+  createAndLinkDetailFrame(
+    elementId: string,
+    placement?: { x: number; y: number },
+  ): { frameId: string; bounds: SceneBounds };
+
+  /**
+   * Translate frames and their member elements by per-frame deltas — one
+   * undoable step. Mechanical write; tier semantics live in scene/tiers.
+   */
+  translateFrames(
+    moves: { frameId: string; dx: number; dy: number; memberIds: string[] }[],
+  ): void;
 
   /** Typed snapshot of the live scene — input to the scene graph/exporters. */
   getSceneSnapshot(): SceneSnapshot;
@@ -169,6 +182,7 @@ export interface SceneMenuActions {
   onSaveAs: () => void;
   onExportMermaid: () => void;
   onExportSidecar: () => void;
+  onArrangeTiers: () => void;
 }
 
 export interface ExcalidrawCanvasProps {
@@ -445,7 +459,7 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       return hit ? toElementInfo(hit, elements) : null;
     },
 
-    createAndLinkDetailFrame: (elementId) => {
+    createAndLinkDetailFrame: (elementId, placement) => {
       const all = api.getSceneElementsIncludingDeleted();
       const source = all.find((el) => el.id === elementId && !el.isDeleted);
       if (!source) {
@@ -454,11 +468,18 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       const label = labelOf(source, all) ?? source.type;
 
       const live = all.filter((el) => !el.isDeleted);
-      const [minX, , , maxY] = getCommonBounds(live);
       const FRAME_W = 760;
       const FRAME_H = 460;
-      const x = minX;
-      const y = maxY + 140;
+      let x: number;
+      let y: number;
+      if (placement) {
+        x = placement.x;
+        y = placement.y;
+      } else {
+        const [minX, , , maxY] = getCommonBounds(live);
+        x = minX;
+        y = maxY + 140;
+      }
 
       const created = convertToExcalidrawElements(
         [
@@ -606,6 +627,25 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
     },
 
+    translateFrames: (moves) => {
+      if (!moves.length) return;
+      const byFrame = new Map(moves.map((m) => [m.frameId, m]));
+      const byMember = new Map<string, { dx: number; dy: number }>();
+      for (const move of moves) {
+        for (const id of move.memberIds) byMember.set(id, move);
+      }
+      const all = api.getSceneElementsIncludingDeleted();
+      api.updateScene({
+        elements: all.map((el) => {
+          const move = byFrame.get(el.id) ?? byMember.get(el.id);
+          return move
+            ? newElementWith(el, { x: el.x + move.dx, y: el.y + move.dy })
+            : el;
+        }),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
     getEdgeGeometry: (elementId) => {
       const el = liveElements(api).find((e) => e.id === elementId);
       if (!el || (el.type !== "arrow" && el.type !== "line")) return null;
@@ -718,6 +758,9 @@ export function ExcalidrawCanvas({
         </MainMenu.Item>
         <MainMenu.Item onSelect={menuActions.onExportSidecar}>
           Export semantic JSON…
+        </MainMenu.Item>
+        <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
+          Arrange detail tiers
         </MainMenu.Item>
         <MainMenu.Separator />
         <MainMenu.DefaultItems.SaveAsImage />

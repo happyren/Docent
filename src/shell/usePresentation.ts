@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { DocentCanvasHandle, FrameInfo, Viewport } from "../adapter";
 import type { CameraEngine } from "../camera/engine";
+import { computeTiers } from "../scene/tiers";
 import { orderWaypoints } from "../scene/waypoints";
 
 export const OVERVIEW = -1;
@@ -26,9 +27,12 @@ export function usePresentation(
   const [waypoints, setWaypoints] = useState<FrameInfo[]>([]);
   const savedViewportRef = useRef<Viewport | null>(null);
 
+  // Overview fits Layer 1 only — lower drill tiers live in distant bands
+  // and are reached by diving, never by the linear walkthrough (S11).
   const flyOverview = useCallback(() => {
     if (!canvas || !camera) return;
-    const bounds = canvas.getSceneBounds();
+    const tiers = computeTiers(canvas.getSceneSnapshot());
+    const bounds = tiers.tier1Bounds ?? canvas.getSceneBounds();
     if (bounds) void camera.flyTo(bounds, { padding: 0.06, duration: 750 });
   }, [canvas, camera]);
 
@@ -50,7 +54,10 @@ export function usePresentation(
 
   const enter = useCallback(() => {
     if (!canvas || !camera) return;
-    const frames = orderWaypoints(canvas.getFrames());
+    const tiers = computeTiers(canvas.getSceneSnapshot());
+    const frames = orderWaypoints(
+      canvas.getFrames().filter((f) => (tiers.frameTier.get(f.id) ?? 1) === 1),
+    );
     savedViewportRef.current = canvas.getViewport();
     canvas.setViewMode(true);
     setWaypoints(frames);

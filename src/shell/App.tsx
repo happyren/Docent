@@ -14,6 +14,7 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
+import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { IntentPanel } from "./IntentPanel";
 import { LegendEditor } from "./LegendEditor";
 import { OVERVIEW, usePresentation } from "./usePresentation";
@@ -35,6 +36,8 @@ export function App() {
 
   const [narration, setNarration] = useState<string | null>(null);
   const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
+  const cameraRef = useRef<CameraEngine | null>(null);
+  cameraRef.current = camera;
   const overlayStore = useMemo(() => new OverlayStore(), []);
   const commands = useMemo(
     () =>
@@ -61,12 +64,65 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [commands]);
   const presentation = usePresentation(canvas, camera);
-  const drill = useDrill(canvas, camera);
+
+  /** Scene point at the middle of the current viewport. */
+  const viewportCenter = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return { x: 0, y: 0 };
+    const vp = c.getViewport();
+    const size = c.getViewportSize();
+    return {
+      x: size.width / (2 * vp.zoom) - vp.scrollX,
+      y: size.height / (2 * vp.zoom) - vp.scrollY,
+    };
+  }, []);
+
+  // Structural "up": from wherever the camera is, fly to the linking shape's
+  // parent context and glow that shape briefly — works with no dive stack
+  // (e.g. right after opening a file deep in a tier).
+  const structuralUp = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c || !camera) return;
+    const snapshot = c.getSceneSnapshot();
+    const tiers = computeTiers(snapshot);
+    const trail = trailAt(tiers, snapshot, viewportCenter());
+    const deepest = trail[trail.length - 1];
+    if (!deepest) return;
+    const parentBounds = deepest.parentFrameId
+      ? (c.getFrameInfo(deepest.parentFrameId)?.bounds ?? tiers.tier1Bounds)
+      : tiers.tier1Bounds;
+    if (parentBounds) void camera.flyTo(parentBounds, { padding: 0.1 });
+    commands?.highlight({ ids: [deepest.linkingElementId], style: "glow" });
+    window.setTimeout(() => commands?.highlight({ ids: [] }), 1800);
+  }, [camera, commands, viewportCenter]);
+
+  const deepestFrameId = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return null;
+    const snapshot = c.getSceneSnapshot();
+    const trail = trailAt(computeTiers(snapshot), snapshot, viewportCenter());
+    return trail[trail.length - 1]?.frameId ?? null;
+  }, [viewportCenter]);
+
+  const drill = useDrill(canvas, camera, structuralUp, deepestFrameId);
 
   const markClean = useCallback((name: string | null) => {
     savedFingerprintRef.current = canvasRef.current?.getSceneFingerprint() ?? null;
     if (name !== null) setFileName(name);
     setDirty(false);
+  }, []);
+
+  // Tiered scenes open on Layer 1 only — lower bands stay out of view.
+  const fitLayerOne = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const tiers = computeTiers(c.getSceneSnapshot());
+    if (tiers.maxTier > 1 && tiers.tier1Bounds) {
+      void cameraRef.current?.flyTo(tiers.tier1Bounds, {
+        padding: 0.08,
+        duration: 0,
+      });
+    }
   }, []);
 
   const openScene = useCallback(async () => {
@@ -78,11 +134,12 @@ export function App() {
       await handle.loadSceneBlob(picked.blob);
       fsHandleRef.current = picked.handle;
       markClean(picked.name);
+      fitLayerOne();
     } catch (err) {
       console.error(err);
       window.alert(`Could not open scene: ${err instanceof Error ? err.message : err}`);
     }
-  }, [markClean]);
+  }, [markClean, fitLayerOne]);
 
   const saveSceneAs = useCallback(async () => {
     const handle = canvasRef.current;
@@ -181,6 +238,7 @@ export function App() {
         if (controller.signal.aborted) return;
         await canvas.loadSceneBlob(blob);
         markClean(sceneUrl.split("/").pop() ?? sceneUrl);
+        fitLayerOne();
       } catch (err) {
         if (!controller.signal.aborted) {
           console.error(`Failed to load ?scene=${sceneUrl}`, err);
@@ -188,7 +246,7 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [canvas, camera, commands, markClean]);
+  }, [canvas, camera, commands, markClean, fitLayerOne]);
 
   // File shortcuts (always active).
   useEffect(() => {
@@ -284,6 +342,36 @@ export function App() {
     document.title = `${dirty ? "● " : ""}${name} — Docent`;
   }, [fileName, dirty]);
 
+  // Structural breadcrumb trail for the current view (debounced on viewport
+  // settle). Tier computation is O(elements) — cheap even for large scenes.
+  const [viewportRev, setViewportRev] = useState(0);
+  useEffect(() => {
+    if (!canvas) return;
+    let timer = 0;
+    const unsubscribe = canvas.onViewportChange(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setViewportRev((v) => v + 1), 250);
+    });
+    return () => {
+      window.clearTimeout(timer);
+      unsubscribe();
+    };
+  }, [canvas]);
+  const trail = useMemo(() => {
+    if (!canvas) return [];
+    const snapshot = canvas.getSceneSnapshot();
+    return trailAt(computeTiers(snapshot), snapshot, viewportCenter());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvas, viewportRev, docVersion, viewportCenter]);
+
+  const arrangeTiers = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const snapshot = c.getSceneSnapshot();
+    const moves = arrangeMoves(computeTiers(snapshot), snapshot);
+    if (moves.length) c.translateFrames(moves);
+  }, []);
+
   const singleSelected =
     !presentation.active && selectedIds.length === 1 && canvas
       ? canvas.getElementInfo(selectedIds[0])
@@ -312,15 +400,25 @@ export function App() {
             </span>
           )}
         </span>
-        {drill.stack.length > 0 && (
+        {(trail.length > 0 || drill.stack.length > 0) && (
           <nav className="docent-breadcrumbs">
             <button className="docent-chip" onClick={() => drill.up()}>
               ◂ Up
             </button>
-            {drill.stack.map((tier, i) => (
-              <span className="docent-crumb" key={`${tier.frameId}-${i}`}>
-                {tier.name}
-              </span>
+            {trail.map((crumb) => (
+              <button
+                className="docent-crumb"
+                key={crumb.frameId}
+                title={`Jump to ${crumb.name}`}
+                onClick={() => {
+                  const bounds = canvasRef.current?.getFrameInfo(
+                    crumb.frameId,
+                  )?.bounds;
+                  if (bounds && camera) void camera.flyTo(bounds, { padding: 0.1 });
+                }}
+              >
+                {crumb.name}
+              </button>
             ))}
           </nav>
         )}
@@ -404,6 +502,7 @@ export function App() {
             onSaveAs: () => void saveSceneAs(),
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
+            onArrangeTiers: arrangeTiers,
           }}
         />
         {canvas && (

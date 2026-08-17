@@ -118,6 +118,14 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 160px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.docent-crumb:hover {
+  color: var(--docent-fg);
 }
 
 .docent-crumb::before {
