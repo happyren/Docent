@@ -81,6 +81,7 @@ block input or the agent command loop.
 | S3 | Scene graph | Live extraction of `{nodes, edges, frames, groups}` with labels resolved from bound text (`containerId`) and connections from arrow bindings |
 | S4 | Exporters *(amended A1)* | Mermaid emitter (primary) + compact JSON sidecar; **legend applied** — styling mapped by the legend is exported as meaning, unmapped styling is stripped; **provenance on every fact** (I4); ≥60% token reduction vs raw scene JSON, measured in CI; comprehension eval passing (Q6) |
 | S10 | Intent capture *(added A1)* | **Legend editor** — visual attribute → meaning mappings (e.g. `dashed → async`, `red → hot-path`), stored as data; **element annotations** — tags + free-text notes on any element, stored in `customData` (fork-free per I1); **frame narratives** — per-frame "what this means" text, the single source of truth for both export and `tour` narration |
+| S11 | Drill-down (tiered diagrams) *(added A2)* | Any element may declare a **detail diagram** — a frame on the same canvas drawing its inner mechanism — via `customData.docent.detail` (fork-free per I1). **Navigation:** in presentation/drill mode, activating a linked element dives the camera into its detail frame with an eased portal tween (zoom toward the element, resolve on the frame); back/breadcrumb climbs one tier; unknown/deleted targets error per I5. **Authoring:** activating an unlinked element offers to create its detail frame (named after the element, placed in free canvas space, linked, then dived into). Depth is unbounded — elements inside detail frames may declare their own details. The mechanism is element-agnostic: any element type (shapes, images, frames themselves; grouped composites via their frame or any member). Drill interactions must not break normal editing — plain click still selects; drill uses presentation mode or a dedicated affordance |
 | S5 | Overlay renderer | Viewport-synced SVG layer; sync verified across pan/zoom/resize |
 | S6 | Highlight | `glow`, `spotlight` (dim-others), `outline`; idempotent; clearable |
 | S7 | Flow animation | End-to-end pulse along an edge; multi-hop chaining across an ordered edge path; straight, curved, and elbow arrows |
@@ -177,6 +178,11 @@ the scene graph, not a parallel store. There is one graph; intent is attributes 
 | D10 *(A1, 2026-08-17)* | **Intent is captured, never guessed.** Intent enters via legend, `customData` annotations, and frame narratives at authoring time; narratives are the single source for both export and tour narration | Intention is not recoverable from the data model post-hoc; capture is the only path to completeness. `customData` keeps it fork-free (I1). One source of truth serves both audiences |
 | D11 *(A1, 2026-08-17)* | **Completeness = round-trip comprehension.** "100% of meaning" is operationally defined by Q6, measured in CI | "Carries all meaning" is unfalsifiable as stated; a scored question bank makes the gap visible and drivable to zero |
 
+| D12 *(M0, 2026-08-17)* | **M0 runtime dependencies:** `react`, `react-dom`, `@excalidraw/excalidraw` — pinned exact (0.18.1 at adoption) | The minimal set mandated by S1 (a React shell embedding upstream); recorded per I7. All build tooling stays in devDependencies |
+| D13 *(A2, 2026-08-17)* | **Detail diagrams are same-canvas frames, not separate files.** An element's inner-mechanism diagram is a frame in the same `.excalidraw` file, linked by `customData.docent.detail` | One file = one scene graph (B6): the tier hierarchy is part of the graph and both exports, with `declared` provenance; no cross-file ID addressing, no database (§3). Physically nesting drawings inside shapes is rejected — Excalidraw zoom bounds and roughjs rendering break past one tier of scaling |
+| D14 *(A2, 2026-08-17)* | **Drill authoring is intent capture.** Creating/linking a detail frame is an author-time edit, same class as legend/annotations/narratives | I2 is untouched — the overlay still never writes; drill *navigation* is pure camera work. Agents read declared hierarchy and drive the camera through it, but never create it (authoring stays v2 per D8) |
+| D15 *(A2, 2026-08-17)* | **customData namespace.** Every field Docent writes lives under `customData.docent.*`; keys outside that namespace are never written or interpreted | One collision-proof convention locked before M2's intent capture lands; upstream and third-party customData pass through untouched |
+
 New decisions append here with a number, a one-line rationale, and a date.
 
 ---
@@ -204,6 +210,12 @@ effects (M3) and agents (M4) reference its IDs. The intent-capture UI (S10) land
 M2 alongside the exporters it feeds. No milestone starts before the previous one's
 definition of done (§3) is met. Partial credit is not credit.
 
+*(A2)* S11 splits along the same seam: drill **navigation and create-on-click
+authoring** ship with M1 (camera work — the presentation milestone, independently
+demoable); the **tier hierarchy in the scene graph, both exports, and the Q6
+question banks** ships with M2. M1's definition of done includes the S11 navigation
+and authoring behavior.
+
 ---
 
 ## 9. Amendment history
@@ -214,3 +226,12 @@ Added S10 (intent capture), B6 (intent model unity), Q6 (round-trip comprehensio
 D9–D11. Rationale: the export must carry the diagram's declared meaning and intention,
 not just its structure — and intention must be captured at authoring time, because it
 is not recoverable from the data model afterward.
+
+**A2 — 2026-08-17.** Tiered drill-down amendment. Added S11 (drill-down: per-element
+detail diagrams as same-canvas frames, Prezi-style dive navigation, create-on-click
+authoring, unbounded tiers), D13 (same-canvas frames, not separate files), D14 (drill
+authoring is intent capture; overlay and agent invariants untouched), D15
+(`customData.docent.*` namespace), §8 (S11 navigation + authoring in M1; hierarchy in
+graph/exports/question banks in M2). Rationale: one diagram should carry its own
+zoom-levels of meaning — overview → service → component — navigable by humans
+clicking, describable to AI through the same declared hierarchy.

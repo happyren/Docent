@@ -1,0 +1,82 @@
+:root {
+  --docent-bg: #1b1b1f;
+  --docent-fg: #e8e8ea;
+  --docent-muted: #a0a0aa;
+  --docent-accent: #ffb454;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+.docent-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.docent-topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 44px;
+  padding: 0 14px;
+  background: var(--docent-bg);
+  color: var(--docent-fg);
+  flex: none;
+}
+
+.docent-brand {
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.docent-file {
+  font-size: 13px;
+  color: var(--docent-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docent-dirty {
+  color: var(--docent-accent);
+  margin-left: 6px;
+}
+
+.docent-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.docent-actions button {
+  background: #2a2a30;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.docent-actions button:hover {
+  background: #34343c;
+}
+
+.docent-canvas {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
