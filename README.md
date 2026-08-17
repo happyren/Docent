@@ -45,7 +45,7 @@ One canvas, many zoom-levels of meaning — overview → service → component �
 - **Unbounded tiers.** Elements inside a detail frame can declare their own details. The mechanism is element-agnostic: shapes, images, frames, grouped composites.
 - **Tiers never bleed into view.** Detail frames live in bands far below Layer 1 (computed from the link graph, spaced adaptively) — reviewing the system diagram shows the system diagram, nothing else. Overview, file-open, and presentation waypoints all scope to Layer 1; lower tiers are reached by diving. Distant bands cost nothing to render (viewport culling).
 - **Pop back instantly.** Breadcrumbs derive from the link structure at wherever the camera is — after a dive, ◂ Up restores the exact view you left; after free navigation it climbs one tier and glows the shape you came out of. Works even right after opening a file deep in a tier.
-- **Arrange detail tiers** (menu) reflows a hand-scattered scene into clean bands — one undoable step.
+- **Arrange detail tiers** runs automatically on every save (and on demand from the menu), reflowing scattered frames into clean bands — one undoable step; already-tidy scenes are untouched.
 - The hierarchy is data, not decoration — it rides the scene graph into both exports (provenance `declared`), so agents can tour tier by tier.
 
 ### 📦 Semantic export
