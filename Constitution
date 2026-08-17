@@ -11,7 +11,7 @@ Specifics over slogans; every rule here is checkable.
 Docent makes one diagram serve three audiences:
 
 1. **Humans watching** — continuous-camera presentations over Excalidraw frames.
-2. **AI reading** — deterministic, token-efficient semantic export (Mermaid + compact JSON).
+2. **AI reading** — deterministic, token-efficient semantic export (Mermaid + compact JSON) carrying the diagram's full meaning and intention, not just its structure.
 3. **AI driving** — an MCP-exposed Command API for camera, highlighting, flow animation, and narrated tours.
 
 Anything that does not serve one of these three is out of scope by default.
@@ -26,7 +26,7 @@ These hold at every commit. A PR that violates one is rejected regardless of wha
 `@excalidraw/excalidraw` is a pinned npm dependency. Never fork it, never patch it,
 never modify `node_modules`, never vendor modified copies. If a capability seems to
 require touching core, the design is wrong — redesign against the public API
-(`excalidrawAPI`, props, `onChange`).
+(`excalidrawAPI`, props, `onChange`, element `customData`).
 
 **I2 — The overlay never writes.**
 All visual effects (highlight, spotlight, dim, flow pulses, tour cues) render on the
@@ -39,9 +39,15 @@ The same scene always produces byte-identical export output: stable element orde
 (by ID), sorted JSON keys, no timestamps, no randomness. Test: export twice, `diff`
 is empty.
 
-**I4 — Inference is always labeled.**
-The exporter resolves unsnapped arrows by proximity heuristic, but every inferred
-connection carries `"binding": "inferred"`. The export never presents a guess as a fact.
+**I4 — Provenance is always labeled.** *(amended A1)*
+Every exported fact carries one of three provenance levels:
+- `explicit` — read directly from the drawing: bindings, labels, containment, frames
+- `declared` — author-stated intent: legend mappings, element tags/notes, frame narratives
+- `inferred` — heuristic: proximity-resolved arrows, layout-derived hints
+
+The export never presents a declaration or a guess as a drawing-fact, and never
+silently guesses. A consuming model always knows whether it is reading the diagram,
+reading the author's recorded intent, or reading a heuristic.
 
 **I5 — Agents live in ID-space.**
 Every Command API parameter that references the diagram uses scene-graph IDs from
@@ -73,12 +79,13 @@ block input or the agent command loop.
 | S1 | Self-host shell | `docker compose up` serves the canvas; load/save `.excalidraw` files; Excalidraw version pinned |
 | S2 | Presentation mode | Frames as ordered waypoints (name-order, manifest override); eased pan/zoom tweens; next/prev/overview keyboard controls |
 | S3 | Scene graph | Live extraction of `{nodes, edges, frames, groups}` with labels resolved from bound text (`containerId`) and connections from arrow bindings |
-| S4 | Exporters | Mermaid emitter (primary) + compact JSON sidecar; ≥60% token reduction vs raw scene JSON, measured and reported in CI |
+| S4 | Exporters *(amended A1)* | Mermaid emitter (primary) + compact JSON sidecar; **legend applied** — styling mapped by the legend is exported as meaning, unmapped styling is stripped; **provenance on every fact** (I4); ≥60% token reduction vs raw scene JSON, measured in CI; comprehension eval passing (Q6) |
+| S10 | Intent capture *(added A1)* | **Legend editor** — visual attribute → meaning mappings (e.g. `dashed → async`, `red → hot-path`), stored as data; **element annotations** — tags + free-text notes on any element, stored in `customData` (fork-free per I1); **frame narratives** — per-frame "what this means" text, the single source of truth for both export and `tour` narration |
 | S5 | Overlay renderer | Viewport-synced SVG layer; sync verified across pan/zoom/resize |
 | S6 | Highlight | `glow`, `spotlight` (dim-others), `outline`; idempotent; clearable |
 | S7 | Flow animation | End-to-end pulse along an edge; multi-hop chaining across an ordered edge path; straight, curved, and elbow arrows |
 | S8 | Command API + MCP | `get_scene_graph`, `focus`, `highlight`, `flow`, `tour`, `narrate` over a local MCP server |
-| S9 | Narration panel | Text panel rendering `narrate` output during tours |
+| S9 | Narration panel | Text panel rendering `narrate` output during tours; `tour` steps may reference frame narratives (S10) as narration source |
 
 ### Out of scope for v1 (locked out — do not build, do not scaffold "for later")
 
@@ -91,6 +98,8 @@ block input or the agent command loop.
 - Pixel-perfect tracing of roughjs strokes (see D3)
 - TTS narration; mobile layouts; custom Excalidraw element types
 - Persistence beyond `.excalidraw` files (no database)
+- Automatic intent *inference* beyond proximity bindings (no "AI guesses what red means" —
+  meaning enters through the legend and annotations, or it is flagged `inferred`)
 
 Scope changes require amending this document first (§7), code second.
 
@@ -101,14 +110,15 @@ Scope changes require amending this document first (§7), code second.
 Five subsystems, with dependency direction enforced top-down:
 
 ```
-shell → { camera, overlay, command-api } → scene-graph → excalidraw adapter
+shell → { camera, overlay, command-api, intent-ui } → scene-graph → excalidraw adapter
 mcp-server → command-api
 exporters → scene-graph
 ```
 
 **B1** — Only the **excalidraw adapter** module imports from `@excalidraw/excalidraw` or
-reads raw element shapes. Everything above it consumes the scene graph or the adapter's
-typed surface. When upstream changes its element schema, exactly one module changes.
+reads raw element shapes (including `customData`). Everything above it consumes the
+scene graph or the adapter's typed surface. When upstream changes its element schema,
+exactly one module changes.
 
 **B2** — The **camera engine** is the only writer of viewport state. Presentation mode
 and agent `focus`/`tour` are both clients of it — no second tween implementation.
@@ -119,8 +129,11 @@ tour cues are overlay programs, not separate rendering paths.
 **B4** — The **command API** is the single choke point for agent actions. The MCP server
 is a thin transport over it; no logic in the transport layer.
 
-**B5** — **Exporters** are pure functions of the scene graph. No I/O, no viewport
-awareness, no side effects.
+**B5** — **Exporters** are pure functions of the scene graph + legend. No I/O, no
+viewport awareness, no side effects.
+
+**B6** *(added A1)* — The **intent model** (legend, annotations, narratives) is part of
+the scene graph, not a parallel store. There is one graph; intent is attributes on it.
 
 ---
 
@@ -137,6 +150,14 @@ awareness, no side effects.
   scene; measured, not asserted.
 - **Q5** — Every MCP tool has a docstring with one worked example; `get_scene_graph`
   output is self-describing enough that an agent needs no other documentation to drive.
+- **Q6** *(added A1)* — **Round-trip comprehension.** Each fixture scene ships a question
+  bank covering structure ("what calls the auth service?") and intention ("which paths
+  are async?", "why is the cache beside the gateway?") — every question answerable by
+  the author. CI presents a reference model with *only the export* and scores its
+  answers. Threshold starts at 95% and ratchets up; it never ratchets down. A failure
+  is either an export bug or a capture gap — triaged, never ignored. This is the
+  operational definition of "the export carries the diagram's meaning": measured,
+  not asserted.
 
 ---
 
@@ -148,10 +169,13 @@ awareness, no side effects.
 | D2 | Non-destructive overlay | Document integrity and clean undo are non-negotiable; effects are ephemeral by nature |
 | D3 | **Neon-over-pencil** — flow pulses render as a wider soft glow *over* the sketchy stroke, not a trace of roughjs jitter | Approved. Reads better aesthetically and is robust to upstream rendering changes |
 | D4 | **Path-math parity** — curved/elbow arrow geometry replicated from `element.points` + roundness/elbow routing, not naive point-connecting | Approved. The glow must follow the visible path; naive polylines visibly diverge on elbows |
-| D5 | Mermaid primary + JSON sidecar | Models parse Mermaid natively; sidecar carries spatial/structural context Mermaid can't express |
+| D5 | Mermaid primary + JSON sidecar | Models parse Mermaid natively; sidecar carries spatial/structural/intent context Mermaid can't express |
 | D6 | MIT license | Excalidraw-compatible; maximum adoption; zero legal friction |
 | D7 | Agent surface = MCP over Command API, ID-space only | Interoperable with any MCP client; IDs decouple agents from rendering |
-| D8 | v1 = read + drive; authoring = v2 | Ship the demoable core; authoring doubles the correctness surface (layout, collision, styling) and must not delay it |
+| D8 | v1 = read + drive; authoring = v2 | Ship the demoable core; authoring doubles the correctness surface and must not delay it |
+| D9 *(A1, 2026-08-17)* | **Legend-as-data.** The exporter applies declared style→meaning mappings; styling the legend maps is converted to semantics, styling it doesn't map is stripped | Styling is only noise if the legend says so — red stroke is decoration in one diagram and the hot path in another. Aggressive stripping without declared conventions destroys meaning; the legend is what makes stripping safe |
+| D10 *(A1, 2026-08-17)* | **Intent is captured, never guessed.** Intent enters via legend, `customData` annotations, and frame narratives at authoring time; narratives are the single source for both export and tour narration | Intention is not recoverable from the data model post-hoc; capture is the only path to completeness. `customData` keeps it fork-free (I1). One source of truth serves both audiences |
+| D11 *(A1, 2026-08-17)* | **Completeness = round-trip comprehension.** "100% of meaning" is operationally defined by Q6, measured in CI | "Carries all meaning" is unfalsifiable as stated; a scored question bank makes the gap visible and drivable to zero |
 
 New decisions append here with a number, a one-line rationale, and a date.
 
@@ -172,8 +196,21 @@ New decisions append here with a number, a one-line rationale, and a date.
 
 Milestones ship strictly in order — each is independently demoable:
 
-**M0 Shell → M1 Longtake → M2 Scene Graph + Export → M3 Overlay FX → M4 Agent control.**
+**M0 Shell → M1 Longtake → M2 Scene Graph + Intent + Export → M3 Overlay FX → M4 Agent control.**
 
-Rationale for the order: the scene graph (M2) is the address space; it must exist and be
-golden-tested before effects (M3) and agents (M4) reference its IDs. No milestone starts
-before the previous one's definition of done (§3) is met. Partial credit is not credit.
+Rationale for the order: the scene graph (M2) is the address space *and* the meaning
+store; it must exist, carry intent, and be golden- and comprehension-tested before
+effects (M3) and agents (M4) reference its IDs. The intent-capture UI (S10) lands in
+M2 alongside the exporters it feeds. No milestone starts before the previous one's
+definition of done (§3) is met. Partial credit is not credit.
+
+---
+
+## 9. Amendment history
+
+**A1 — 2026-08-17.** Export completeness amendment. Amended I4 (inference flag →
+full provenance triad), S4 (legend application, provenance, Q6 gate), §8 (M2 scope).
+Added S10 (intent capture), B6 (intent model unity), Q6 (round-trip comprehension),
+D9–D11. Rationale: the export must carry the diagram's declared meaning and intention,
+not just its structure — and intention must be captured at authoring time, because it
+is not recoverable from the data model afterward.
