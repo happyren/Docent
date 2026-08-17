@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "comprehension": "node scripts/comprehension-eval.mjs"
+    "comprehension": "node scripts/comprehension-eval.mjs",
+    "mcp": "node server/docent-mcp.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",

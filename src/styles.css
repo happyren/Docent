@@ -124,6 +124,36 @@ body {
   content: "› ";
 }
 
+.docent-narration {
+  position: absolute;
+  left: 16px;
+  bottom: 70px;
+  max-width: 420px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(27, 27, 31, 0.92);
+  color: var(--docent-fg);
+  z-index: 12;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.docent-narration-text {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.docent-narration-close {
+  background: none;
+  border: none;
+  color: var(--docent-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px;
+}
+
 .docent-overlay {
   position: absolute;
   inset: 0;
