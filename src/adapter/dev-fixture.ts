@@ -268,3 +268,84 @@ export function buildDemoSceneJSON(): string {
     "local",
   );
 }
+
+/** Q1 parity fixture: one arrow of each geometry class. */
+export function buildArrowParitySceneJSON(): string {
+  const elements = convertToExcalidrawElements(
+    [
+      { type: "rectangle", id: "p_a", x: 60, y: 60, width: 120, height: 60, label: { text: "A" } },
+      { type: "rectangle", id: "p_b", x: 520, y: 60, width: 120, height: 60, label: { text: "B" } },
+      { type: "rectangle", id: "p_c", x: 520, y: 340, width: 120, height: 60, label: { text: "C" } },
+      { type: "rectangle", id: "p_d", x: 60, y: 340, width: 120, height: 60, label: { text: "D" } },
+      {
+        type: "arrow",
+        id: "pe_straight",
+        x: 190,
+        y: 90,
+        width: 320,
+        height: 0,
+        points: [
+          [0, 0],
+          [320, 0],
+        ],
+        start: { id: "p_a" },
+        end: { id: "p_b" },
+      },
+      {
+        type: "arrow",
+        id: "pe_curved",
+        x: 580,
+        y: 130,
+        width: 80,
+        height: 200,
+        points: [
+          [0, 0],
+          [70, 60],
+          [-50, 130],
+          [0, 200],
+        ],
+        roundness: { type: 2 },
+        start: { id: "p_b" },
+        end: { id: "p_c" },
+      },
+      {
+        type: "arrow",
+        id: "pe_elbow",
+        x: 510,
+        y: 370,
+        width: 320,
+        height: 0,
+        points: [
+          [0, 0],
+          [-160, 0],
+          [-160, -50],
+          [-320, -50],
+          [-320, 0],
+        ],
+        start: { id: "p_c" },
+        end: { id: "p_d" },
+      },
+      {
+        type: "arrow",
+        id: "pe_vertical",
+        x: 120,
+        y: 330,
+        width: 0,
+        height: 200,
+        points: [
+          [0, 0],
+          [0, -200],
+        ],
+        start: { id: "p_d" },
+        end: { id: "p_a" },
+      },
+    ],
+    { regenerateIds: false },
+  );
+  return serializeAsJSON(
+    elements,
+    restoreAppState({ viewBackgroundColor: "#ffffff" }, null),
+    {},
+    "local",
+  );
+}
