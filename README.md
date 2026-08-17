@@ -197,9 +197,17 @@ Point any MCP client at that process, ask it to `get_scene_graph`, and start tou
 
 ```bash
 # quality gates
-pnpm test            # determinism, goldens, token reduction, command invariants
+pnpm test            # determinism, goldens, token reduction, command invariants, path parity
 pnpm comprehension   # Q6: scores a reference model given only the export
 ```
+
+**Q4 frame-rate check** (per release, needs a regular visible browser tab — rAF is
+paused in hidden/embedded views): open `?scene=samples/perf.excalidraw` (200 elements)
+in dev mode and run `await __docent.measurePerformance()` in the console. It reports
+avg fps and p95 frame time for camera tweens, flow pulses, and combined
+spotlight+flow+tween. Target: ≥60fps avg. Docent's measured main-thread overhead on
+that scene is ~0.01ms per camera frame and ~0.12ms per scene-graph build — the frame
+budget belongs to Excalidraw's canvas rendering.
 
 ---
 
