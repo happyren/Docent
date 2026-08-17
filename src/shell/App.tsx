@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
+import { CameraEngine } from "../camera/engine";
 import {
   downloadSceneFile,
   ensureExtension,
@@ -8,6 +9,8 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
+import { OVERVIEW, usePresentation } from "./usePresentation";
+import { useDrill } from "./useDrill";
 
 const UNTITLED = "untitled.excalidraw";
 
@@ -18,6 +21,11 @@ export function App() {
   const [canvas, setCanvas] = useState<DocentCanvasHandle | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
+  const presentation = usePresentation(canvas, camera);
+  const drill = useDrill(canvas, camera);
 
   const markClean = useCallback((name: string | null) => {
     savedFingerprintRef.current = canvasRef.current?.getSceneFingerprint() ?? null;
@@ -26,12 +34,12 @@ export function App() {
   }, []);
 
   const openScene = useCallback(async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const handle = canvasRef.current;
+    if (!handle) return;
     try {
       const picked = await pickSceneFile();
       if (!picked) return;
-      await canvas.loadSceneBlob(picked.blob);
+      await handle.loadSceneBlob(picked.blob);
       fsHandleRef.current = picked.handle;
       markClean(picked.name);
     } catch (err) {
@@ -41,13 +49,13 @@ export function App() {
   }, [markClean]);
 
   const saveSceneAs = useCallback(async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const handle = canvasRef.current;
+    if (!handle) return;
     try {
       const suggested = ensureExtension(fileName ?? UNTITLED);
       const target = await pickSaveTarget(suggested);
       if (target === null) return;
-      const json = canvas.serializeScene();
+      const json = handle.serializeScene();
       if (target === "download") {
         downloadSceneFile(suggested, json);
         markClean(suggested);
@@ -63,15 +71,15 @@ export function App() {
   }, [fileName, markClean]);
 
   const saveScene = useCallback(async () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const handle = fsHandleRef.current;
-    if (!handle) {
+    const handle = canvasRef.current;
+    if (!handle) return;
+    const fsHandle = fsHandleRef.current;
+    if (!fsHandle) {
       await saveSceneAs();
       return;
     }
     try {
-      await writeSceneFile(handle, canvas.serializeScene());
+      await writeSceneFile(fsHandle, handle.serializeScene());
       markClean(null);
     } catch (err) {
       console.error(err);
@@ -103,6 +111,8 @@ export function App() {
         loadSceneJSON: (json: string) =>
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
         getSceneFingerprint: () => canvas.getSceneFingerprint(),
+        canvas,
+        camera,
       };
     }
 
@@ -123,8 +133,9 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [canvas, markClean]);
+  }, [canvas, camera, markClean]);
 
+  // File shortcuts (always active).
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
@@ -143,10 +154,91 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [openScene, saveScene, saveSceneAs]);
 
+  // Presentation keyboard controls (S2) + drill back (S11).
+  const drillRef = useRef(drill);
+  drillRef.current = drill;
+  useEffect(() => {
+    if (!presentation.active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      switch (event.key) {
+        case "ArrowRight":
+        case " ":
+        case "PageDown":
+          presentation.next();
+          break;
+        case "ArrowLeft":
+        case "PageUp":
+          presentation.prev();
+          break;
+        case "Home":
+          presentation.overview();
+          break;
+        case "Backspace":
+          drillRef.current.up();
+          break;
+        case "Escape":
+          drillRef.current.reset();
+          presentation.exit();
+          break;
+        default:
+          return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [presentation]);
+
+  // Click-to-dive during presentation (S11 navigation). View mode swallows
+  // Excalidraw's pointer callbacks, so we listen on Docent's own container
+  // and hit-test through the adapter. A small movement threshold separates
+  // clicks from view-mode panning.
+  const presentationActiveRef = useRef(false);
+  presentationActiveRef.current = presentation.active;
+  const canvasHostRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const host = canvasHostRef.current;
+    if (!host || !canvas) return;
+    let downAt: { x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      downAt = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      const start = downAt;
+      downAt = null;
+      if (!start || !presentationActiveRef.current) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) return;
+      const info = canvas.elementAtClient(event.clientX, event.clientY);
+      if (info?.detailFrameId) {
+        drillRef.current.dive(info.id);
+      }
+    };
+    host.addEventListener("pointerdown", onPointerDown, { capture: true });
+    host.addEventListener("pointerup", onPointerUp, { capture: true });
+    return () => {
+      host.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      host.removeEventListener("pointerup", onPointerUp, { capture: true });
+    };
+  }, [canvas]);
+
   useEffect(() => {
     const name = fileName ?? "untitled";
     document.title = `${dirty ? "● " : ""}${name} — Docent`;
   }, [fileName, dirty]);
+
+  const singleSelected =
+    !presentation.active && selectedIds.length === 1 && canvas
+      ? canvas.getElementInfo(selectedIds[0])
+      : null;
+
+  const waypointLabel =
+    presentation.index === OVERVIEW
+      ? "Overview"
+      : `${presentation.waypoints[presentation.index]?.name || "Frame"} — ${
+          presentation.index + 1
+        }/${presentation.waypoints.length}`;
 
   return (
     <div className="docent-app">
@@ -160,22 +252,80 @@ export function App() {
             </span>
           )}
         </span>
+        {drill.stack.length > 0 && (
+          <nav className="docent-breadcrumbs">
+            <button className="docent-chip" onClick={() => drill.up()}>
+              ◂ Up
+            </button>
+            {drill.stack.map((tier, i) => (
+              <span className="docent-crumb" key={`${tier.frameId}-${i}`}>
+                {tier.name}
+              </span>
+            ))}
+          </nav>
+        )}
         <div className="docent-actions">
-          <button onClick={() => void openScene()}>Open</button>
-          <button onClick={() => void saveScene()}>Save</button>
-          <button onClick={() => void saveSceneAs()}>Save as…</button>
+          {singleSelected &&
+            (singleSelected.detailFrameId ? (
+              <button onClick={() => drill.dive(singleSelected.id)}>
+                Dive into detail
+              </button>
+            ) : (
+              <button onClick={() => drill.createAndDive(singleSelected.id)}>
+                Create detail diagram
+              </button>
+            ))}
+          {!presentation.active && (
+            <>
+              <button onClick={() => void openScene()}>Open</button>
+              <button onClick={() => void saveScene()}>Save</button>
+              <button onClick={() => void saveSceneAs()}>Save as…</button>
+              <button
+                className="docent-present"
+                onClick={() => presentation.enter()}
+                disabled={!canvas}
+              >
+                ▶ Present
+              </button>
+            </>
+          )}
+          {presentation.active && (
+            <button
+              onClick={() => {
+                drill.reset();
+                presentation.exit();
+              }}
+            >
+              Exit
+            </button>
+          )}
         </div>
       </header>
-      <main className="docent-canvas">
+      <main
+        className="docent-canvas"
+        ref={(el) => {
+          canvasHostRef.current = el;
+        }}
+      >
         <ExcalidrawCanvas
           onReady={handleReady}
           onDocumentChange={handleDocumentChange}
+          onSelectionChange={setSelectedIds}
           menuActions={{
             onOpen: () => void openScene(),
             onSave: () => void saveScene(),
             onSaveAs: () => void saveSceneAs(),
           }}
         />
+        {presentation.active && (
+          <div className="docent-hud">
+            <span className="docent-hud-title">{waypointLabel}</span>
+            <span className="docent-hud-hint">
+              → next · ← prev · Home overview · click a component to dive · ⌫ back
+              · Esc exit
+            </span>
+          </div>
+        )}
       </main>
     </div>
   );
