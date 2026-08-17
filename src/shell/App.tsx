@@ -125,6 +125,24 @@ export function App() {
     }
   }, []);
 
+  const arrangeTiers = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const snapshot = c.getSceneSnapshot();
+    const moves = arrangeMoves(computeTiers(snapshot), snapshot);
+    if (moves.length) c.translateFrames(moves);
+  }, []);
+
+  // Saving tidies the tiers first (D16): bands re-space against the current
+  // Layer-1 extent, so files always round-trip with clean layering. The
+  // arrange is tolerance-based — an already-banded scene is untouched.
+  const prepareSceneForSave = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) throw new Error("Canvas not ready");
+    arrangeTiers();
+    return c.serializeScene();
+  }, [arrangeTiers]);
+
   const openScene = useCallback(async () => {
     const handle = canvasRef.current;
     if (!handle) return;
@@ -148,7 +166,7 @@ export function App() {
       const suggested = ensureExtension(fileName ?? UNTITLED);
       const target = await pickSaveTarget(suggested);
       if (target === null) return;
-      const json = handle.serializeScene();
+      const json = prepareSceneForSave();
       if (target === "download") {
         downloadSceneFile(suggested, json);
         markClean(suggested);
@@ -161,7 +179,7 @@ export function App() {
       console.error(err);
       window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
-  }, [fileName, markClean]);
+  }, [fileName, markClean, prepareSceneForSave]);
 
   const saveScene = useCallback(async () => {
     const handle = canvasRef.current;
@@ -172,13 +190,13 @@ export function App() {
       return;
     }
     try {
-      await writeSceneFile(fsHandle, handle.serializeScene());
+      await writeSceneFile(fsHandle, prepareSceneForSave());
       markClean(null);
     } catch (err) {
       console.error(err);
       window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
-  }, [markClean, saveSceneAs]);
+  }, [markClean, saveSceneAs, prepareSceneForSave]);
 
   const handleDocumentChange = useCallback((fingerprint: number) => {
     setDirty(fingerprint !== savedFingerprintRef.current);
@@ -222,6 +240,7 @@ export function App() {
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
         getSceneFingerprint: () => canvas.getSceneFingerprint(),
         exportScene: () => exportScene(canvas.getSceneSnapshot()),
+        prepareSceneForSave,
         canvas,
         camera,
         commands,
@@ -246,7 +265,7 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [canvas, camera, commands, markClean, fitLayerOne]);
+  }, [canvas, camera, commands, markClean, fitLayerOne, prepareSceneForSave]);
 
   // File shortcuts (always active).
   useEffect(() => {
@@ -363,14 +382,6 @@ export function App() {
     return trailAt(computeTiers(snapshot), snapshot, viewportCenter());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvas, viewportRev, docVersion, viewportCenter]);
-
-  const arrangeTiers = useCallback(() => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const snapshot = c.getSceneSnapshot();
-    const moves = arrangeMoves(computeTiers(snapshot), snapshot);
-    if (moves.length) c.translateFrames(moves);
-  }, []);
 
   const singleSelected =
     !presentation.active && selectedIds.length === 1 && canvas
