@@ -13,9 +13,27 @@ import {
   serializeAsJSON,
 } from "@excalidraw/excalidraw";
 
+const LEGEND = [
+  { attr: "strokeStyle", value: "dashed", key: "channel", meaning: "async" },
+  { attr: "backgroundColor", value: "#a5d8ff", key: "kind", meaning: "datastore" },
+  { attr: "backgroundColor", value: "#ffec99", key: "tag", meaning: "edge" },
+];
+
 export function buildDemoSceneJSON(): string {
   const elements = convertToExcalidrawElements(
     [
+      {
+        type: "text",
+        id: "legend_carrier",
+        text: `Legend\n${LEGEND.map(
+          (r) => `${r.attr} ${r.value} → ${r.key}: ${r.meaning}`,
+        ).join("\n")}`,
+        x: 60,
+        y: 10,
+        fontSize: 14,
+        locked: true,
+        customData: { docent: { legend: LEGEND } },
+      },
       {
         type: "rectangle",
         id: "n_client",
@@ -34,7 +52,13 @@ export function buildDemoSceneJSON(): string {
         height: 70,
         backgroundColor: "#ffec99",
         label: { text: "API Gateway" },
-        customData: { docent: { detail: { frameId: "f_gw_detail" } } },
+        customData: {
+          docent: {
+            detail: { frameId: "f_gw_detail" },
+            tags: ["hot-path"],
+            note: "rate-limited at edge",
+          },
+        },
       },
       {
         type: "rectangle",
@@ -54,6 +78,9 @@ export function buildDemoSceneJSON(): string {
         height: 80,
         backgroundColor: "#a5d8ff",
         label: { text: "Postgres" },
+        customData: {
+          docent: { note: "single writer; replicas serve reads" },
+        },
       },
       {
         type: "arrow",
@@ -89,16 +116,42 @@ export function buildDemoSceneJSON(): string {
         end: { id: "n_db" },
       },
       {
+        type: "arrow",
+        id: "e_session",
+        x: 800,
+        y: 330,
+        width: 5,
+        height: 110,
+        points: [
+          [0, 0],
+          [-5, -110],
+        ],
+        strokeStyle: "dashed",
+        label: { text: "session reads", fontSize: 14 },
+      },
+      {
         type: "frame",
         id: "f_ingress",
         name: "01 Ingress",
         children: ["n_client", "n_gateway"],
+        customData: {
+          docent: {
+            narrative:
+              "All external traffic lands here; the gateway terminates TLS and rate-limits before anything reaches core.",
+          },
+        },
       },
       {
         type: "frame",
         id: "f_core",
         name: "02 Core",
         children: ["n_auth", "n_db"],
+        customData: {
+          docent: {
+            narrative:
+              "Auth verifies JWTs and keeps session state in Postgres — the only writer; replicas serve reads.",
+          },
+        },
       },
       // Tier 2 — inner mechanism of the API Gateway (drill target of n_gateway)
       {
@@ -155,6 +208,12 @@ export function buildDemoSceneJSON(): string {
         id: "f_gw_detail",
         name: "API Gateway — detail",
         children: ["n_tls", "n_ratelimit", "n_router", "e_gw1", "e_gw2"],
+        customData: {
+          docent: {
+            narrative:
+              "Inside the gateway: TLS termination first, then rate limiting, then routing.",
+          },
+        },
       },
       // Tier 3 — inner mechanism of the Router (drill target of n_router)
       {
@@ -191,6 +250,12 @@ export function buildDemoSceneJSON(): string {
         id: "f_router_detail",
         name: "Router — detail",
         children: ["n_routes", "n_lb", "e_rt1"],
+        customData: {
+          docent: {
+            narrative:
+              "The router matches the request path against the route table and picks the least-loaded backend.",
+          },
+        },
       },
     ],
     { regenerateIds: false },

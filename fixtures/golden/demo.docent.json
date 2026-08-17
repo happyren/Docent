@@ -1,0 +1,31 @@
+{
+ "docent": 1,
+ "provenanceDefault": "explicit",
+ "legend": {"fill.#a5d8ff":"kind: datastore","fill.#ffec99":"tag: edge","stroke.dashed":"channel: async"},
+ "nodes": [
+  {"frame":"f_core","id":"n_auth","label":"Auth Service","shape":"rectangle","xywh":[700,140,180,70]},
+  {"frame":"f_ingress","id":"n_client","label":"Client","shape":"rectangle","xywh":[60,140,160,70]},
+  {"frame":"f_core","id":"n_db","kind":"datastore","label":"Postgres","note":"single writer; replicas serve reads","provenance":{"kind":"declared","note":"declared"},"xywh":[710,340,160,80]},
+  {"detail":"f_gw_detail","frame":"f_ingress","id":"n_gateway","label":"API Gateway","note":"rate-limited at edge","provenance":{"detail":"declared","note":"declared","tags":"declared"},"shape":"rectangle","tags":["edge","hot-path"],"xywh":[340,140,180,70]},
+  {"frame":"f_router_detail","id":"n_lb","label":"Least-Conn Picker","shape":"rectangle","xywh":[380,1180,210,70]},
+  {"frame":"f_gw_detail","id":"n_ratelimit","label":"Rate Limiter","shape":"rectangle","xywh":[360,660,170,70]},
+  {"detail":"f_router_detail","frame":"f_gw_detail","id":"n_router","label":"Router","provenance":{"detail":"declared"},"shape":"rectangle","xywh":[630,660,150,70]},
+  {"frame":"f_router_detail","id":"n_routes","label":"Route Table","shape":"rectangle","xywh":[80,1180,180,70]},
+  {"frame":"f_gw_detail","id":"n_tls","label":"TLS Termination","shape":"rectangle","xywh":[80,660,180,70]}
+ ],
+ "edges": [
+  {"from":"n_tls","id":"e_gw1","to":"n_ratelimit"},
+  {"from":"n_ratelimit","id":"e_gw2","to":"n_router"},
+  {"channel":"async","from":"n_auth","id":"e_query","provenance":{"channel":"declared"},"to":"n_db"},
+  {"from":"n_client","id":"e_req","label":"HTTPS","to":"n_gateway"},
+  {"from":"n_routes","id":"e_rt1","label":"match path","to":"n_lb"},
+  {"channel":"async","from":"n_db","id":"e_session","label":"session reads","provenance":{"channel":"declared","link":"inferred"},"to":"n_auth"},
+  {"from":"n_gateway","id":"e_verify","label":"verify JWT","to":"n_auth"}
+ ],
+ "frames": [
+  {"id":"f_ingress","name":"01 Ingress","narrative":"All external traffic lands here; the gateway terminates TLS and rate-limits before anything reaches core.","provenance":{"narrative":"declared"},"xywh":[50,130,650,90]},
+  {"id":"f_core","name":"02 Core","narrative":"Auth verifies JWTs and keeps session state in Postgres — the only writer; replicas serve reads.","provenance":{"narrative":"declared"},"xywh":[521,130,379,300]},
+  {"id":"f_gw_detail","name":"API Gateway — detail","narrative":"Inside the gateway: TLS termination first, then rate limiting, then routing.","provenance":{"narrative":"declared"},"xywh":[70,650,720,90]},
+  {"id":"f_router_detail","name":"Router — detail","narrative":"The router matches the request path against the route table and picks the least-loaded backend.","provenance":{"narrative":"declared"},"xywh":[70,1170,530,90]}
+ ]
+}

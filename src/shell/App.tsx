@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
 import { CameraEngine } from "../camera/engine";
+import { exportScene } from "../export";
 import {
   downloadSceneFile,
   ensureExtension,
@@ -9,6 +10,8 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
+import { IntentPanel } from "./IntentPanel";
+import { LegendEditor } from "./LegendEditor";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
 
@@ -22,6 +25,9 @@ export function App() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [legendOpen, setLegendOpen] = useState(false);
+  // Bumped on document changes so selection-derived UI re-reads element intent.
+  const [docVersion, setDocVersion] = useState(0);
 
   const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
   const presentation = usePresentation(canvas, camera);
@@ -89,7 +95,24 @@ export function App() {
 
   const handleDocumentChange = useCallback((fingerprint: number) => {
     setDirty(fingerprint !== savedFingerprintRef.current);
+    setDocVersion((v) => v + 1);
   }, []);
+
+  const exportBaseName = (fileName ?? UNTITLED).replace(/\.excalidraw$/, "");
+
+  const exportMermaidFile = useCallback(() => {
+    const canvasHandle = canvasRef.current;
+    if (!canvasHandle) return;
+    const { mermaid } = exportScene(canvasHandle.getSceneSnapshot());
+    downloadSceneFile(`${exportBaseName}.mmd`, mermaid);
+  }, [exportBaseName]);
+
+  const exportSidecarFile = useCallback(() => {
+    const canvasHandle = canvasRef.current;
+    if (!canvasHandle) return;
+    const { sidecar } = exportScene(canvasHandle.getSceneSnapshot());
+    downloadSceneFile(`${exportBaseName}.docent.json`, sidecar);
+  }, [exportBaseName]);
 
   const handleReady = useCallback((handle: DocentCanvasHandle) => {
     canvasRef.current = handle;
@@ -111,6 +134,7 @@ export function App() {
         loadSceneJSON: (json: string) =>
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
         getSceneFingerprint: () => canvas.getSceneFingerprint(),
+        exportScene: () => exportScene(canvas.getSceneSnapshot()),
         canvas,
         camera,
       };
@@ -233,12 +257,16 @@ export function App() {
       ? canvas.getElementInfo(selectedIds[0])
       : null;
 
+  const currentWaypoint =
+    presentation.index === OVERVIEW
+      ? null
+      : (presentation.waypoints[presentation.index] ?? null);
   const waypointLabel =
     presentation.index === OVERVIEW
       ? "Overview"
-      : `${presentation.waypoints[presentation.index]?.name || "Frame"} — ${
-          presentation.index + 1
-        }/${presentation.waypoints.length}`;
+      : `${currentWaypoint?.name || "Frame"} — ${presentation.index + 1}/${
+          presentation.waypoints.length
+        }`;
 
   return (
     <div className="docent-app">
@@ -277,6 +305,7 @@ export function App() {
             ))}
           {!presentation.active && (
             <>
+              <button onClick={() => setLegendOpen(true)}>Legend</button>
               <button onClick={() => void openScene()}>Open</button>
               <button onClick={() => void saveScene()}>Save</button>
               <button onClick={() => void saveSceneAs()}>Save as…</button>
@@ -315,11 +344,25 @@ export function App() {
             onOpen: () => void openScene(),
             onSave: () => void saveScene(),
             onSaveAs: () => void saveSceneAs(),
+            onExportMermaid: exportMermaidFile,
+            onExportSidecar: exportSidecarFile,
           }}
         />
+        {singleSelected && canvas && (
+          <IntentPanel
+            key={`${singleSelected.id}:${docVersion}`}
+            canvas={canvas}
+            selection={singleSelected}
+          />
+        )}
         {presentation.active && (
           <div className="docent-hud">
             <span className="docent-hud-title">{waypointLabel}</span>
+            {currentWaypoint?.narrative && (
+              <span className="docent-hud-narrative">
+                {currentWaypoint.narrative}
+              </span>
+            )}
             <span className="docent-hud-hint">
               → next · ← prev · Home overview · click a component to dive · ⌫ back
               · Esc exit
@@ -327,6 +370,13 @@ export function App() {
           </div>
         )}
       </main>
+      {legendOpen && canvas && (
+        <LegendEditor
+          canvas={canvas}
+          selection={singleSelected}
+          onClose={() => setLegendOpen(false)}
+        />
+      )}
     </div>
   );
 }
