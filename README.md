@@ -150,32 +150,24 @@ flowchart LR
 
 ```json
 {
-  "docent": 1,
-  "legend": {
-    "stroke.dashed": "channel: async",
-    "color.red": "tag: hot-path",
-    "shape.cylinder": "kind: datastore"
-  },
-  "nodes": [
-    { "id": "n_api",  "label": "API Gateway",  "shape": "rectangle", "frame": "f_ingress",
-      "tags": ["hot-path"], "note": "rate-limited at edge", "provenance": { "tags": "declared", "note": "declared" } },
-    { "id": "n_auth", "label": "Auth Service", "shape": "rectangle", "frame": "f_core" },
-    { "id": "n_db",   "label": "Postgres",     "kind": "datastore",  "frame": "f_core" }
-  ],
-  "edges": [
-    { "id": "e_12", "from": "n_api",  "to": "n_auth", "label": "verify JWT", "channel": "async",
-      "provenance": { "link": "explicit", "channel": "declared" } },
-    { "id": "e_15", "from": "n_auth", "to": "n_db",
-      "provenance": { "link": "inferred" } }
-  ],
-  "frames": [
-    { "id": "f_ingress", "name": "01 Ingress", "narrative": "All external traffic lands here; the gateway terminates TLS and rate-limits before anything touches core." },
-    { "id": "f_core",    "name": "02 Core" }
-  ]
+ "docent": 1,
+ "provenanceDefault": "explicit",
+ "legend": {"fill.#a5d8ff":"kind: datastore","stroke.dashed":"channel: async"},
+ "nodes": [
+  {"detail":"f_gw_detail","frame":"f_ingress","id":"n_gateway","label":"API Gateway","note":"rate-limited at edge","provenance":{"detail":"declared","note":"declared","tags":"declared"},"shape":"rectangle","tags":["edge","hot-path"],"xywh":[340,140,180,70]},
+  {"frame":"f_core","id":"n_db","kind":"datastore","label":"Postgres","provenance":{"kind":"declared"},"xywh":[710,340,160,80]}
+ ],
+ "edges": [
+  {"from":"n_gateway","id":"e_verify","label":"verify JWT","to":"n_auth"},
+  {"channel":"async","from":"n_db","id":"e_session","label":"session reads","provenance":{"channel":"declared","link":"inferred"},"to":"n_auth"}
+ ],
+ "frames": [
+  {"id":"f_ingress","name":"01 Ingress","narrative":"All external traffic lands here; the gateway terminates TLS and rate-limits before anything reaches core.","provenance":{"narrative":"declared"},"xywh":[50,130,650,90]}
+ ]
 }
 ```
 
-Provenance levels: `explicit` — read from the drawing · `declared` — author-stated via legend/annotations/narratives · `inferred` — heuristic, never presented as fact.
+Provenance levels: `explicit` — read from the drawing · `declared` — author-stated via legend/annotations/narratives · `inferred` — heuristic, never presented as fact. `provenanceDefault` makes the encoding self-describing: any fact not listed in its entity's `provenance` map is `explicit`; `declared` and `inferred` facts are always listed.
 
 ---
 

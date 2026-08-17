@@ -1,0 +1,25 @@
+flowchart LR
+  subgraph f_ingress["01 Ingress"]
+    n_client["Client"]
+    n_gateway["API Gateway"]
+  end
+  subgraph f_core["02 Core"]
+    n_auth["Auth Service"]
+    n_db[("Postgres")]
+  end
+  subgraph f_gw_detail["API Gateway — detail"]
+    n_ratelimit["Rate Limiter"]
+    n_router["Router"]
+    n_tls["TLS Termination"]
+  end
+  subgraph f_router_detail["Router — detail"]
+    n_lb["Least-Conn Picker"]
+    n_routes["Route Table"]
+  end
+  n_tls --> n_ratelimit
+  n_ratelimit --> n_router
+  n_auth --> n_db
+  n_client -->|"HTTPS"| n_gateway
+  n_routes -->|"match path"| n_lb
+  n_db -->|"session reads"| n_auth
+  n_gateway -->|"verify JWT"| n_auth

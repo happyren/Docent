@@ -26,6 +26,8 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
+import type { LegendRule, SceneSnapshot } from "./snapshot";
+import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
 
 // Excalidraw's zoom limits (MIN_ZOOM/MAX_ZOOM are not runtime-exported).
 const ZOOM_MIN = 0.1;
@@ -51,6 +53,8 @@ export interface FrameInfo {
   name: string;
   /** Declared presentation order (customData.docent.order), if any. */
   order: number | null;
+  /** Declared narrative (customData.docent.narrative), if any. */
+  narrative: string | null;
   bounds: SceneBounds;
 }
 
@@ -62,6 +66,17 @@ export interface ElementInfo {
   frameId: string | null;
   /** Declared detail diagram (customData.docent.detail.frameId), if any. */
   detailFrameId: string | null;
+  tags: string[];
+  note: string | null;
+  narrative: string | null;
+  order: number | null;
+  style: {
+    strokeColor: string;
+    backgroundColor: string;
+    strokeStyle: string;
+    fillStyle: string;
+    strokeWidth: number;
+  };
 }
 
 
@@ -108,12 +123,35 @@ export interface DocentCanvasHandle {
    * capture per D14; the overlay-never-writes invariant I2 is untouched).
    */
   createAndLinkDetailFrame(elementId: string): { frameId: string; bounds: SceneBounds };
+
+  /** Typed snapshot of the live scene — input to the scene graph/exporters. */
+  getSceneSnapshot(): SceneSnapshot;
+  /** Author a node's tags/note (S10). Null clears a field. */
+  setElementIntent(
+    elementId: string,
+    patch: { tags?: string[] | null; note?: string | null },
+  ): void;
+  /** Author a frame's narrative/order (S10). Null clears a field. */
+  setFrameIntent(
+    frameId: string,
+    patch: { narrative?: string | null; order?: number | null },
+  ): void;
+  /** Declared legend rules (from the legend carrier element). */
+  getLegend(): LegendRule[];
+  /**
+   * Replace the legend. Rules live on a locked text element on the canvas —
+   * human-readable text, machine-readable `customData.docent.legend` — so
+   * the legend travels inside the `.excalidraw` file (D9, B6).
+   */
+  setLegend(rules: LegendRule[]): void;
 }
 
 export interface SceneMenuActions {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onExportMermaid: () => void;
+  onExportSidecar: () => void;
 }
 
 export interface ExcalidrawCanvasProps {
@@ -124,11 +162,44 @@ export interface ExcalidrawCanvasProps {
   menuActions: SceneMenuActions;
 }
 
-type DocentData = { detail?: { frameId?: unknown }; order?: unknown };
+type DocentData = {
+  detail?: { frameId?: unknown };
+  order?: unknown;
+  tags?: unknown;
+  note?: unknown;
+  narrative?: unknown;
+  legend?: unknown;
+};
 
 function docentDataOf(element: ExcalidrawElement): DocentData {
   const data = (element.customData as Record<string, unknown> | undefined)?.docent;
   return typeof data === "object" && data !== null ? (data as DocentData) : {};
+}
+
+function tagsOf(element: ExcalidrawElement): string[] {
+  const tags = docentDataOf(element).tags;
+  return Array.isArray(tags)
+    ? tags.filter((t): t is string => typeof t === "string")
+    : [];
+}
+
+function stringField(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+/** Merge a patch into an element's `customData.docent`, dropping null keys. */
+function withDocentPatch(
+  element: ExcalidrawElement,
+  patch: Record<string, unknown>,
+): ExcalidrawElement {
+  const next: Record<string, unknown> = { ...docentDataOf(element) };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null || value === undefined) delete next[key];
+    else next[key] = value;
+  }
+  return newElementWith(element, {
+    customData: { ...(element.customData ?? {}), docent: next },
+  });
 }
 
 /**
@@ -187,6 +258,7 @@ function toElementInfo(
   element: ExcalidrawElement,
   elements: readonly ExcalidrawElement[],
 ): ElementInfo {
+  const docent = docentDataOf(element);
   return {
     id: element.id,
     type: element.type,
@@ -194,6 +266,17 @@ function toElementInfo(
     bounds: boundsOf(element),
     frameId: element.frameId ?? null,
     detailFrameId: detailFrameIdOf(element, elements),
+    tags: tagsOf(element),
+    note: stringField(docent.note),
+    narrative: stringField(docent.narrative),
+    order: orderOf(element),
+    style: {
+      strokeColor: element.strokeColor,
+      backgroundColor: element.backgroundColor,
+      strokeStyle: element.strokeStyle,
+      fillStyle: element.fillStyle,
+      strokeWidth: element.strokeWidth,
+    },
   };
 }
 
@@ -202,6 +285,7 @@ function toFrameInfo(frame: ExcalidrawElement): FrameInfo {
     id: frame.id,
     name: (frame as { name?: string | null }).name ?? "",
     order: orderOf(frame),
+    narrative: stringField(docentDataOf(frame).narrative),
     bounds: boundsOf(frame),
   };
 }
@@ -408,6 +492,101 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
       return { frameId: frame.id, bounds };
     },
+
+    getSceneSnapshot: () =>
+      snapshotFromRawElements(api.getSceneElementsIncludingDeleted()),
+
+    setElementIntent: (elementId, patch) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      if (!all.some((el) => el.id === elementId && !el.isDeleted)) {
+        throw new Error(`Unknown element: ${elementId}`);
+      }
+      api.updateScene({
+        elements: all.map((el) =>
+          el.id === elementId
+            ? withDocentPatch(el, {
+                tags: patch.tags && patch.tags.length ? patch.tags : null,
+                note: patch.note || null,
+              })
+            : el,
+        ),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    setFrameIntent: (frameId, patch) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      if (
+        !all.some((el) => el.id === frameId && el.type === "frame" && !el.isDeleted)
+      ) {
+        throw new Error(`Unknown frame: ${frameId}`);
+      }
+      api.updateScene({
+        elements: all.map((el) =>
+          el.id === frameId
+            ? withDocentPatch(el, {
+                narrative: patch.narrative || null,
+                order: patch.order ?? null,
+              })
+            : el,
+        ),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    getLegend: () => {
+      const carrier = liveElements(api).find(
+        (el) => parseLegendRules(docentDataOf(el).legend) !== null,
+      );
+      return carrier
+        ? (parseLegendRules(docentDataOf(carrier).legend) ?? [])
+        : [];
+    },
+
+    setLegend: (rules) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      const carrier = all.find(
+        (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
+      );
+      const legendText = rules.length
+        ? `Legend\n${rules
+            .map((r) => `${r.attr} ${r.value} → ${r.key}: ${r.meaning}`)
+            .join("\n")}`
+        : "Legend (empty)";
+
+      // Recreate the carrier so text metrics stay correct; keep its position.
+      const live = all.filter((el) => !el.isDeleted && el !== carrier);
+      let x: number;
+      let y: number;
+      if (carrier) {
+        x = carrier.x;
+        y = carrier.y;
+      } else if (live.length) {
+        const [minX, minY] = getCommonBounds(live);
+        x = minX;
+        y = minY - 40 - 20 * (rules.length + 1);
+      } else {
+        x = 0;
+        y = 0;
+      }
+      const [textEl] = convertToExcalidrawElements(
+        [{ type: "text", text: legendText, x, y, fontSize: 14, locked: true }],
+        { regenerateIds: true },
+      );
+      (textEl as { index?: unknown }).index = undefined;
+      const nextCarrier = newElementWith(textEl, {
+        customData: { docent: { legend: rules } },
+      });
+      api.updateScene({
+        elements: [
+          ...all.map((el) =>
+            el === carrier ? newElementWith(el, { isDeleted: true }) : el,
+          ),
+          nextCarrier,
+        ],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
   };
 }
 
@@ -489,6 +668,13 @@ export function ExcalidrawCanvas({
         </MainMenu.Item>
         <MainMenu.Item onSelect={menuActions.onSaveAs} shortcut={`${MOD}+Shift+S`}>
           Save as…
+        </MainMenu.Item>
+        <MainMenu.Separator />
+        <MainMenu.Item onSelect={menuActions.onExportMermaid}>
+          Export Mermaid…
+        </MainMenu.Item>
+        <MainMenu.Item onSelect={menuActions.onExportSidecar}>
+          Export semantic JSON…
         </MainMenu.Item>
         <MainMenu.Separator />
         <MainMenu.DefaultItems.SaveAsImage />
