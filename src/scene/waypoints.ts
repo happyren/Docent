@@ -5,6 +5,19 @@
  */
 import type { FrameInfo } from "../adapter";
 
+/** Sentinel waypoint index: fit the whole current tier. */
+export const OVERVIEW = -1;
+
+/**
+ * Clamp a requested waypoint index. A scene with no waypoints (e.g. no
+ * frames at all) always resolves to OVERVIEW — indexing an empty list from
+ * the arrow keys must never throw.
+ */
+export function resolveWaypointTarget(target: number, count: number): number {
+  if (target === OVERVIEW || count === 0) return OVERVIEW;
+  return Math.max(0, Math.min(count - 1, target));
+}
+
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 
 export function orderWaypoints(frames: readonly FrameInfo[]): FrameInfo[] {
