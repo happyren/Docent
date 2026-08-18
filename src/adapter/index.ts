@@ -5,7 +5,6 @@ export type {
   ElementInfo,
   ExcalidrawCanvasProps,
   FrameInfo,
-  MenuContextAction,
   SceneBounds,
   SceneMenuActions,
   Viewport,

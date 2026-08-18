@@ -188,11 +188,6 @@ export interface SceneMenuActions {
   onConnectAgent: () => void;
 }
 
-/** Selection-contextual entries rendered at the top of the main menu. */
-export interface MenuContextAction {
-  label: string;
-  onSelect: () => void;
-}
 
 export interface ExcalidrawCanvasProps {
   onReady?: (handle: DocentCanvasHandle) => void;
@@ -200,7 +195,6 @@ export interface ExcalidrawCanvasProps {
   onDocumentChange?: (fingerprint: number) => void;
   onSelectionChange?: (selectedIds: string[]) => void;
   menuActions: SceneMenuActions;
-  contextActions?: MenuContextAction[];
 }
 
 type DocentData = {
@@ -705,7 +699,6 @@ export function ExcalidrawCanvas({
   onDocumentChange,
   onSelectionChange,
   menuActions,
-  contextActions = [],
 }: ExcalidrawCanvasProps) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastFingerprintRef = useRef(0);
@@ -754,12 +747,6 @@ export function ExcalidrawCanvas({
       }}
     >
       <MainMenu>
-        {contextActions.map((action) => (
-          <MainMenu.Item key={action.label} onSelect={action.onSelect}>
-            {action.label}
-          </MainMenu.Item>
-        ))}
-        {contextActions.length > 0 && <MainMenu.Separator />}
         <MainMenu.Item onSelect={menuActions.onPresent}>▶ Present</MainMenu.Item>
         <MainMenu.Item onSelect={menuActions.onOpenLegend}>Legend…</MainMenu.Item>
         <MainMenu.Separator />
