@@ -269,6 +269,53 @@ export function buildDemoSceneJSON(): string {
   );
 }
 
+/** Q4 perf fixture: ~200 elements (rects + bound labels + arrows). */
+export function buildPerfSceneJSON(): string {
+  const skeletons: Parameters<typeof convertToExcalidrawElements>[0] = [];
+  const COLS = 10;
+  const ROWS = 9;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      skeletons!.push({
+        type: "rectangle",
+        id: `perf_${r}_${c}`,
+        x: c * 220,
+        y: r * 140,
+        width: 160,
+        height: 80,
+        backgroundColor: (r + c) % 3 === 0 ? "#ffec99" : "transparent",
+        label: { text: `svc ${r}.${c}`, fontSize: 16 },
+      });
+    }
+  }
+  // 20 bound arrows between horizontal neighbours on alternating rows.
+  for (let i = 0; i < 20; i++) {
+    const r = (i * 2) % ROWS;
+    const c = i % (COLS - 1);
+    skeletons!.push({
+      type: "arrow",
+      id: `perf_e_${i}`,
+      x: c * 220 + 165,
+      y: r * 140 + 40,
+      width: 50,
+      height: 0,
+      points: [
+        [0, 0],
+        [50, 0],
+      ],
+      start: { id: `perf_${r}_${c}` },
+      end: { id: `perf_${r}_${c + 1}` },
+    });
+  }
+  const elements = convertToExcalidrawElements(skeletons, { regenerateIds: false });
+  return serializeAsJSON(
+    elements,
+    restoreAppState({ viewBackgroundColor: "#ffffff" }, null),
+    {},
+    "local",
+  );
+}
+
 /** Q1 parity fixture: one arrow of each geometry class. */
 export function buildArrowParitySceneJSON(): string {
   const elements = convertToExcalidrawElements(
@@ -338,6 +385,23 @@ export function buildArrowParitySceneJSON(): string {
         ],
         start: { id: "p_d" },
         end: { id: "p_a" },
+      },
+      // True elbowed-flag arrow: bound diagonal, routed at right angles.
+      {
+        type: "arrow",
+        id: "pe_true_elbow",
+        x: 190,
+        y: 120,
+        width: 330,
+        height: 220,
+        // Not in the skeleton's declared type but honored by the converter.
+        ...({ elbowed: true } as Record<string, unknown>),
+        points: [
+          [0, 0],
+          [330, 220],
+        ],
+        start: { id: "p_a" },
+        end: { id: "p_c" },
       },
     ],
     { regenerateIds: false },
