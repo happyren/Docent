@@ -82,6 +82,7 @@ block input or the agent command loop.
 | S4 | Exporters *(amended A1)* | Mermaid emitter (primary) + compact JSON sidecar; **legend applied** — styling mapped by the legend is exported as meaning, unmapped styling is stripped; **provenance on every fact** (I4); ≥60% token reduction vs raw scene JSON, measured in CI; comprehension eval passing (Q6) |
 | S10 | Intent capture *(added A1)* | **Legend editor** — visual attribute → meaning mappings (e.g. `dashed → async`, `red → hot-path`), stored as data; **element annotations** — tags + free-text notes on any element, stored in `customData` (fork-free per I1); **frame narratives** — per-frame "what this means" text, the single source of truth for both export and `tour` narration |
 | S11 | Drill-down (tiered diagrams) *(added A2)* | Any element may declare a **detail diagram** — a frame on the same canvas drawing its inner mechanism — via `customData.docent.detail` (fork-free per I1). **Navigation:** in presentation/drill mode, activating a linked element dives the camera into its detail frame with an eased portal tween (zoom toward the element, resolve on the frame); back/breadcrumb climbs one tier; unknown/deleted targets error per I5. **Authoring:** activating an unlinked element offers to create its detail frame (named after the element, placed in free canvas space, linked, then dived into). Depth is unbounded — elements inside detail frames may declare their own details. The mechanism is element-agnostic: any element type (shapes, images, frames themselves; grouped composites via their frame or any member). Drill interactions must not break normal editing — plain click still selects; drill uses presentation mode or a dedicated affordance |
+| S12 | Project portfolio *(added A3)* | One deployment hosts many **projects**; a project holds many **scenes**. A portfolio modal browses projects and their scenes: create a project, open a scene, save the current scene into a project, delete either (confirmed). Scenes address by URL (`?project=<p>&scene=<s>`); Save writes back to the portfolio scene it was opened from; local `.excalidraw` file open/save is unchanged. Storage is a **file tree of plain `.excalidraw` files** behind a zero-dependency same-origin store service (D17, D18); a deployment without the store degrades gracefully — the modal says so and file workflows are unaffected |
 | S5 | Overlay renderer | Viewport-synced SVG layer; sync verified across pan/zoom/resize |
 | S6 | Highlight | `glow`, `spotlight` (dim-others), `outline`; idempotent; clearable |
 | S7 | Flow animation | End-to-end pulse along an edge; multi-hop chaining across an ordered edge path; straight, curved, and elbow arrows |
@@ -98,7 +99,9 @@ block input or the agent command loop.
 - Viewport rotation (Prezi's rotating camera)
 - Pixel-perfect tracing of roughjs strokes (see D3)
 - TTS narration; mobile layouts; custom Excalidraw element types
-- Persistence beyond `.excalidraw` files (no database)
+- Persistence beyond `.excalidraw` files — no database. *(amended A3: the portfolio
+  store (S12) persists plain `.excalidraw` files in a project directory tree; the
+  exclusion of databases and of any storage format beyond `.excalidraw` stands)*
 - Automatic intent *inference* beyond proximity bindings (no "AI guesses what red means" —
   meaning enters through the legend and annotations, or it is flagged `inferred`)
 
@@ -185,6 +188,9 @@ the scene graph, not a parallel store. There is one graph; intent is attributes 
 
 | D16 *(2026-08-18)* | **Tier-band layout + tier-scoped camera.** Detail frames live in horizontal bands far below Layer 1 (adaptive gap, ≥20k scene units), computed from the drill-link graph, never from positions; overview, load-fit, and presentation waypoints scope to Layer 1; breadcrumbs derive structurally from the link graph at the viewport's position; "Arrange detail tiers" reflows scattered scenes in one undoable step | Reviewing one layer must never pull other layers into view — distance plus camera scoping guarantees it at any diagram size, Excalidraw's viewport culling keeps distant bands render-free, and structural breadcrumbs make pop-back work even with no session dive stack |
 
+| D17 *(A3, 2026-08-18)* | **Portfolio is a file tree, not a database.** `<data>/<project>/<scene>.excalidraw` — a project is a directory, a scene is a plain `.excalidraw` file; the store adds no format of its own | Files stay portable, inspectable, and rsync-able; D13's one-file-one-graph holds per scene; the §3 "no database" exclusion survives intact. Anything the store can do, a file manager can too |
+| D18 *(A3, 2026-08-18)* | **Zero-dependency store service, same origin.** `server/docent-store.mjs` — hand-rolled Node HTTP (precedent: `server/docent-mcp.mjs`), proxied at `/api/` by the same nginx that serves the shell | I7 runtime weight stays zero; same-origin means no CORS surface; single-user LAN self-hosting is unchanged — no auth is added and §3 still excludes it |
+
 New decisions append here with a number, a one-line rationale, and a date.
 
 ---
@@ -237,3 +243,11 @@ authoring is intent capture; overlay and agent invariants untouched), D15
 graph/exports/question banks in M2). Rationale: one diagram should carry its own
 zoom-levels of meaning — overview → service → component — navigable by humans
 clicking, describable to AI through the same declared hierarchy.
+
+**A3 — 2026-08-18.** Project portfolio amendment. Added S12 (portfolio: projects of
+scenes on one deployment, portfolio modal, URL addressing, save-back), D17 (file
+tree of plain `.excalidraw` files, not a database), D18 (zero-dependency same-origin
+store service). Amended the §3 persistence exclusion accordingly — databases and
+non-`.excalidraw` storage formats remain excluded. Rationale: one self-hosted
+deployment should carry a user's whole diagram portfolio without giving up file
+portability or adding storage formats.
