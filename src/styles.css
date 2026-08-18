@@ -389,9 +389,13 @@ body {
   color: #9a9aa4;
 }
 
+/* Wraps ONLY the overlay layer — the fake-zoom sink scales it in lockstep
+   with the canvas elements so effects stay glued to shapes mid-glide. UI
+   chrome lives outside and never moves. */
 .docent-zoom-stage {
   position: absolute;
   inset: 0;
   transform-origin: 50% 50%;
   will-change: transform;
+  pointer-events: none;
 }
