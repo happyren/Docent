@@ -13,10 +13,13 @@ BRANCH="${DOCENT_BRANCH:-master}"
 REPO_SLUG="${DOCENT_REPO:-happyren/Docent}"
 
 cd "$REPO_DIR"
+STATE_FILE="$REPO_DIR/.deployed-sha"
 git fetch --quiet origin "$BRANCH"
-LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+DEPLOYED=$(cat "$STATE_FILE" 2>/dev/null || echo "none")
+# Compare against the last SUCCESSFUL deploy, not just git state — a deploy
+# that failed after the reset must retry on the next tick.
+[ "$DEPLOYED" = "$REMOTE" ] && exit 0
 
 # CI gate (public repo, unauthenticated API; on API failure, deploy anyway —
 # availability beats strictness on a test box).
@@ -34,8 +37,9 @@ if [ -n "$CHECKS" ]; then
   fi
 fi
 
-echo "$(date -Is) deploying ${LOCAL:0:8} -> ${REMOTE:0:8}"
+echo "$(date -Is) deploying ${DEPLOYED:0:8} -> ${REMOTE:0:8}"
 git reset --hard --quiet "origin/$BRANCH"
 docker compose up -d --build 2>&1 | tail -2
+echo "$REMOTE" > "$STATE_FILE"
 docker image prune -f >/dev/null 2>&1 || true
 echo "$(date -Is) deployed $(git rev-parse --short HEAD)"
