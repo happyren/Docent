@@ -3,5 +3,7 @@ services:
     build: .
     image: docent
     ports:
-      - "3000:80"
+      # Override with DOCENT_PORT (e.g. in an untracked .env beside this file)
+      # when 3000 is taken on the host.
+      - "${DOCENT_PORT:-3000}:80"
     restart: unless-stopped
