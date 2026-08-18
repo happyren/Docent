@@ -400,6 +400,12 @@ body {
   transform-origin: 50% 50%;
   will-change: transform;
   pointer-events: none;
+  /* will-change makes the stage a stacking context, so the overlay's own
+     z-index only counts INSIDE it — the stage itself must outrank the
+     Excalidraw canvases (z 1 static, 2 interactive) or every effect
+     paints underneath them. 5 = the overlay's pre-stage paint level:
+     above the canvases, below breadcrumbs/toolbar/HUD/narration. */
+  z-index: 5;
 }
 
 /* Portfolio modal (S12) — projects on the left, a large-snapshot scene
