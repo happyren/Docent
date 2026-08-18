@@ -10,16 +10,20 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    // Portfolio store (S12) — same path nginx proxies in deployments.
-    // Run it locally with: node server/docent-store.mjs
+    // Same paths nginx proxies in deployments. Run the services locally
+    // with `pnpm store` and `pnpm mcp`.
     proxy: {
       "/api": "http://127.0.0.1:3400",
+      "/mcp": "http://127.0.0.1:3001",
+      "/bridge": "http://127.0.0.1:3001",
     },
   },
   preview: {
     port: 3000,
     proxy: {
       "/api": "http://127.0.0.1:3400",
+      "/mcp": "http://127.0.0.1:3001",
+      "/bridge": "http://127.0.0.1:3001",
     },
   },
   test: {
