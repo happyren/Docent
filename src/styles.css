@@ -388,3 +388,10 @@ body {
 .docent-tool-quiet {
   color: #9a9aa4;
 }
+
+.docent-zoom-stage {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}

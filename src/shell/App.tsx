@@ -37,7 +37,25 @@ export function App() {
   const [docVersion, setDocVersion] = useState(0);
 
   const [narration, setNarration] = useState<string | null>(null);
-  const camera = useMemo(() => (canvas ? new CameraEngine(canvas) : null), [canvas]);
+  // The zoom stage CSS-scales canvas+overlay by the residual between the
+  // continuous glide zoom and the few committed zoom steps (see FakeZoomSink).
+  const zoomStageRef = useRef<HTMLDivElement | null>(null);
+  const camera = useMemo(
+    () =>
+      canvas
+        ? new CameraEngine(canvas, {
+            apply: (scale) => {
+              const el = zoomStageRef.current;
+              if (el) el.style.transform = scale === 1 ? "" : `scale(${scale})`;
+            },
+            clear: () => {
+              const el = zoomStageRef.current;
+              if (el) el.style.transform = "";
+            },
+          })
+        : null,
+    [canvas],
+  );
   const cameraRef = useRef<CameraEngine | null>(null);
   cameraRef.current = camera;
   const overlayStore = useMemo(() => new OverlayStore(), []);
@@ -450,6 +468,7 @@ export function App() {
           canvasHostRef.current = el;
         }}
       >
+        <div className="docent-zoom-stage" ref={zoomStageRef}>
         <ExcalidrawCanvas
           onReady={handleReady}
           onDocumentChange={handleDocumentChange}
@@ -488,6 +507,7 @@ export function App() {
         {canvas && (
           <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
         )}
+        </div>
         {!presentation.active && selectedIds.length > 0 && canvas && commands && (
           <SelectionToolbar
             canvas={canvas}

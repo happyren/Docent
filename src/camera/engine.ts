@@ -24,10 +24,26 @@ export interface FlyOptions {
   duration?: number;
 }
 
+/**
+ * Bridges the gap between the continuous zoom a glide wants and the few
+ * discrete zoom values actually committed to Excalidraw (each commit
+ * re-rasterizes the scene): the sink CSS-scales the canvas stage by the
+ * residual about the viewport center. Screen-space motion equals the
+ * continuous zoom exactly, and the residual passes through 1 at every
+ * commit — re-rasterization happens precisely when nothing visibly moves.
+ */
+export interface FakeZoomSink {
+  apply(scale: number): void;
+  clear(): void;
+}
+
 export class CameraEngine {
   private generation = 0;
 
-  constructor(private readonly canvas: DocentCanvasHandle) {}
+  constructor(
+    private readonly canvas: DocentCanvasHandle,
+    private readonly fakeZoom?: FakeZoomSink,
+  ) {}
 
   private reducedMotion(): boolean {
     return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -79,6 +95,7 @@ export class CameraEngine {
     const generation = this.generation;
 
     if (this.reducedMotion() || duration <= 0 || document.hidden) {
+      this.fakeZoom?.clear();
       this.canvas.setViewport(target);
       return Promise.resolve(true);
     }
@@ -115,6 +132,7 @@ export class CameraEngine {
         settled = true;
         document.removeEventListener("visibilitychange", onVisibility);
         window.clearTimeout(watchdog);
+        this.fakeZoom?.clear();
         if (snap) this.canvas.setViewport(target);
         resolve(completed);
       };
@@ -154,6 +172,13 @@ export class CameraEngine {
         const cx = lerp(fromCenter.cx, toCenter.cx, e);
         const cy = lerp(fromCenter.cy, toCenter.cy, e);
         this.canvas.setViewport(this.viewportFromCenter(cx, cy, appliedZoom));
+        // Residual between the continuous zoom and the committed step. The
+        // effective on-screen zoom (committed × residual) equals the
+        // continuous glide at every frame, so a commit swaps rasters at the
+        // exact size the old raster was already displayed at — invisible.
+        // On the final frame the residual is exactly 1.
+        const continuousZoom = Math.exp(logFrom + (logTarget - logFrom) * e);
+        this.fakeZoom?.apply(continuousZoom / appliedZoom);
         if (t < 1) {
           requestAnimationFrame(tick);
         } else {
