@@ -349,3 +349,44 @@ body {
   background: #4a3b78 !important;
   border-color: #5d4b96 !important;
 }
+
+.docent-selection-toolbar {
+  position: absolute;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+}
+
+.docent-tool {
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: #3d3d47;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.docent-tool:hover {
+  background: #efeff4;
+}
+
+.docent-tool-primary {
+  background: #eee9fb;
+  color: #4a3b78;
+  font-weight: 600;
+}
+
+.docent-tool-primary:hover {
+  background: #e2d9f7;
+}
+
+.docent-tool-quiet {
+  color: #9a9aa4;
+}
