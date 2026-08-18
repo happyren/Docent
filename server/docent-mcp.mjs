@@ -6,9 +6,18 @@
  * relayed back. Zero runtime dependencies (I7): hand-rolled MCP stdio
  * framing (newline-delimited JSON-RPC 2.0) and Node's built-in http.
  *
- * Run:  node server/docent-mcp.mjs        (bridge on port 3001)
- * Then open the Docent canvas (it connects to the bridge automatically)
- * and point any MCP client at this process over stdio.
+ * Two transports, one dispatcher, any MCP client — the protocol is an
+ * open standard and nothing here is vendor-specific:
+ *   stdio            — local clients spawn this process directly
+ *   streamable HTTP  — POST /mcp on the bridge port; this is how a
+ *                      deployed Docent exposes agent control (nginx
+ *                      proxies /mcp and /bridge same-origin)
+ *
+ * Run:  node server/docent-mcp.mjs        (bridge + /mcp on port 3001)
+ * Env:  DOCENT_BRIDGE_PORT, DOCENT_MCP_HTTP_ONLY=1 (service mode: skip
+ *       stdio so a detached stdin doesn't end the process)
+ * Then open the Docent canvas and connect it (Menu → Connect agent
+ * bridge, or ?agent), and point any MCP client at stdio or /mcp.
  */
 import http from "node:http";
 import { createInterface } from "node:readline";
@@ -24,9 +33,71 @@ const pending = new Map(); // id → {resolve, reject, timer}
 
 const bridge = http.createServer((req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "content-type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "content-type, mcp-session-id, mcp-protocol-version",
+  );
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Expose-Headers", "mcp-session-id");
   if (req.method === "OPTIONS") {
     res.writeHead(204).end();
+    return;
+  }
+
+  // ------------------------------------- MCP streamable HTTP transport --
+  // The deployed agent endpoint: any MCP client POSTs JSON-RPC here.
+  // Stateless by design — the canvas bridge is global, tools carry no
+  // per-session state — so the session id is issued for spec conformance
+  // and accepted without bookkeeping.
+  if (req.url === "/mcp") {
+    if (req.method === "GET") {
+      // No server-initiated stream; the spec allows refusing with 405.
+      res.writeHead(405, { allow: "POST, DELETE" }).end();
+      return;
+    }
+    if (req.method === "DELETE") {
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.method === "POST") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        void (async () => {
+          let parsed;
+          try {
+            parsed = JSON.parse(body);
+          } catch {
+            res.writeHead(400, { "content-type": "application/json" });
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: null,
+                error: { code: -32700, message: "Parse error" },
+              }),
+            );
+            return;
+          }
+          const messages = Array.isArray(parsed) ? parsed : [parsed];
+          if (messages.some((m) => m?.method === "initialize")) {
+            res.setHeader("mcp-session-id", randomUUID());
+          }
+          const responses = (
+            await Promise.all(messages.map((m) => dispatch(m)))
+          ).filter(Boolean);
+          if (responses.length === 0) {
+            res.writeHead(202).end();
+            return;
+          }
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify(Array.isArray(parsed) ? responses : responses[0]),
+          );
+        })();
+      });
+      return;
+    }
+    res.writeHead(405, { allow: "POST, DELETE" }).end();
     return;
   }
   if (req.method === "GET" && req.url === "/bridge/events") {
@@ -64,14 +135,16 @@ const bridge = http.createServer((req, res) => {
   }
   res.writeHead(404).end();
 });
-bridge.listen(BRIDGE_PORT);
+bridge.listen(BRIDGE_PORT, () => {
+  console.error(`docent-mcp: bridge + /mcp on :${BRIDGE_PORT}`);
+});
 
 function callCanvas(tool, params) {
   return new Promise((resolve, reject) => {
     if (!canvasStream) {
       reject(
         new Error(
-          `No canvas connected — open Docent in a browser (it attaches to the bridge on port ${BRIDGE_PORT} automatically)`,
+          "No canvas connected — open Docent in a browser and connect it via Menu → Connect agent bridge (or add ?agent to the URL)",
         ),
       );
       return;
@@ -194,68 +267,73 @@ const TOOLS = [
   },
 ];
 
-// -------------------------------------------------- MCP stdio transport --
-const write = (message) => {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
-};
-
-const rl = createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  const text = line.trim();
-  if (!text) return;
-  let message;
-  try {
-    message = JSON.parse(text);
-  } catch {
-    return;
-  }
-  void handle(message);
-});
-rl.on("close", () => process.exit(0));
-
-async function handle(message) {
-  const { id, method, params } = message;
-  const reply = (result) => id !== undefined && write({ jsonrpc: "2.0", id, result });
+// -------------------------------------------------- shared dispatcher --
+/**
+ * One JSON-RPC message in, one response out (null for notifications and
+ * malformed traffic). Both transports call this — the transport layers
+ * carry zero logic (B4).
+ */
+async function dispatch(message) {
+  const { id, method, params } = message ?? {};
+  const reply = (result) =>
+    id !== undefined ? { jsonrpc: "2.0", id, result } : null;
   const fail = (code, msg) =>
-    id !== undefined && write({ jsonrpc: "2.0", id, error: { code, message: msg } });
+    id !== undefined ? { jsonrpc: "2.0", id, error: { code, message: msg } } : null;
 
   switch (method) {
     case "initialize":
-      reply({
+      return reply({
         protocolVersion: params?.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {} },
         serverInfo: { name: "docent", version: "0.1.0" },
       });
-      return;
     case "notifications/initialized":
     case "notifications/cancelled":
-      return;
+      return null;
     case "ping":
-      reply({});
-      return;
+      return reply({});
     case "tools/list":
-      reply({ tools: TOOLS });
-      return;
+      return reply({ tools: TOOLS });
     case "tools/call": {
       const tool = params?.name;
       if (!TOOLS.some((t) => t.name === tool)) {
-        fail(-32602, `Unknown tool: ${tool}`);
-        return;
+        return fail(-32602, `Unknown tool: ${tool}`);
       }
       try {
         const result = await callCanvas(tool, params?.arguments ?? {});
-        reply({
+        return reply({
           content: [{ type: "text", text: JSON.stringify(result, null, 1) }],
         });
       } catch (err) {
-        reply({
+        return reply({
           content: [{ type: "text", text: String(err instanceof Error ? err.message : err) }],
           isError: true,
         });
       }
-      return;
     }
     default:
-      if (id !== undefined) fail(-32601, `Method not found: ${method}`);
+      return fail(-32601, `Method not found: ${method}`);
   }
+}
+
+// -------------------------------------------------- MCP stdio transport --
+// Service deployments run HTTP-only: with no client on stdin (docker gives
+// the process /dev/null) readline would close immediately and exit(0).
+if (!process.env.DOCENT_MCP_HTTP_ONLY) {
+  const write = (message) => {
+    process.stdout.write(`${JSON.stringify(message)}\n`);
+  };
+  const rl = createInterface({ input: process.stdin });
+  rl.on("line", (line) => {
+    const text = line.trim();
+    if (!text) return;
+    let message;
+    try {
+      message = JSON.parse(text);
+    } catch {
+      return;
+    }
+    void dispatch(message).then((response) => response && write(response));
+  });
+  rl.on("close", () => process.exit(0));
 }

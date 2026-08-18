@@ -13,7 +13,10 @@
  */
 import type { CommandAPI } from "../command/api";
 
-const BRIDGE_URL = "http://localhost:3001";
+// Same-origin: nginx proxies /bridge to the MCP service in deployments and
+// the dev server proxies it to a local `pnpm mcp`. The canvas never needs
+// to know where the agent endpoint actually runs.
+const BRIDGE_URL = "";
 const INITIAL_RETRY_MS = 2_000;
 const MAX_RETRY_MS = 30_000;
 const GIVE_UP_AFTER_MS = 120_000;

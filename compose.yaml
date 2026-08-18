@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     depends_on:
       - store
+      - mcp
 
   # Portfolio store (S12, D18): zero-dependency Node service persisting
   # plain .excalidraw files under a named volume (D17). Internal only —
@@ -23,6 +24,19 @@ services:
       # Named volume, NOT a repo path: the CD loop hard-resets the checkout,
       # and portfolio data must survive both that and image rebuilds.
       - docent-data:/data
+    restart: unless-stopped
+
+  # Agent endpoint (S8, D7): the MCP server ships with the deployment.
+  # Internal only — nginx proxies /mcp (MCP streamable HTTP, any client)
+  # and /bridge (the canvas side) same-origin. Vendor-neutral by
+  # construction: MCP is an open protocol.
+  mcp:
+    image: node:24-alpine
+    command: ["node", "/srv/docent-mcp.mjs"]
+    environment:
+      DOCENT_MCP_HTTP_ONLY: "1"
+    volumes:
+      - ./server/docent-mcp.mjs:/srv/docent-mcp.mjs:ro
     restart: unless-stopped
 
 volumes:

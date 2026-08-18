@@ -63,7 +63,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - **Frame narratives** — one or two sentences per frame: "what this section means." The same text is the **single source of truth** for both the semantic export and the agent's `tour` narration. Capture once, serve both audiences.
 
 ### 🤖 Agent-drivable canvas
-- A local **MCP server** exposes the Command API. Any MCP client (Claude, or your own harness) can:
+- An **MCP server** exposes the Command API — MCP is an open protocol, so **any agent with any MCP client** can drive the canvas; nothing vendor-specific ships in Docent. It speaks **stdio** for locally-spawned clients and **MCP streamable HTTP** at `/mcp` on every deployment. Connected agents can:
   - `get_scene_graph` — read the diagram as nodes/edges/frames with stable IDs
   - `focus` — tween the camera to any element or frame
   - `highlight` — glow / spotlight / dim-others on any set of components
@@ -202,16 +202,26 @@ whenever `master` advances with green CI:
 git clone https://github.com/happyren/Docent.git ~/docent && ~/docent/scripts/install-cd.sh
 ```
 
-**Agent control:** run the MCP server (stdio), then attach the canvas to its bridge —
-connection is always explicit, so the app never probes the network on its own:
+**Agent control:** every deployment ships the MCP server as a service — point any
+MCP client at the deployment's `/mcp` endpoint (MCP streamable HTTP):
+
+```
+http://<your-host>:3000/mcp
+```
+
+In dev, run it locally instead (stdio for spawned clients + the same `/mcp` over
+the dev proxy):
 
 ```bash
 pnpm mcp
 ```
 
-Then either use **Menu → Connect agent bridge**, or open the canvas with `?agent`
-(e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). Point any MCP
-client at the `pnpm mcp` process, ask it to `get_scene_graph`, and start touring.
+Either way, attach the canvas to the bridge — connection is always explicit, so
+the app never probes the network on its own: use **Menu → Connect agent bridge**,
+or open the canvas with `?agent`
+(e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). The
+last-connected canvas answers the agents. Ask for `get_scene_graph` and start
+touring.
 
 ```bash
 # quality gates
