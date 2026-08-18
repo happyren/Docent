@@ -2,9 +2,9 @@ import { useCallback, useRef, useState } from "react";
 import type { DocentCanvasHandle, FrameInfo, Viewport } from "../adapter";
 import type { CameraEngine } from "../camera/engine";
 import { computeTiers } from "../scene/tiers";
-import { orderWaypoints } from "../scene/waypoints";
+import { OVERVIEW, orderWaypoints, resolveWaypointTarget } from "../scene/waypoints";
 
-export const OVERVIEW = -1;
+export { OVERVIEW };
 
 export interface Presentation {
   active: boolean;
@@ -39,14 +39,14 @@ export function usePresentation(
   const goTo = useCallback(
     (target: number, frames: FrameInfo[]) => {
       if (!canvas || !camera) return;
-      if (target === OVERVIEW) {
+      const resolved = resolveWaypointTarget(target, frames.length);
+      if (resolved === OVERVIEW) {
         setIndex(OVERVIEW);
         flyOverview();
         return;
       }
-      const clamped = Math.max(0, Math.min(frames.length - 1, target));
-      const frame = canvas.getFrameInfo(frames[clamped].id) ?? frames[clamped];
-      setIndex(clamped);
+      const frame = canvas.getFrameInfo(frames[resolved].id) ?? frames[resolved];
+      setIndex(resolved);
       void camera.flyTo(frame.bounds, { padding: 0.1, duration: 850 });
     },
     [canvas, camera, flyOverview],
