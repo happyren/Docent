@@ -186,6 +186,14 @@ pnpm install
 pnpm dev
 ```
 
+**Deploy to a box on your LAN** (continuous rollout): clone on the box, run the
+installer once — it starts the app and registers a 2-minute cron that redeploys
+whenever `master` advances with green CI:
+
+```bash
+git clone https://github.com/happyren/Docent.git ~/docent && ~/docent/scripts/install-cd.sh
+```
+
 **Agent control:** run the MCP server (stdio) and open the canvas — it attaches to the
 server's bridge on `http://localhost:3001` automatically:
 
