@@ -93,12 +93,22 @@ export class CameraEngine {
       // Viewport writes cap at ~60Hz regardless of display refresh — every
       // write forces an Excalidraw canvas repaint, and a 120Hz display would
       // double that cost for motion the eye can't distinguish from 60Hz.
-      // Zoom applies on every 2nd write (zoom changes additionally
-      // invalidate the per-element canvas cache); the final frame always
-      // writes the exact target (Q4; degrades-never-blocks per I8).
       const MIN_WRITE_INTERVAL_MS = 7.5;
       let lastWrite = 0;
-      let zoomFrameToggle = true;
+      // Zoom-step budget: every DISTINCT zoom value invalidates Excalidraw's
+      // per-element canvas cache — a full-scene re-rasterization, at its most
+      // expensive when zoomed in (elements rasterize at bbox × zoom pixels).
+      // Measured: glides spanning large zoom ranges dropped to ~67fps from
+      // ~25 rasterizing steps per tween. Budget: ≤8 zoom applications per
+      // tween, uniform in log-zoom, each ≥3% apart (short glides use fewer);
+      // scroll still interpolates at the full write rate and the final frame
+      // is exact. A subtle scale ratchet beats frame hitches (I8).
+      const logFrom = Math.log(from.zoom);
+      const logTarget = Math.log(target.zoom);
+      const zoomSteps = Math.max(
+        1,
+        Math.min(8, Math.ceil(Math.abs(logTarget - logFrom) / Math.log(1.03))),
+      );
       let appliedZoom = from.zoom;
       const finish = (completed: boolean, snap: boolean) => {
         if (settled) return;
@@ -131,14 +141,16 @@ export class CameraEngine {
           return;
         }
         // Frame-budget governor: a large gap since the last write means the
-        // previous repaint overran — back off zoom (the cache-invalidating
-        // half of the work) further on struggling machines (I8).
+        // previous repaint overran — defer the next zoom step (the
+        // cache-invalidating work) until frames recover (I8).
         const starved = lastWrite > 0 && now - lastWrite > 3 * MIN_WRITE_INTERVAL_MS;
         lastWrite = now;
         const e = ease(t);
-        const zoom = Math.exp(lerp(Math.log(from.zoom), Math.log(target.zoom), e));
-        zoomFrameToggle = !zoomFrameToggle;
-        if (t >= 1 || (zoomFrameToggle && !starved)) appliedZoom = zoom;
+        const stepped = t >= 1 ? 1 : Math.round(e * zoomSteps) / zoomSteps;
+        const nextZoom = Math.exp(logFrom + (logTarget - logFrom) * stepped);
+        if (t >= 1 || (!starved && nextZoom !== appliedZoom)) {
+          appliedZoom = nextZoom;
+        }
         const cx = lerp(fromCenter.cx, toCenter.cx, e);
         const cy = lerp(fromCenter.cy, toCenter.cy, e);
         this.canvas.setViewport(this.viewportFromCenter(cx, cy, appliedZoom));
