@@ -227,6 +227,23 @@ describe("grouped composites (D22)", () => {
     expect(graph.nodes[0].composite).toEqual({ members: 3, provenance: "inferred" });
   });
 
+  it("treats lettering drawn inside the glyph as decoration, not a label", () => {
+    // A Textract-style icon: caption below, plus a "T" drawn inside the
+    // badge. Two texts, but only one of them names the component.
+    const graph = buildSceneGraph(
+      snapshotFromRawElements([
+        { ...base, id: "badge", type: "rectangle", x: 0, y: 0, width: 100, height: 100, groupIds: ["g_icon"] },
+        { ...base, id: "mark", type: "line", x: 10, y: 10, width: 40, height: 40, groupIds: ["g_icon"], points: [[0, 0], [40, 40]] },
+        { ...base, id: "letter", type: "text", x: 40, y: 35, width: 20, height: 30, groupIds: ["g_icon"], text: "T" },
+        { ...base, id: "caption", type: "text", x: 0, y: 115, width: 100, height: 20, groupIds: ["g_icon"], text: "Textract" },
+      ]),
+    );
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0].composite).toEqual({ members: 4, provenance: "inferred" });
+    // The caption names it, not the lettering.
+    expect(graph.nodes[0].label).toBe("Textract");
+  });
+
   it("keeps labelled components separate even when they touch", () => {
     // Two services side by side, each carrying its own bound label: a
     // grouping of real components, not one glyph.

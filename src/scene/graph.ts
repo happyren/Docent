@@ -131,6 +131,30 @@ function round(v: number): number {
 const CLUSTER_PAD = 8;
 
 /**
+ * Free-floating text drawn inside one of the group's own shapes — glyph
+ * lettering rather than a component's name. Bound labels are excluded by
+ * definition: typing into a shape is how an author names a component,
+ * while icon lettering is placed over the artwork.
+ */
+function isInternalLettering(
+  element: SnapshotElement,
+  members: SnapshotElement[],
+): boolean {
+  if (element.type !== "text" || element.containerId !== null) return false;
+  // Drawn within one of the glyph's own shapes. A caption sits outside the
+  // artwork (below or beside it), which keeps it counting as the name.
+  return members.some(
+    (other) =>
+      other !== element &&
+      other.type !== "text" &&
+      element.x >= other.x - CLUSTER_PAD &&
+      element.y >= other.y - CLUSTER_PAD &&
+      element.x + element.width <= other.x + other.width + CLUSTER_PAD &&
+      element.y + element.height <= other.y + other.height + CLUSTER_PAD,
+  );
+}
+
+/**
  * Whether the shape members form a single connected cluster — parts of one
  * drawn thing overlap or abut (a cylinder's ellipses and body), while
  * separately grouped components stand apart. Text members float free (a
@@ -269,15 +293,24 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       });
       continue;
     }
-    // Inferred signature, measured against real library items: a glyph
+    // Inferred signature, measured against real icon libraries: a glyph
     // names itself at most once (its caption), while a grouping of real
-    // components labels each one. Beyond that it either draws with
-    // primitives, or its shapes form a single touching cluster — a
-    // cylinder is stacked ellipses, whereas grouped services stand apart.
-    const labelled = members.filter((m) => labelFor(m, byId) !== null).length;
+    // components labels each one. Lettering drawn INSIDE the glyph — the
+    // "T" in a Textract icon, "</>" in a pipeline icon, "53" in a Route 53
+    // badge — is decoration, not a second component, so it doesn't count
+    // as a label (measured: it was the single reason 16 of 249 AWS icons
+    // failed to collapse). Beyond the label test the group either draws
+    // with primitives, carries such internal lettering, or its shapes form
+    // one touching cluster — a cylinder is stacked ellipses, whereas
+    // grouped services stand apart.
+    const internalText = members.filter((m) => isInternalLettering(m, members));
+    const labelled = members.filter(
+      (m) => labelFor(m, byId) !== null && !internalText.includes(m),
+    ).length;
     if (labelled > 1) continue;
     const drawsPrimitives = members.some((m) => !NODE_TYPES.has(m.type));
-    if (!drawsPrimitives && !formsOneCluster(members)) continue;
+    if (!drawsPrimitives && !internalText.length && !formsOneCluster(members))
+      continue;
     compositeGroups.set(groupId, {
       members: [...members].sort((a, b) => (a.id < b.id ? -1 : 1)),
       provenance: "inferred",
@@ -353,8 +386,14 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       // and detail link belong to the one component, and its box is the
       // whole glyph.
       const parts = composite?.members ?? [el];
+      // Name it by its caption, never by lettering drawn inside the glyph.
+      const naming = composite
+        ? parts.filter((p) => !isInternalLettering(p, parts))
+        : parts;
       const label =
-        parts.map((p) => labelFor(p, byId)).find((l) => l !== null) ?? null;
+        naming.map((p) => labelFor(p, byId)).find((l) => l !== null) ??
+        parts.map((p) => labelFor(p, byId)).find((l) => l !== null) ??
+        null;
       const detailSource = parts.find((p) => p.docent.detailFrameId !== null);
       const tags = [...new Set(parts.flatMap((p) => p.docent.tags))].sort();
       const note = parts.map((p) => p.docent.note).find((n) => n !== null) ?? null;
