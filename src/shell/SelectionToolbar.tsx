@@ -10,6 +10,9 @@ import type { CommandAPI } from "../command/api";
 import type { Drill } from "./useDrill";
 
 const BAR_OFFSET = 52;
+/** Keep clear of Excalidraw's islands: shape toolbar band on top, hamburger/undo row below. */
+const TOP_SAFE = 92;
+const BOTTOM_SAFE = 96;
 
 export function SelectionToolbar({
   canvas,
@@ -69,7 +72,8 @@ export function SelectionToolbar({
       const width = bar.offsetWidth || 220;
       const x = Math.max(8, Math.min(size.width - width - 8, (left + right) / 2 - width / 2));
       let y = topY - BAR_OFFSET;
-      if (y < 8) y = Math.min(bottomY + 16, size.height - 48);
+      if (y < TOP_SAFE) y = bottomY + 16; // flip below the selection
+      y = Math.max(TOP_SAFE, Math.min(size.height - BOTTOM_SAFE, y));
       bar.style.display = "flex";
       bar.style.left = `${x}px`;
       bar.style.top = `${y}px`;
