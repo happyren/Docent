@@ -37,18 +37,23 @@ export function App() {
   const [docVersion, setDocVersion] = useState(0);
 
   const [narration, setNarration] = useState<string | null>(null);
-  // The zoom stage CSS-scales canvas+overlay by the residual between the
-  // continuous glide zoom and the few committed zoom steps (see FakeZoomSink).
+  // Fake-zoom sink: scales the Excalidraw canvas elements and the overlay
+  // stage by the residual between the continuous glide zoom and the few
+  // committed zoom steps. Only those — each canvas is already its own
+  // compositor layer, so the scale is GPU-only work, and UI chrome (menus,
+  // zoom controls, breadcrumbs) must not move during a glide.
   const zoomStageRef = useRef<HTMLDivElement | null>(null);
   const camera = useMemo(
     () =>
       canvas
         ? new CameraEngine(canvas, {
             apply: (scale) => {
+              canvas.setCanvasScale(scale);
               const el = zoomStageRef.current;
               if (el) el.style.transform = scale === 1 ? "" : `scale(${scale})`;
             },
             clear: () => {
+              canvas.setCanvasScale(1);
               const el = zoomStageRef.current;
               if (el) el.style.transform = "";
             },
@@ -468,7 +473,6 @@ export function App() {
           canvasHostRef.current = el;
         }}
       >
-        <div className="docent-zoom-stage" ref={zoomStageRef}>
         <ExcalidrawCanvas
           onReady={handleReady}
           onDocumentChange={handleDocumentChange}
@@ -505,9 +509,10 @@ export function App() {
           />
         )}
         {canvas && (
-          <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
+          <div className="docent-zoom-stage" ref={zoomStageRef}>
+            <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
+          </div>
         )}
-        </div>
         {!presentation.active && selectedIds.length > 0 && canvas && commands && (
           <SelectionToolbar
             canvas={canvas}

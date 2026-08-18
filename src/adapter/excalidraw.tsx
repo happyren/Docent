@@ -122,6 +122,14 @@ export interface DocentCanvasHandle {
   /** Toggle Excalidraw's view mode (read-only canvas) for presenting. */
   setViewMode(on: boolean): void;
   /**
+   * CSS-scale the canvas elements about the viewport center (1 clears). The
+   * camera engine's fake-zoom sink calls this every animation frame during
+   * glides — it must stay compositor-only, which is why it targets the
+   * canvas elements (each already its own layer) and never a DOM subtree
+   * containing UI chrome.
+   */
+  setCanvasScale(scale: number): void;
+  /**
    * Topmost element at a client (viewport) position, shapes preferred over
    * the frames that spatially contain them. Used for click-to-drill — view
    * mode swallows Excalidraw's own pointer callbacks, so the shell listens
@@ -381,6 +389,22 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
     getViewportSize: () => {
       const s = api.getAppState();
       return { width: s.width, height: s.height };
+    },
+
+    setCanvasScale: (scale) => {
+      // Both the static and the interactive canvas — they must stay aligned.
+      const canvases = document.querySelectorAll<HTMLCanvasElement>(
+        "canvas.excalidraw__canvas",
+      );
+      canvases.forEach((c) => {
+        if (scale === 1) {
+          c.style.transform = "";
+          c.style.transformOrigin = "";
+        } else {
+          c.style.transformOrigin = "50% 50%";
+          c.style.transform = `scale(${scale})`;
+        }
+      });
     },
 
     getFrames: frames,
