@@ -130,11 +130,15 @@ export class CameraEngine {
           requestAnimationFrame(tick);
           return;
         }
+        // Frame-budget governor: a large gap since the last write means the
+        // previous repaint overran — back off zoom (the cache-invalidating
+        // half of the work) further on struggling machines (I8).
+        const starved = lastWrite > 0 && now - lastWrite > 3 * MIN_WRITE_INTERVAL_MS;
         lastWrite = now;
         const e = ease(t);
         const zoom = Math.exp(lerp(Math.log(from.zoom), Math.log(target.zoom), e));
         zoomFrameToggle = !zoomFrameToggle;
-        if (t >= 1 || zoomFrameToggle) appliedZoom = zoom;
+        if (t >= 1 || (zoomFrameToggle && !starved)) appliedZoom = zoom;
         const cx = lerp(fromCenter.cx, toCenter.cx, e);
         const cy = lerp(fromCenter.cy, toCenter.cy, e);
         this.canvas.setViewport(this.viewportFromCenter(cx, cy, appliedZoom));
