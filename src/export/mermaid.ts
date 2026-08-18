@@ -62,6 +62,13 @@ export function exportMermaid(graph: SceneGraph): string {
     if (!edge.from || !edge.to) continue;
     const label = edge.label ? `|"${escapeLabel(edge.label)}"|` : "";
     lines.push(`  ${edge.from} -->${label} ${edge.to}`);
+    // Declared cross-tier refinement (D21): the same edge at detail
+    // resolution, dotted — "Service A lands on Adapter A inside Broker".
+    if (edge.toRefined || edge.fromRefined) {
+      lines.push(
+        `  ${edge.fromRefined ?? edge.from} -.->${label} ${edge.toRefined ?? edge.to}`,
+      );
+    }
   }
 
   return `${lines.join("\n")}\n`;

@@ -81,6 +81,14 @@ export function exportSidecar(graph: SceneGraph): string {
       to: edge.to,
     };
     if (edge.label !== null) entity.label = edge.label;
+    if (edge.toRefined !== null) {
+      entity.toRefined = edge.toRefined;
+      provenance.toRefined = "declared";
+    }
+    if (edge.fromRefined !== null) {
+      entity.fromRefined = edge.fromRefined;
+      provenance.fromRefined = "declared";
+    }
     if (edge.fromProvenance === "inferred" || edge.toProvenance === "inferred") {
       provenance.link = "inferred";
     }

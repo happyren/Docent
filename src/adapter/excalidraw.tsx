@@ -169,6 +169,15 @@ export interface DocentCanvasHandle {
     elementId: string,
     patch: { tags?: string[] | null; note?: string | null },
   ): void;
+  /**
+   * Declare cross-tier edge refinement (D21): which inner component of the
+   * bound endpoint's detail diagram this edge lands on (`to`) / departs
+   * from (`from`). Null clears a side; an undoable intent-capture step.
+   */
+  setEdgeRefine(
+    edgeId: string,
+    patch: { to?: string | null; from?: string | null },
+  ): void;
   /** Author a frame's narrative/order (S10). Null clears a field. */
   setFrameIntent(
     frameId: string,
@@ -641,6 +650,32 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
             ? withDocentPatch(el, {
                 tags: patch.tags && patch.tags.length ? patch.tags : null,
                 note: patch.note || null,
+              })
+            : el,
+        ),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    setEdgeRefine: (edgeId, patch) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      const edge = all.find((el) => el.id === edgeId && !el.isDeleted);
+      if (!edge || (edge.type !== "arrow" && edge.type !== "line")) {
+        throw new Error(`Unknown edge: ${edgeId}`);
+      }
+      const current =
+        (docentDataOf(edge) as { refine?: { to?: string; from?: string } })
+          .refine ?? {};
+      const to = patch.to === undefined ? current.to : patch.to;
+      const from = patch.from === undefined ? current.from : patch.from;
+      const next: Record<string, string> = {};
+      if (to) next.to = to;
+      if (from) next.from = from;
+      api.updateScene({
+        elements: all.map((el) =>
+          el.id === edgeId
+            ? withDocentPatch(el, {
+                refine: Object.keys(next).length ? next : null,
               })
             : el,
         ),

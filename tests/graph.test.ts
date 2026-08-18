@@ -106,3 +106,65 @@ describe("graph id sanitization (I6)", () => {
     expect(sanitizeId("9lives", taken)).toBe("_9lives");
   });
 });
+
+
+describe("cross-tier edge refinement (D21)", () => {
+  // Layer 1: Service A -> Broker, Service B -> Broker. Broker declares a
+  // detail frame containing Adapter A and Adapter B. Each edge declares
+  // which adapter its traffic lands on.
+  const scene = (refineA: string | null, refineB: string | null) => [
+    { ...base, id: "svc_a", type: "rectangle", x: 0, y: 0, width: 100, height: 60 },
+    { ...base, id: "svc_b", type: "rectangle", x: 0, y: 200, width: 100, height: 60 },
+    {
+      ...base, id: "broker", type: "rectangle", x: 300, y: 100, width: 120, height: 80,
+      customData: { docent: { detail: { frameId: "f_broker" } } },
+    },
+    { ...base, id: "f_broker", type: "frame", x: 0, y: 20000, width: 600, height: 400, name: "Broker — detail" },
+    { ...base, id: "adapter_a", type: "rectangle", x: 40, y: 20040, width: 100, height: 60, frameId: "f_broker" },
+    { ...base, id: "adapter_b", type: "rectangle", x: 240, y: 20040, width: 100, height: 60, frameId: "f_broker" },
+    { ...base, id: "outsider", type: "rectangle", x: 700, y: 100, width: 80, height: 40 },
+    {
+      ...base, id: "e_a", type: "arrow", x: 100, y: 30, width: 200, height: 100,
+      points: [[0, 0], [200, 100]],
+      startBinding: { elementId: "svc_a" }, endBinding: { elementId: "broker" },
+      customData: refineA ? { docent: { refine: { to: refineA } } } : undefined,
+    },
+    {
+      ...base, id: "e_b", type: "arrow", x: 100, y: 230, width: 200, height: -90,
+      points: [[0, 0], [200, -90]],
+      startBinding: { elementId: "svc_b" }, endBinding: { elementId: "broker" },
+      customData: refineB ? { docent: { refine: { to: refineB } } } : undefined,
+    },
+  ];
+
+  it("resolves declared refinements into the graph", () => {
+    const graph = buildSceneGraph(
+      snapshotFromRawElements(scene("adapter_a", "adapter_b")),
+    );
+    const eA = graph.edges.find((e) => e.sourceId === "e_a")!;
+    const eB = graph.edges.find((e) => e.sourceId === "e_b")!;
+    const adapterA = graph.nodes.find((n) => n.sourceId === "adapter_a")!;
+    const adapterB = graph.nodes.find((n) => n.sourceId === "adapter_b")!;
+    // Coarse endpoints survive - the tier-1 reading stays true.
+    expect(eA.to).toBe(graph.nodes.find((n) => n.sourceId === "broker")!.id);
+    expect(eA.toRefined).toBe(adapterA.id);
+    expect(eB.toRefined).toBe(adapterB.id);
+    expect(eA.fromRefined).toBeNull();
+  });
+
+  it("drops refinements that don't live in the endpoint's detail frame", () => {
+    const graph = buildSceneGraph(
+      snapshotFromRawElements(scene("outsider", "ghost_element")),
+    );
+    expect(graph.edges.find((e) => e.sourceId === "e_a")!.toRefined).toBeNull();
+    expect(graph.edges.find((e) => e.sourceId === "e_b")!.toRefined).toBeNull();
+  });
+
+  it("drops refinements when the endpoint has no detail diagram", () => {
+    const elements = scene("adapter_a", null).map((el) =>
+      el.id === "broker" ? { ...el, customData: undefined } : el,
+    );
+    const graph = buildSceneGraph(snapshotFromRawElements(elements));
+    expect(graph.edges.find((e) => e.sourceId === "e_a")!.toRefined).toBeNull();
+  });
+});

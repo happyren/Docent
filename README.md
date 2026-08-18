@@ -47,6 +47,7 @@ One canvas, many zoom-levels of meaning — overview → service → component �
 - **Pop back instantly.** Breadcrumbs derive from the link structure at wherever the camera is — after a dive, ◂ Up restores the exact view you left; after free navigation it climbs one tier and glows the shape you came out of. Works even right after opening a file deep in a tier.
 - **Arrange detail tiers** runs automatically on every save (and on demand from the menu), reflowing scattered frames into clean bands — one undoable step; already-tidy scenes are untouched.
 - The hierarchy is data, not decoration — it rides the scene graph into both exports (provenance `declared`), so agents can tour tier by tier.
+- **Cross-tier edge refinement**: an arrow into a component can declare which *inner* part of that component's detail diagram the traffic actually lands on (select the arrow → "Lands on" picker). `Service A → Broker` stays true at Layer 1, while the export also carries `Service A ⇢ Adapter A (inside Broker)` — as a declared fact in the sidecar and a dotted edge in Mermaid.
 
 ### 📦 Semantic export
 - Resolves arrow `startBinding`/`endBinding` into an explicit **node/edge graph** — connections as data, not pixels.

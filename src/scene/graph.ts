@@ -43,6 +43,14 @@ export interface GraphEdge {
   to: string | null;
   fromProvenance: LinkProvenance | null;
   toProvenance: LinkProvenance | null;
+  /**
+   * Declared refinement (D21): the inner component of the `to` node's
+   * detail diagram this edge actually lands on. Null unless declared AND
+   * currently valid (the component must live in that detail frame).
+   */
+  toRefined: string | null;
+  /** Declared refinement of the `from` side — see `toRefined`. */
+  fromRefined: string | null;
   label: string | null;
   frameId: string | null;
   style: GraphNode["style"];
@@ -215,6 +223,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const edges: GraphEdge[] = edgeElements
     .map((el) => {
       const resolve = (
@@ -239,11 +248,30 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       const last = el.points?.[el.points.length - 1] ?? null;
       const from = resolve(el.startBindingId, first);
       const to = resolve(el.endBindingId, last);
+      // Declared refinement resolves only when the referenced component
+      // actually lives in the endpoint's detail diagram — anything else
+      // (deleted component, moved out of the frame, no detail declared)
+      // reads as no refinement, mirroring detail-link validation.
+      const refineOf = (
+        endpointId: string | null,
+        refinedSourceId: string | null,
+      ): string | null => {
+        if (!endpointId || !refinedSourceId) return null;
+        const endpoint = nodeById.get(endpointId);
+        if (!endpoint?.detailFrameId) return null;
+        const refinedGraphId = graphId.get(refinedSourceId);
+        const refined = refinedGraphId ? nodeById.get(refinedGraphId) : null;
+        return refined && refined.frameId === endpoint.detailFrameId
+          ? refined.id
+          : null;
+      };
       return {
         id: graphId.get(el.id)!,
         sourceId: el.id,
         from: from.id,
         to: to.id,
+        toRefined: refineOf(to.id, el.docent.refine?.to ?? null),
+        fromRefined: refineOf(from.id, el.docent.refine?.from ?? null),
         fromProvenance: from.provenance,
         toProvenance: to.provenance,
         label: labelFor(el, byId),
