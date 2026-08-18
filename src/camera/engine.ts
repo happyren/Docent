@@ -173,11 +173,36 @@ export class CameraEngine {
         }
         // Frame-budget governor: a large gap since the last write means the
         // previous repaint overran — defer the next zoom step (the
-        // cache-invalidating work) until frames recover (I8).
-        const starved = lastWrite > 0 && now - lastWrite > 3 * MIN_WRITE_INTERVAL_MS;
+        // cache-invalidating work) until frames recover (I8). Zoom-in only:
+        // on zoom-out a deferred commit would leave the painted view
+        // narrower than the continuous one (see coverage invariant below).
+        const zoomingIn = logTarget >= logFrom;
+        const starved =
+          zoomingIn && lastWrite > 0 && now - lastWrite > 3 * MIN_WRITE_INTERVAL_MS;
         lastWrite = now;
-        const stepped = t >= 1 ? 1 : Math.round(e * zoomSteps) / zoomSteps;
-        const nextZoom = Math.exp(logFrom + (logTarget - logFrom) * stepped);
+        // Coverage invariant: the committed (painted) zoom must never exceed
+        // the continuous zoom, so the raster always shows a view AT LEAST as
+        // wide as the glide wants and the residual only ever UPSCALES.
+        // Rounded stepping put the residual below 1 half the time, which
+        // CSS-shrank the canvas — painted content stopped covering the
+        // viewport and the perimeter showed blank until the next commit
+        // ("frame doesn't render properly"). Floor the step toward the wider
+        // view instead: floor on zoom-in; on zoom-out ceil AND look one
+        // write interval ahead, because the continuous zoom keeps falling
+        // between writes while the committed step waits for the next one.
+        const eStep = zoomingIn
+          ? e
+          : ease(Math.min(1, t + (3 * MIN_WRITE_INTERVAL_MS) / duration));
+        const stepped =
+          t >= 1
+            ? 1
+            : (zoomingIn
+                ? Math.floor(eStep * zoomSteps)
+                : Math.ceil(eStep * zoomSteps)) / zoomSteps;
+        const nextZoom =
+          stepped === 1
+            ? target.zoom
+            : Math.exp(logFrom + (logTarget - logFrom) * stepped);
         if (t >= 1 || (!starved && nextZoom !== appliedZoom)) {
           appliedZoom = nextZoom;
         }
