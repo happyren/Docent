@@ -127,6 +127,12 @@ export class CameraEngine {
         Math.min(8, Math.ceil(Math.abs(logTarget - logFrom) / Math.log(1.03))),
       );
       let appliedZoom = from.zoom;
+      // Excalidraw's static scene renders through a rAF-throttled pass, so a
+      // zoom committed on this frame paints on the NEXT frame. The residual
+      // must therefore be computed against the raster the viewer can see —
+      // one commit behind — or every commit flashes a full step for one
+      // frame (committed-base residual on the old raster).
+      let paintedZoom = from.zoom;
       const finish = (completed: boolean, snap: boolean) => {
         if (settled) return;
         settled = true;
@@ -154,7 +160,14 @@ export class CameraEngine {
           return;
         }
         const t = Math.min(1, (now - start) / duration);
+        // The commit made on the previous frame is on screen from this frame.
+        paintedZoom = appliedZoom;
+        const e = ease(t);
+        const continuousZoom = Math.exp(logFrom + (logTarget - logFrom) * e);
         if (t < 1 && now - lastWrite < MIN_WRITE_INTERVAL_MS) {
+          // Viewport writes are capped, but the residual must track the
+          // continuous glide every displayed frame — compositor-only work.
+          this.fakeZoom?.apply(continuousZoom / paintedZoom);
           requestAnimationFrame(tick);
           return;
         }
@@ -163,7 +176,6 @@ export class CameraEngine {
         // cache-invalidating work) until frames recover (I8).
         const starved = lastWrite > 0 && now - lastWrite > 3 * MIN_WRITE_INTERVAL_MS;
         lastWrite = now;
-        const e = ease(t);
         const stepped = t >= 1 ? 1 : Math.round(e * zoomSteps) / zoomSteps;
         const nextZoom = Math.exp(logFrom + (logTarget - logFrom) * stepped);
         if (t >= 1 || (!starved && nextZoom !== appliedZoom)) {
@@ -172,17 +184,18 @@ export class CameraEngine {
         const cx = lerp(fromCenter.cx, toCenter.cx, e);
         const cy = lerp(fromCenter.cy, toCenter.cy, e);
         this.canvas.setViewport(this.viewportFromCenter(cx, cy, appliedZoom));
-        // Residual between the continuous zoom and the committed step. The
-        // effective on-screen zoom (committed × residual) equals the
-        // continuous glide at every frame, so a commit swaps rasters at the
-        // exact size the old raster was already displayed at — invisible.
-        // On the final frame the residual is exactly 1.
-        const continuousZoom = Math.exp(logFrom + (logTarget - logFrom) * e);
-        this.fakeZoom?.apply(continuousZoom / appliedZoom);
+        // Residual between the continuous glide and the PAINTED raster: the
+        // effective on-screen zoom (painted × residual) equals the continuous
+        // curve every frame, so each raster swap lands at exactly the size
+        // the old raster was already displayed at — invisible.
+        this.fakeZoom?.apply(continuousZoom / paintedZoom);
         if (t < 1) {
           requestAnimationFrame(tick);
         } else {
-          finish(true, false);
+          // Trailing settle frame: the final commit paints one frame from
+          // now — clearing the residual before that flashes the old raster
+          // at scale 1. Hold the compensating residual for one more frame.
+          requestAnimationFrame(() => finish(true, false));
         }
       };
       requestAnimationFrame(tick);
