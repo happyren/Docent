@@ -17,6 +17,7 @@ import {
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { IntentPanel } from "./IntentPanel";
 import { LegendEditor } from "./LegendEditor";
+import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
@@ -459,27 +460,14 @@ export function App() {
             )}
           </div>
         )}
-        {(trail.length > 0 || drill.stack.length > 0) && (
-          <nav className="docent-breadcrumbs">
-            <button className="docent-chip" onClick={() => drill.up()}>
-              ◂ Up
-            </button>
-            {trail.map((crumb) => (
-              <button
-                className="docent-crumb"
-                key={crumb.frameId}
-                title={`Jump to ${crumb.name}`}
-                onClick={() => {
-                  const bounds = canvasRef.current?.getFrameInfo(
-                    crumb.frameId,
-                  )?.bounds;
-                  if (bounds && camera) void camera.flyTo(bounds, { padding: 0.1 });
-                }}
-              >
-                {crumb.name}
-              </button>
-            ))}
-          </nav>
+        {canvas && (
+          <Breadcrumbs
+            canvas={canvas}
+            camera={camera}
+            trail={trail}
+            drill={drill}
+            revision={docVersion}
+          />
         )}
         {canvas && (
           <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
