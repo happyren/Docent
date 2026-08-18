@@ -65,7 +65,8 @@ body {
 
 .docent-breadcrumbs {
   position: absolute;
-  top: 16px;
+  /* Below Excalidraw's shape-toolbar band — top-center belongs to it. */
+  top: 80px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 8;
