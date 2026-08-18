@@ -10,9 +10,17 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // Portfolio store (S12) — same path nginx proxies in deployments.
+    // Run it locally with: node server/docent-store.mjs
+    proxy: {
+      "/api": "http://127.0.0.1:3400",
+    },
   },
   preview: {
     port: 3000,
+    proxy: {
+      "/api": "http://127.0.0.1:3400",
+    },
   },
   test: {
     environment: "node",

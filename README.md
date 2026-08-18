@@ -72,6 +72,13 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - Agents operate purely in **ID-space**. They never address pixels, never touch Excalidraw internals.
 - All effects render on a **non-destructive overlay** — the document is never mutated, undo history stays clean.
 
+### 🗂 Project portfolio
+- One deployment hosts many **projects**; a project holds many **scenes** (work, personal, …).
+- **Menu → Portfolio…** browses them: create projects, open scenes, save the current scene into a project, delete either.
+- A scene opened from the portfolio saves back to it (`⌘S`); local `.excalidraw` file open/save is unchanged.
+- Scenes address by URL: `?project=work&scene=checkout`.
+- Storage is a plain file tree — `data/<project>/<scene>.excalidraw` on a named volume, no database. Anything the store can do, a file manager can too.
+
 ---
 
 ## Architecture
@@ -184,6 +191,7 @@ docker compose up
 # or dev mode
 pnpm install
 pnpm dev
+pnpm store   # optional: the portfolio store (docker compose runs it for you)
 ```
 
 **Deploy to a box on your LAN** (continuous rollout): clone on the box, run the

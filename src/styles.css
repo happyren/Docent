@@ -250,6 +250,7 @@ body {
 .docent-field input,
 .docent-field textarea,
 .docent-legend-row input,
+.docent-portfolio-new input,
 .docent-legend-row select {
   background: #26262c;
   color: var(--docent-fg);
@@ -323,6 +324,7 @@ body {
 }
 
 .docent-legend-row button,
+.docent-portfolio-new button,
 .docent-modal-actions button {
   background: #2a2a30;
   color: var(--docent-fg);
@@ -398,4 +400,110 @@ body {
   transform-origin: 50% 50%;
   will-change: transform;
   pointer-events: none;
+}
+
+/* Portfolio modal (S12) — projects on the left, scenes on the right. */
+.docent-portfolio {
+  width: min(860px, 94vw);
+}
+
+.docent-portfolio-body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 14px;
+  min-height: 260px;
+}
+
+.docent-portfolio-projects,
+.docent-portfolio-scenes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.docent-portfolio-projects {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  padding-right: 14px;
+}
+
+.docent-portfolio-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 46vh;
+}
+
+.docent-portfolio-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.docent-portfolio-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.docent-portfolio-item.is-selected {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.docent-portfolio-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docent-portfolio-open {
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docent-portfolio-open:hover {
+  text-decoration: underline;
+}
+
+.docent-portfolio-meta {
+  font-size: 11px;
+  color: var(--docent-muted);
+  white-space: nowrap;
+}
+
+.docent-portfolio-delete {
+  background: none;
+  border: none;
+  color: var(--docent-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.docent-portfolio-delete:hover {
+  color: #ff6b6b;
+  background: rgba(255, 107, 107, 0.12);
+}
+
+.docent-portfolio-new {
+  display: flex;
+  gap: 8px;
+}
+
+.docent-portfolio-new input {
+  flex: 1;
+  min-width: 0;
 }

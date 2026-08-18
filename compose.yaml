@@ -7,3 +7,23 @@ services:
       # when 3000 is taken on the host.
       - "${DOCENT_PORT:-3000}:80"
     restart: unless-stopped
+    depends_on:
+      - store
+
+  # Portfolio store (S12, D18): zero-dependency Node service persisting
+  # plain .excalidraw files under a named volume (D17). Internal only —
+  # nginx proxies /api/ to it, so the browser stays same-origin.
+  store:
+    image: node:24-alpine
+    command: ["node", "/srv/docent-store.mjs"]
+    environment:
+      DOCENT_DATA: /data
+    volumes:
+      - ./server/docent-store.mjs:/srv/docent-store.mjs:ro
+      # Named volume, NOT a repo path: the CD loop hard-resets the checkout,
+      # and portfolio data must survive both that and image rebuilds.
+      - docent-data:/data
+    restart: unless-stopped
+
+volumes:
+  docent-data:

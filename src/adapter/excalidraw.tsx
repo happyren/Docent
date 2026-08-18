@@ -188,6 +188,7 @@ export interface SceneMenuActions {
   onOpen: () => void;
   onSave: () => void;
   onSaveAs: () => void;
+  onOpenPortfolio: () => void;
   onPresent: () => void;
   onOpenLegend: () => void;
   onExportMermaid: () => void;
@@ -777,6 +778,9 @@ export function ExcalidrawCanvas({
       <MainMenu>
         <MainMenu.Item onSelect={menuActions.onPresent}>▶ Present</MainMenu.Item>
         <MainMenu.Item onSelect={menuActions.onOpenLegend}>Legend…</MainMenu.Item>
+        <MainMenu.Item onSelect={menuActions.onOpenPortfolio}>
+          Portfolio…
+        </MainMenu.Item>
         <MainMenu.Separator />
         <MainMenu.Item onSelect={menuActions.onOpen} shortcut={`${MOD}+O`}>
           Open…
