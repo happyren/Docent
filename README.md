@@ -215,6 +215,16 @@ MCP client at the deployment's `/mcp` endpoint (MCP streamable HTTP):
 http://<your-host>:3000/mcp
 ```
 
+Many clients only accept **https** for remote MCP servers, which a LAN deployment
+can't offer without certificates for an IP address. Spawn the stdio bridge instead
+— stdio has no transport policy to satisfy, and it forwards to the same endpoint:
+
+```bash
+claude mcp add docent -- node /path/to/docent/server/docent-mcp-proxy.mjs http://<your-host>:3000/mcp
+```
+
+Any stdio-capable client works the same way (`command: node`, `args: [<path>, <url>]`).
+
 In dev, run it locally instead (stdio for spawned clients + the same `/mcp` over
 the dev proxy):
 
