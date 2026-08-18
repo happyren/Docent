@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { snapshotFromSceneJSON } from "../src/adapter/snapshot";
 import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph, sanitizeId } from "../src/scene/graph";
 import { applyLegend } from "../src/export/legend";
@@ -166,5 +170,166 @@ describe("cross-tier edge refinement (D21)", () => {
     );
     const graph = buildSceneGraph(snapshotFromRawElements(elements));
     expect(graph.edges.find((e) => e.sourceId === "e_a")!.toRefined).toBeNull();
+  });
+});
+
+
+describe("grouped composites (D22)", () => {
+  // A library icon: a box, two drawn strokes, and a text label, grouped —
+  // one component, not four. An arrow binds to one of its parts.
+  const icon = (extra: Record<string, unknown> = {}) => [
+    { ...base, id: "icon_box", type: "rectangle", x: 100, y: 0, width: 80, height: 80, groupIds: ["g_icon"], ...extra },
+    { ...base, id: "icon_s1", type: "line", x: 110, y: 10, width: 60, height: 60, groupIds: ["g_icon"], points: [[0, 0], [60, 60]] },
+    { ...base, id: "icon_s2", type: "freedraw", x: 110, y: 70, width: 60, height: -60, groupIds: ["g_icon"], points: [[0, 0], [60, -60]] },
+    { ...base, id: "icon_txt", type: "text", x: 100, y: 90, width: 80, height: 20, groupIds: ["g_icon"], text: "Lambda" },
+    { ...base, id: "caller", type: "rectangle", x: 0, y: 200, width: 80, height: 40 },
+    {
+      ...base, id: "e_call", type: "arrow", x: 80, y: 210, width: 60, height: -150,
+      points: [[0, 0], [60, -150]],
+      startBinding: { elementId: "caller" }, endBinding: { elementId: "icon_s1" },
+    },
+  ];
+
+  it("collapses a drawn glyph group into one node", () => {
+    const graph = buildSceneGraph(snapshotFromRawElements(icon()));
+    const iconNodes = graph.nodes.filter((n) =>
+      ["icon_box", "icon_s1", "icon_s2", "icon_txt"].includes(n.sourceId),
+    );
+    expect(iconNodes).toHaveLength(1);
+    const node = iconNodes[0];
+    expect(node.composite).toEqual({ members: 4, provenance: "inferred" });
+    // It speaks for its parts: the label comes from the grouped text and
+    // the box spans the whole glyph.
+    expect(node.label).toBe("Lambda");
+    expect(node.bounds).toEqual({ x: 100, y: 0, width: 80, height: 110 });
+    // A collapsed group is a node, not also a group.
+    expect(graph.groups.find((g) => g.id === "g_icon")).toBeUndefined();
+  });
+
+  it("routes an edge bound to any part to the one component", () => {
+    const graph = buildSceneGraph(snapshotFromRawElements(icon()));
+    const composite = graph.nodes.find((n) => n.composite)!;
+    const edge = graph.edges.find((e) => e.sourceId === "e_call")!;
+    expect(edge.to).toBe(composite.id);
+  });
+
+  it("collapses a shape-only glyph whose parts touch (cylinder, stack)", () => {
+    // A database cylinder: two ellipses and a body, overlapping, unlabelled.
+    // No primitives involved, so only the cluster signature can catch it.
+    const graph = buildSceneGraph(
+      snapshotFromRawElements([
+        { ...base, id: "cyl_top", type: "ellipse", x: 0, y: 0, width: 100, height: 30, groupIds: ["g_db"] },
+        { ...base, id: "cyl_body", type: "rectangle", x: 0, y: 15, width: 100, height: 70, groupIds: ["g_db"] },
+        { ...base, id: "cyl_bottom", type: "ellipse", x: 0, y: 70, width: 100, height: 30, groupIds: ["g_db"] },
+      ]),
+    );
+    expect(graph.nodes).toHaveLength(1);
+    expect(graph.nodes[0].composite).toEqual({ members: 3, provenance: "inferred" });
+  });
+
+  it("keeps labelled components separate even when they touch", () => {
+    // Two services side by side, each carrying its own bound label: a
+    // grouping of real components, not one glyph.
+    const graph = buildSceneGraph(
+      snapshotFromRawElements([
+        { ...base, id: "svc_a", type: "rectangle", x: 0, y: 0, width: 80, height: 40, groupIds: ["g_pair"], boundElements: [{ id: "lbl_a", type: "text" }] },
+        { ...base, id: "lbl_a", type: "text", x: 5, y: 10, width: 70, height: 20, text: "Service A", containerId: "svc_a" },
+        { ...base, id: "svc_b", type: "rectangle", x: 82, y: 0, width: 80, height: 40, groupIds: ["g_pair"], boundElements: [{ id: "lbl_b", type: "text" }] },
+        { ...base, id: "lbl_b", type: "text", x: 87, y: 10, width: 70, height: 20, text: "Service B", containerId: "svc_b" },
+      ]),
+    );
+    expect(graph.nodes).toHaveLength(2);
+    expect(graph.nodes.every((n) => n.composite === null)).toBe(true);
+    expect(graph.nodes.map((n) => n.label).sort()).toEqual(["Service A", "Service B"]);
+  });
+
+  it("leaves a plain grouping of real shapes alone", () => {
+    const elements = [
+      { ...base, id: "svc_a", type: "rectangle", x: 0, y: 0, width: 80, height: 40, groupIds: ["g_layout"] },
+      { ...base, id: "svc_b", type: "rectangle", x: 100, y: 0, width: 80, height: 40, groupIds: ["g_layout"] },
+    ];
+    const graph = buildSceneGraph(snapshotFromRawElements(elements));
+    expect(graph.nodes).toHaveLength(2);
+    expect(graph.nodes.every((n) => n.composite === null)).toBe(true);
+    expect(graph.groups.find((g) => g.id === "g_layout")?.members).toHaveLength(2);
+  });
+
+  it("honours the author's declaration over the heuristic", () => {
+    // Declared split: the glyph group stays as separate components.
+    const split = buildSceneGraph(
+      snapshotFromRawElements(icon({ customData: { docent: { composite: { g_icon: false } } } })),
+    );
+    expect(split.nodes.filter((n) => n.composite)).toHaveLength(0);
+    expect(split.nodes.filter((n) => n.sourceId.startsWith("icon_")).length).toBeGreaterThan(1);
+
+    // Declared merge: a plain shape grouping becomes one component.
+    const merged = buildSceneGraph(
+      snapshotFromRawElements([
+        { ...base, id: "svc_a", type: "rectangle", x: 0, y: 0, width: 80, height: 40, groupIds: ["g_layout"], customData: { docent: { composite: { g_layout: true } } } },
+        { ...base, id: "svc_b", type: "rectangle", x: 100, y: 0, width: 80, height: 40, groupIds: ["g_layout"] },
+      ]),
+    );
+    expect(merged.nodes).toHaveLength(1);
+    expect(merged.nodes[0].composite).toEqual({ members: 2, provenance: "declared" });
+  });
+
+  it("carries a member's detail link and intent onto the composite", () => {
+    const elements = [
+      ...icon(),
+      { ...base, id: "f_inner", type: "frame", x: 0, y: 20000, width: 400, height: 300, name: "Lambda — detail" },
+    ].map((el) =>
+      el.id === "icon_s1"
+        ? {
+            ...el,
+            customData: {
+              docent: { detail: { frameId: "f_inner" }, tags: ["serverless"] },
+            },
+          }
+        : el,
+    );
+    const graph = buildSceneGraph(snapshotFromRawElements(elements));
+    const composite = graph.nodes.find((n) => n.composite)!;
+    expect(composite.detailFrameId).toBe(
+      graph.frames.find((f) => f.sourceId === "f_inner")!.id,
+    );
+    expect(composite.tags).toContain("serverless");
+  });
+});
+
+
+describe("real library icon (maintainer-reported)", () => {
+  // The exact clipboard payload from an excalidraw.com library item:
+  // a filled box, two drawn strokes, and a text label, in NESTED groups
+  // (strokes share an inner group, everything shares an outer one), with
+  // an arrow bound to the box.
+  const FIXTURES = fileURLToPath(new URL("../fixtures", import.meta.url));
+  const graph = buildSceneGraph(
+    snapshotFromSceneJSON(
+      readFileSync(join(FIXTURES, "library-icon.excalidraw"), "utf8"),
+    ),
+  );
+
+  it("reads as ONE component, not a bunch of shapes", () => {
+    // Two components total: the caller service and the icon.
+    expect(graph.nodes).toHaveLength(2);
+    const icon = graph.nodes.find((n) => n.composite)!;
+    expect(icon.composite).toEqual({ members: 4, provenance: "inferred" });
+    expect(icon.label).toBe("IconAdapter\n-UpsertIncident");
+  });
+
+  it("collapses at the outer group despite nested sub-groups", () => {
+    const icon = graph.nodes.find((n) => n.composite)!;
+    // The strokes' own inner group must not become a second component.
+    expect(graph.nodes.filter((n) => n.composite)).toHaveLength(1);
+    // Its box spans the whole glyph including the label below it.
+    expect(icon.bounds.width).toBeGreaterThan(400);
+    expect(icon.bounds.height).toBeGreaterThan(300);
+  });
+
+  it("routes the bound arrow to the component", () => {
+    const icon = graph.nodes.find((n) => n.composite)!;
+    const edge = graph.edges[0];
+    expect(edge.to).toBe(icon.id);
+    expect(edge.toProvenance).toBe("explicit");
   });
 });

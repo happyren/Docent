@@ -14,6 +14,17 @@ const BAR_OFFSET = 52;
 const TOP_SAFE = 92;
 const BOTTOM_SAFE = 96;
 
+/** Element types the scene graph models as components (mirrors graph.ts). */
+const NODE_TYPES = new Set([
+  "rectangle",
+  "ellipse",
+  "diamond",
+  "image",
+  "embeddable",
+  "iframe",
+  "text",
+]);
+
 export function SelectionToolbar({
   canvas,
   selectedIds,
@@ -52,6 +63,28 @@ export function SelectionToolbar({
       infos.reduce((a, b) => (area(a) >= area(b) ? a : b)))
     : null;
   const detailTarget = singleSelected ?? groupRep;
+
+  // Whether the shared group currently reads as one component, so the
+  // toggle can say what clicking it will do (D22).
+  const compositeState = (() => {
+    if (!sharesCommonGroup) return null;
+    // The group the toggle acts on: the outermost one shared by the whole
+    // selection (groupIds run innermost-first), matching the adapter.
+    const target = [...infos[0].groupIds]
+      .reverse()
+      .find((g) => infos.every((i) => i.groupIds.includes(g)));
+    if (!target) return null;
+    const members = canvas
+      .getSceneSnapshot()
+      .elements.filter((el) => el.groupIds.includes(target));
+    const flags = members
+      .map((m) => m.docent.composite[target])
+      .filter((v) => v !== undefined);
+    if (flags.some((v) => v === true)) return "one";
+    if (flags.length && flags.every((v) => v === false)) return "separate";
+    // Heuristic mirror: primitives in the group read as a drawn glyph.
+    return members.some((m) => !NODE_TYPES.has(m.type)) ? "one" : "separate";
+  })();
 
   const runEffect = (action: () => void) => {
     try {
@@ -127,6 +160,26 @@ export function SelectionToolbar({
             ＋ Detail
           </button>
         ))}
+      {compositeState && (
+        <button
+          className="docent-tool"
+          title={
+            compositeState === "one"
+              ? "This group exports as one component — click to keep its parts separate"
+              : "These grouped shapes export separately — click to treat them as one component"
+          }
+          onClick={() =>
+            runEffect(() =>
+              canvas.setGroupComposite(
+                selectedIds,
+                compositeState === "one" ? false : true,
+              ),
+            )
+          }
+        >
+          {compositeState === "one" ? "⧉ 1 component" : "⧉ Merge"}
+        </button>
+      )}
       <button
         className="docent-tool"
         title="Glow highlight"

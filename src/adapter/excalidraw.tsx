@@ -25,6 +25,7 @@ import {
 import type {
   AppState,
   ExcalidrawImperativeAPI,
+  LibraryItems_anyVersion,
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
@@ -169,6 +170,13 @@ export interface DocentCanvasHandle {
     elementId: string,
     patch: { tags?: string[] | null; note?: string | null },
   ): void;
+  /**
+   * Declare whether a group is ONE component (D22): true collapses it in
+   * the scene graph and both exports, false keeps its members separate,
+   * null returns the decision to the glyph-signature heuristic. Applies to
+   * every element sharing the given elements' groups; one undoable step.
+   */
+  setGroupComposite(elementIds: string[], value: boolean | null): void;
   /**
    * Declare cross-tier edge refinement (D21): which inner component of the
    * bound endpoint's detail diagram this edge lands on (`to`) / departs
@@ -657,6 +665,34 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
     },
 
+    setGroupComposite: (elementIds, value) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      const selected = all.filter(
+        (el) => elementIds.includes(el.id) && !el.isDeleted,
+      );
+      // The group the author acted on: the outermost one every selected
+      // element shares (groupIds run innermost-first).
+      const target = [...(selected[0]?.groupIds ?? [])]
+        .reverse()
+        .find((g) => selected.every((el) => el.groupIds?.includes(g)));
+      if (!target) throw new Error("Selection is not one group");
+      api.updateScene({
+        elements: all.map((el) => {
+          if (el.isDeleted || !el.groupIds?.includes(target)) return el;
+          const flags = {
+            ...((docentDataOf(el) as { composite?: Record<string, boolean> })
+              .composite ?? {}),
+          };
+          if (value === null) delete flags[target];
+          else flags[target] = value;
+          return withDocentPatch(el, {
+            composite: Object.keys(flags).length ? flags : null,
+          });
+        }),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
     setEdgeRefine: (edgeId, patch) => {
       const all = api.getSceneElementsIncludingDeleted();
       const edge = all.find((el) => el.id === edgeId && !el.isDeleted);
@@ -823,6 +859,53 @@ async function waitForCanvasSize(api: ExcalidrawImperativeAPI): Promise<void> {
   }
 }
 
+/**
+ * Shape libraries shipped as static assets under `public/`, fetched from the
+ * app's own origin — a bundled asset, never a runtime dependency (I7), and
+ * never a call out to libraries.excalidraw.com. Attribution and license are
+ * recorded in the README (D23).
+ */
+const BUNDLED_LIBRARY_URLS = ["/libraries/software-architecture.excalidrawlib"];
+
+/**
+ * Merge the bundled shape libraries into Excalidraw's library sidebar.
+ * Best-effort by construction: a missing, unserved, or malformed asset must
+ * never keep the canvas from coming up, so every failure ends at a warning.
+ * Repeat calls are idempotent — upstream's merge drops items whose elements
+ * are already present, so a re-mount cannot duplicate the shapes.
+ */
+async function loadBundledLibraries(api: ExcalidrawImperativeAPI): Promise<void> {
+  for (const url of BUNDLED_LIBRARY_URLS) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const parsed = (await response.json()) as {
+        type?: unknown;
+        libraryItems?: unknown;
+        library?: unknown;
+      };
+      if (parsed.type !== "excalidrawlib") {
+        throw new Error("not an excalidrawlib payload");
+      }
+      // v2 files carry `libraryItems`; v1 files carry `library` (an array of
+      // element arrays). Upstream's restore path accepts either shape.
+      const items = parsed.libraryItems ?? parsed.library;
+      if (!Array.isArray(items) || items.length === 0) {
+        throw new Error("no library items");
+      }
+      await api.updateLibrary({
+        libraryItems: items as LibraryItems_anyVersion,
+        merge: true,
+        openLibraryMenu: false,
+      });
+    } catch (err) {
+      console.warn(`Failed to load bundled library ${url}`, err);
+    }
+  }
+}
+
 const isMac = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
 const MOD = isMac ? "Cmd" : "Ctrl";
 
@@ -843,6 +926,7 @@ export function ExcalidrawCanvas({
         api.getSceneElementsIncludingDeleted(),
       );
       onReady?.(makeHandle(api));
+      void loadBundledLibraries(api);
     },
     [onReady],
   );

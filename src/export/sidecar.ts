@@ -64,6 +64,12 @@ export function exportSidecar(graph: SceneGraph): string {
       entity.detail = node.detailFrameId;
       provenance.detail = "declared";
     }
+    if (node.composite !== null) {
+      // One component drawn from several elements (D22) — say so, and say
+      // whether the author declared it or the glyph signature implied it.
+      entity.composite = node.composite.members;
+      provenance.composite = node.composite.provenance;
+    }
     for (const [key, meaning] of Object.entries(facts.props).sort()) {
       entity[key] = meaning;
       provenance[key] = "declared";
