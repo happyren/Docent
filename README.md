@@ -194,14 +194,16 @@ whenever `master` advances with green CI:
 git clone https://github.com/happyren/Docent.git ~/docent && ~/docent/scripts/install-cd.sh
 ```
 
-**Agent control:** run the MCP server (stdio) and open the canvas — it attaches to the
-server's bridge on `http://localhost:3001` automatically:
+**Agent control:** run the MCP server (stdio), then attach the canvas to its bridge —
+connection is always explicit, so the app never probes the network on its own:
 
 ```bash
 pnpm mcp
 ```
 
-Point any MCP client at that process, ask it to `get_scene_graph`, and start touring.
+Then either use **Menu → Connect agent bridge**, or open the canvas with `?agent`
+(e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). Point any MCP
+client at the `pnpm mcp` process, ask it to `get_scene_graph`, and start touring.
 
 ```bash
 # quality gates
@@ -211,7 +213,8 @@ pnpm comprehension   # Q6: scores a reference model given only the export
 
 **Q4 frame-rate check** (per release, needs a regular visible browser tab — rAF is
 paused in hidden/embedded views): open `?scene=samples/perf.excalidraw` (200 elements)
-in dev mode and run `await __docent.measurePerformance()` in the console. It reports
+(dev or deployed — the harness ships in every build) and run
+`await __docent.measurePerformance()` in the console. It reports
 avg fps and p95 frame time for camera tweens, flow pulses, and combined
 spotlight+flow+tween. Target: ≥60fps avg. Docent's measured main-thread overhead on
 that scene is ~0.01ms per camera frame and ~0.12ms per scene-graph build — the frame
