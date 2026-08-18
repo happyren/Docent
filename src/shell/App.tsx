@@ -280,14 +280,30 @@ export function App() {
       try {
         const response = await fetch(sceneUrl, { signal: controller.signal });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const blob = await response.blob();
+        const text = await response.text();
         if (controller.signal.aborted) return;
-        await canvas.loadSceneBlob(blob);
+        // The SPA fallback answers unknown paths with index.html and a 200 —
+        // a typo'd scene URL must fail loudly, not blank the canvas.
+        let parsed: { type?: string };
+        try {
+          parsed = JSON.parse(text) as { type?: string };
+        } catch {
+          throw new Error("not an .excalidraw file — check the URL for typos");
+        }
+        if (parsed.type !== "excalidraw") {
+          throw new Error("not an .excalidraw file — check the URL for typos");
+        }
+        await canvas.loadSceneBlob(
+          new Blob([text], { type: "application/json" }),
+        );
         markClean(sceneUrl.split("/").pop() ?? sceneUrl);
         fitLayerOne();
       } catch (err) {
         if (!controller.signal.aborted) {
           console.error(`Failed to load ?scene=${sceneUrl}`, err);
+          window.alert(
+            `Could not load scene "${sceneUrl}": ${err instanceof Error ? err.message : err}`,
+          );
         }
       }
     })();
