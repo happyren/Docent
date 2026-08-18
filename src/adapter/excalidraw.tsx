@@ -859,51 +859,88 @@ async function waitForCanvasSize(api: ExcalidrawImperativeAPI): Promise<void> {
   }
 }
 
-/**
- * Shape libraries shipped as static assets under `public/`, fetched from the
- * app's own origin — a bundled asset, never a runtime dependency (I7), and
- * never a call out to libraries.excalidraw.com. Attribution and license are
- * recorded in the README (D23).
- */
-const BUNDLED_LIBRARY_URLS = ["/libraries/software-architecture.excalidrawlib"];
+interface BundledLibrary {
+  url: string;
+  /**
+   * Eager libraries are fetched at canvas mount; the rest wait until the user
+   * first opens the library sidebar. Startup must not pay for shapes nobody
+   * has asked to see — the AWS set is ~3.9 MB, ~90× the architecture set.
+   */
+  eager: boolean;
+}
 
 /**
- * Merge the bundled shape libraries into Excalidraw's library sidebar.
+ * Shape libraries shipped as static assets under `public/`, fetched from the
+ * app's own origin — bundled assets, never runtime dependencies (I7), and
+ * never a call out to libraries.excalidraw.com. Attribution and licenses are
+ * recorded in the README (D23).
+ */
+const BUNDLED_LIBRARIES: readonly BundledLibrary[] = [
+  { url: "/libraries/software-architecture.excalidrawlib", eager: true },
+  { url: "/libraries/aws-architecture-icons.excalidrawlib", eager: false },
+];
+
+/**
+ * Merge one bundled shape library into Excalidraw's library sidebar.
  * Best-effort by construction: a missing, unserved, or malformed asset must
  * never keep the canvas from coming up, so every failure ends at a warning.
  * Repeat calls are idempotent — upstream's merge drops items whose elements
  * are already present, so a re-mount cannot duplicate the shapes.
  */
-async function loadBundledLibraries(api: ExcalidrawImperativeAPI): Promise<void> {
-  for (const url of BUNDLED_LIBRARY_URLS) {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const parsed = (await response.json()) as {
-        type?: unknown;
-        libraryItems?: unknown;
-        library?: unknown;
-      };
-      if (parsed.type !== "excalidrawlib") {
-        throw new Error("not an excalidrawlib payload");
-      }
-      // v2 files carry `libraryItems`; v1 files carry `library` (an array of
-      // element arrays). Upstream's restore path accepts either shape.
-      const items = parsed.libraryItems ?? parsed.library;
-      if (!Array.isArray(items) || items.length === 0) {
-        throw new Error("no library items");
-      }
-      await api.updateLibrary({
-        libraryItems: items as LibraryItems_anyVersion,
-        merge: true,
-        openLibraryMenu: false,
-      });
-    } catch (err) {
-      console.warn(`Failed to load bundled library ${url}`, err);
+async function loadBundledLibrary(
+  api: ExcalidrawImperativeAPI,
+  url: string,
+): Promise<void> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const parsed = (await response.json()) as {
+      type?: unknown;
+      libraryItems?: unknown;
+      library?: unknown;
+    };
+    if (parsed.type !== "excalidrawlib") {
+      throw new Error("not an excalidrawlib payload");
+    }
+    // v2 files carry `libraryItems`; v1 files carry `library` (an array of
+    // element arrays). Upstream's restore path accepts either shape.
+    const items = parsed.libraryItems ?? parsed.library;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new Error("no library items");
+    }
+    await api.updateLibrary({
+      libraryItems: items as LibraryItems_anyVersion,
+      merge: true,
+      openLibraryMenu: false,
+    });
+  } catch (err) {
+    console.warn(`Failed to load bundled library ${url}`, err);
+  }
+}
+
+/** Merge every bundled library matching `select`, in manifest order. */
+async function loadBundledLibraries(
+  api: ExcalidrawImperativeAPI,
+  select: (library: BundledLibrary) => boolean,
+): Promise<void> {
+  for (const library of BUNDLED_LIBRARIES) {
+    if (select(library)) {
+      await loadBundledLibrary(api, library.url);
     }
   }
+}
+
+/**
+ * Upstream opens the shape library as the `library` tab of its default
+ * sidebar (`{ name: "default", tab: "library" }`). The constants naming both
+ * (`DEFAULT_SIDEBAR`, `LIBRARY_SIDEBAR_TAB`) are internal — not runtime
+ * exports — so match on either field rather than pinning one spelling.
+ */
+function isLibrarySidebarOpen(openSidebar: AppState["openSidebar"]): boolean {
+  if (!openSidebar) return false;
+  return openSidebar.tab === "library" || openSidebar.name === "library";
 }
 
 const isMac = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
@@ -918,6 +955,7 @@ export function ExcalidrawCanvas({
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastFingerprintRef = useRef(0);
   const lastSelectionRef = useRef("");
+  const lazyLibrariesRef = useRef(false);
 
   const handleApi = useCallback(
     (api: ExcalidrawImperativeAPI) => {
@@ -926,7 +964,7 @@ export function ExcalidrawCanvas({
         api.getSceneElementsIncludingDeleted(),
       );
       onReady?.(makeHandle(api));
-      void loadBundledLibraries(api);
+      void loadBundledLibraries(api, (library) => library.eager);
     },
     [onReady],
   );
@@ -939,7 +977,14 @@ export function ExcalidrawCanvas({
       lastFingerprintRef.current = fingerprint;
       onDocumentChange?.(fingerprint);
     }
-    const selected = api.getAppState().selectedElementIds;
+    const appState = api.getAppState();
+    if (!lazyLibrariesRef.current && isLibrarySidebarOpen(appState.openSidebar)) {
+      // Latch before awaiting: onChange fires continuously while the sidebar
+      // is open, and the deferred libraries must be fetched exactly once.
+      lazyLibrariesRef.current = true;
+      void loadBundledLibraries(api, (library) => !library.eager);
+    }
+    const selected = appState.selectedElementIds;
     const ids = Object.keys(selected).filter((id) => selected[id]);
     const key = ids.slice().sort().join(" ");
     if (key !== lastSelectionRef.current) {

@@ -83,6 +83,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 
 ### 🧱 Architecture shapes out of the box
 - A **software-architecture shape library** ships with the app — microservice, database, cache, event bus/pipeline, documents or code, browser, mobile device — merged into Excalidraw's library sidebar at startup, served from the deployment's own origin. Nothing to download, no call out to libraries.excalidraw.com. Attribution below.
+- An **AWS architecture icon set** (249 icons — EC2, S3, Lambda, RDS, VPC, SQS/SNS, EKS, …) ships alongside it, from the same origin. It is ~3.9 MB, so it loads **on first open of the library sidebar** rather than at startup: the canvas comes up as fast as it did without it, and the icons are there the moment you go looking for them. Attribution below.
 
 ---
 
@@ -293,3 +294,5 @@ MIT. Docent embeds [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT �
 ### Bundled third-party assets
 
 - `public/libraries/software-architecture.excalidrawlib` — **Software Architecture** shape library by **Youri Tjang** (`youritjang`, https://github.com/youritjang). Source: https://libraries.excalidraw.com/libraries/youritjang/software-architecture.excalidrawlib, published in [excalidraw/excalidraw-libraries](https://github.com/excalidraw/excalidraw-libraries) (`libraries/youritjang/software-architecture.excalidrawlib`) under that repository's MIT license (MIT © 2020 Excalidraw). Bundled verbatim — 7 items, unmodified.
+- `public/libraries/aws-architecture-icons.excalidrawlib` — **AWS Architecture Icons** shape library by **Anna Pastushko** (`childishgirl`, https://github.com/ChildishGirl). Source: https://libraries.excalidraw.com/libraries/childishgirl/aws-architecture-icons.excalidrawlib, published in [excalidraw/excalidraw-libraries](https://github.com/excalidraw/excalidraw-libraries) (`libraries/childishgirl/aws-architecture-icons.excalidrawlib`) under that repository's MIT license (MIT © 2020 Excalidraw). Bundled verbatim — 249 items, unmodified.
+  - The MIT license above covers redistribution of *this library file*. The icons depict Amazon Web Services products, and **"AWS", "Amazon Web Services", the service names, and the associated marks belong to Amazon Web Services, Inc. or its affiliates** — no affiliation with or endorsement by AWS is claimed, and use of the marks in your own diagrams is governed by AWS's trademark and brand guidelines, not by this license.
