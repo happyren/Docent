@@ -90,11 +90,14 @@ export class CameraEngine {
 
     return new Promise((resolve) => {
       let settled = false;
-      // Zoom changes invalidate Excalidraw's per-element canvas cache, so a
-      // zoom-per-frame tween re-rasterizes the whole scene at 60Hz. Applying
-      // zoom every 2nd frame (scroll still every frame, exact target on the
-      // final frame) halves that cost; a 30Hz zoom step under motion is not
-      // perceptible (Q4, degrades-never-blocks per I8).
+      // Viewport writes cap at ~60Hz regardless of display refresh — every
+      // write forces an Excalidraw canvas repaint, and a 120Hz display would
+      // double that cost for motion the eye can't distinguish from 60Hz.
+      // Zoom applies on every 2nd write (zoom changes additionally
+      // invalidate the per-element canvas cache); the final frame always
+      // writes the exact target (Q4; degrades-never-blocks per I8).
+      const MIN_WRITE_INTERVAL_MS = 7.5;
+      let lastWrite = 0;
       let zoomFrameToggle = true;
       let appliedZoom = from.zoom;
       const finish = (completed: boolean, snap: boolean) => {
@@ -123,6 +126,11 @@ export class CameraEngine {
           return;
         }
         const t = Math.min(1, (now - start) / duration);
+        if (t < 1 && now - lastWrite < MIN_WRITE_INTERVAL_MS) {
+          requestAnimationFrame(tick);
+          return;
+        }
+        lastWrite = now;
         const e = ease(t);
         const zoom = Math.exp(lerp(Math.log(from.zoom), Math.log(target.zoom), e));
         zoomFrameToggle = !zoomFrameToggle;
