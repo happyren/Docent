@@ -136,9 +136,19 @@ export function OverlayLayer({
 
   useEffect(() => store.subscribe(setOverlay), [store]);
 
-  // Camera sync: one CSS transform + (when spotlighting) one path rewrite.
-  // No React involvement per frame.
+  // Camera sync: one CSS transform per frame. The spotlight backdrop
+  // pre-covers ~2.5× the viewport and rewrites only when the camera leaves
+  // that region — a per-frame path rewrite would invalidate the composited
+  // layer every frame (a full-viewport CPU repaint under software
+  // rendering).
+  const coverageRef = useRef<SceneBounds | null>(null);
   useEffect(() => {
+    coverageRef.current = null; // re-cover when targets/effects change
+    const contains = (outer: SceneBounds, inner: SceneBounds) =>
+      inner.x >= outer.x &&
+      inner.y >= outer.y &&
+      inner.x + inner.width <= outer.x + outer.width &&
+      inner.y + inner.height <= outer.y + outer.height;
     const apply = (vp: Viewport) => {
       const stage = stageRef.current;
       if (stage) {
@@ -147,10 +157,20 @@ export function OverlayLayer({
       const backdrop = backdropRef.current;
       if (backdrop) {
         const view = viewRect(reader, vp);
-        backdrop.setAttribute(
-          "d",
-          `M${view.x} ${view.y} h${view.width} v${view.height} h${-view.width} Z ${holesRef.current}`,
-        );
+        if (!coverageRef.current || !contains(coverageRef.current, view)) {
+          const grow = 0.75; // 2.5× linear coverage
+          coverageRef.current = {
+            x: view.x - view.width * grow,
+            y: view.y - view.height * grow,
+            width: view.width * (1 + 2 * grow),
+            height: view.height * (1 + 2 * grow),
+          };
+          const c = coverageRef.current;
+          backdrop.setAttribute(
+            "d",
+            `M${c.x} ${c.y} h${c.width} v${c.height} h${-c.width} Z ${holesRef.current}`,
+          );
+        }
       }
     };
     apply(reader.getViewport());
