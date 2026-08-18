@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { orderWaypoints } from "../src/scene/waypoints";
+import {
+  OVERVIEW,
+  orderWaypoints,
+  resolveWaypointTarget,
+} from "../src/scene/waypoints";
 
 const frame = (id: string, name: string, order: number | null = null) => ({
   id,
@@ -21,6 +25,20 @@ describe("waypoint ordering (S2)", () => {
       "02 Core",
       "10 Edge",
     ]);
+  });
+
+  it("resolves any target to OVERVIEW when there are no waypoints", () => {
+    // Regression: arrow keys while presenting a frameless scene crashed on
+    // frames[0].id — Math.max(0, min(-1, target)) indexed an empty array.
+    expect(resolveWaypointTarget(0, 0)).toBe(OVERVIEW);
+    expect(resolveWaypointTarget(3, 0)).toBe(OVERVIEW);
+    expect(resolveWaypointTarget(OVERVIEW, 0)).toBe(OVERVIEW);
+  });
+
+  it("clamps in-range and out-of-range targets", () => {
+    expect(resolveWaypointTarget(1, 3)).toBe(1);
+    expect(resolveWaypointTarget(9, 3)).toBe(2);
+    expect(resolveWaypointTarget(OVERVIEW, 3)).toBe(OVERVIEW);
   });
 
   it("declared order overrides name order", () => {
