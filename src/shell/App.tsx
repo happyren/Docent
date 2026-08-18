@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
-import { connectAgentBridge } from "../agent/bridge";
+import { connectAgentBridge, type AgentBridge } from "../agent/bridge";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
 import { exportScene } from "../export";
@@ -48,9 +48,15 @@ export function App() {
   );
 
   // Agent bridge (S8): attach to a local MCP server when one is running.
+  const bridgeRef = useRef<AgentBridge | null>(null);
   useEffect(() => {
     if (!commands) return;
-    return connectAgentBridge(commands);
+    const bridge = connectAgentBridge(commands);
+    bridgeRef.current = bridge;
+    return () => {
+      bridgeRef.current = null;
+      bridge.dispose();
+    };
   }, [commands]);
 
   // Esc interrupts an agent tour outside presentation mode.
@@ -520,6 +526,7 @@ export function App() {
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
+            onConnectAgent: () => bridgeRef.current?.reconnect(),
           }}
         />
         {canvas && (
