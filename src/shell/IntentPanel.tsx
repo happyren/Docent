@@ -3,8 +3,19 @@
  * narratives/order. Renders for a single-element selection; writes go
  * through the adapter into `customData.docent.*`.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { DocentCanvasHandle, ElementInfo } from "../adapter";
+import { buildSceneGraph } from "../scene/graph";
+
+/**
+ * Refinement targets for one side of a selected edge (D21): the members
+ * of the bound endpoint's detail diagram, labeled for a dropdown.
+ */
+interface RefineSide {
+  endpointLabel: string;
+  current: string | null;
+  options: { id: string; label: string }[];
+}
 
 export function IntentPanel({
   canvas,
@@ -14,6 +25,40 @@ export function IntentPanel({
   selection: ElementInfo;
 }) {
   const isFrame = selection.type === "frame";
+  const isEdge = selection.type === "arrow" || selection.type === "line";
+
+  // For a selected edge whose endpoints declare detail diagrams, offer
+  // "lands on / departs from" pickers over those diagrams' components.
+  const refineSides = useMemo(() => {
+    if (!isEdge) return null;
+    const snapshot = canvas.getSceneSnapshot();
+    const graph = buildSceneGraph(snapshot);
+    const edge = graph.edges.find((e) => e.sourceId === selection.id);
+    if (!edge) return null;
+    const declared =
+      snapshot.elements.find((el) => el.id === selection.id)?.docent.refine ??
+      null;
+    const side = (
+      endpointId: string | null,
+      declaredId: string | null,
+    ): RefineSide | null => {
+      if (!endpointId) return null;
+      const endpoint = graph.nodes.find((n) => n.id === endpointId);
+      if (!endpoint?.detailFrameId) return null;
+      const options = graph.nodes
+        .filter((n) => n.frameId === endpoint.detailFrameId)
+        .map((n) => ({ id: n.sourceId, label: n.label ?? n.id }));
+      if (!options.length) return null;
+      return {
+        endpointLabel: endpoint.label ?? endpoint.id,
+        current: declaredId,
+        options,
+      };
+    };
+    const to = side(edge.to, declared?.to ?? null);
+    const from = side(edge.from, declared?.from ?? null);
+    return to || from ? { to, from } : null;
+  }, [canvas, selection.id, isEdge]);
   const [tags, setTags] = useState("");
   const [note, setNote] = useState("");
   const [narrative, setNarrative] = useState("");
@@ -99,6 +144,48 @@ export function IntentPanel({
               onBlur={commitElement}
             />
           </label>
+          {refineSides?.to && (
+            <label className="docent-field">
+              <span>Lands on — inside {refineSides.to.endpointLabel}'s detail</span>
+              <select
+                value={refineSides.to.current ?? ""}
+                onChange={(e) =>
+                  canvas.setEdgeRefine(selection.id, {
+                    to: e.target.value || null,
+                  })
+                }
+              >
+                <option value="">(whole {refineSides.to.endpointLabel})</option>
+                {refineSides.to.options.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {refineSides?.from && (
+            <label className="docent-field">
+              <span>
+                Departs from — inside {refineSides.from.endpointLabel}'s detail
+              </span>
+              <select
+                value={refineSides.from.current ?? ""}
+                onChange={(e) =>
+                  canvas.setEdgeRefine(selection.id, {
+                    from: e.target.value || null,
+                  })
+                }
+              >
+                <option value="">(whole {refineSides.from.endpointLabel})</option>
+                {refineSides.from.options.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </>
       )}
     </aside>

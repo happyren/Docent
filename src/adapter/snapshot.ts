@@ -40,6 +40,12 @@ export interface DocentElementData {
   order: number | null;
   /** Present only on the legend carrier element. */
   legend: LegendRule[] | null;
+  /**
+   * Declared cross-tier edge refinement (D21): which inner component of a
+   * bound endpoint's detail diagram this edge actually lands on (`to`) or
+   * departs from (`from`). Validated against the live graph at read time.
+   */
+  refine: { to: string | null; from: string | null } | null;
 }
 
 export interface SnapshotElement {
@@ -130,6 +136,7 @@ function parseDocent(customData: unknown): DocentElementData {
     narrative: null,
     order: null,
     legend: null,
+    refine: null,
   };
   if (typeof customData !== "object" || customData === null) return empty;
   const docent = (customData as Record<string, unknown>).docent;
@@ -142,8 +149,16 @@ function parseDocent(customData: unknown): DocentElementData {
   const tags = Array.isArray(d.tags)
     ? d.tags.filter((t): t is string => typeof t === "string")
     : [];
+  const refineRaw =
+    typeof d.refine === "object" && d.refine !== null
+      ? (d.refine as Record<string, unknown>)
+      : null;
+  const refine = refineRaw
+    ? { to: asString(refineRaw.to), from: asString(refineRaw.from) }
+    : null;
   return {
     detailFrameId: detail ? asString(detail.frameId) : null,
+    refine: refine && (refine.to || refine.from) ? refine : null,
     tags,
     note: asString(d.note),
     narrative: asString(d.narrative),
