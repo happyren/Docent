@@ -566,3 +566,82 @@ body {
   gap: 8px;
   min-width: 0;
 }
+
+/* Legend editor as a docked panel (S10): no backdrop — the canvas stays
+   interactive so authors select elements and click style chips instead of
+   typing attribute values. Left side; the intent panel keeps the right. */
+.docent-legend-panel {
+  position: absolute;
+  left: 12px;
+  top: 70px;
+  width: 360px;
+  max-height: calc(100% - 180px);
+  overflow-y: auto;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(27, 27, 31, 0.95);
+  color: var(--docent-fg);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.docent-legend-panel input,
+.docent-legend-panel select {
+  background: #26262c;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  min-width: 0;
+}
+
+.docent-legend-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.docent-legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #2a2a30;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.docent-legend-chip:hover {
+  border-color: #5d4b96;
+  background: #322b47;
+}
+
+.docent-legend-chip-attr {
+  color: var(--docent-muted);
+  font-size: 11px;
+}
+
+.docent-legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  flex: none;
+}
+
+.docent-legend-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
