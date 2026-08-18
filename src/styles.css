@@ -645,3 +645,29 @@ body {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.04);
 }
+
+.docent-legend-chip.is-picked {
+  border-color: #7a63c4;
+  background: #3a3159;
+}
+
+.docent-legend-pending {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px dashed #5d4b96;
+  background: rgba(93, 75, 150, 0.12);
+}
+
+.docent-legend-pending-summary {
+  font-size: 12px;
+  color: var(--docent-fg);
+}
+
+.docent-legend-plus {
+  color: var(--docent-muted);
+  width: 12px;
+  text-align: center;
+}

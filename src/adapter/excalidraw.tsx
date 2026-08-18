@@ -684,7 +684,13 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       );
       const legendText = rules.length
         ? `Legend\n${rules
-            .map((r) => `${r.attr} ${r.value} → ${r.key}: ${r.meaning}`)
+            .map((r) => {
+              const conditions = [
+                `${r.attr} ${r.value}`,
+                ...(r.also ?? []).map((c) => `${c.attr} ${c.value}`),
+              ].join(" + ");
+              return `${conditions} → ${r.key}: ${r.meaning}`;
+            })
             .join("\n")}`
         : "Legend (empty)";
 

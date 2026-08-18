@@ -156,6 +156,25 @@ export function App() {
 
   const drill = useDrill(canvas, camera, structuralUp, deepestFrameId);
 
+  // Refresh stays in the current scene: portfolio opens/saves stamp
+  // ?project=&scene= into the URL (replaceState — no history spam), and
+  // local file flows clear them. Reload then restores via the existing
+  // startup parameter handling.
+  const syncSceneUrl = useCallback(
+    (source: { project: string; scene: string } | null) => {
+      const url = new URL(window.location.href);
+      if (source) {
+        url.searchParams.set("project", source.project);
+        url.searchParams.set("scene", source.scene);
+      } else {
+        url.searchParams.delete("project");
+        url.searchParams.delete("scene");
+      }
+      window.history.replaceState(null, "", url);
+    },
+    [],
+  );
+
   const markClean = useCallback((name: string | null) => {
     savedFingerprintRef.current = canvasRef.current?.getSceneFingerprint() ?? null;
     if (name !== null) setFileName(name);
@@ -202,13 +221,14 @@ export function App() {
       await handle.loadSceneBlob(picked.blob);
       fsHandleRef.current = picked.handle;
       portfolioSourceRef.current = null;
+      syncSceneUrl(null);
       markClean(picked.name);
       fitLayerOne();
     } catch (err) {
       console.error(err);
       window.alert(`Could not open scene: ${err instanceof Error ? err.message : err}`);
     }
-  }, [markClean, fitLayerOne]);
+  }, [markClean, fitLayerOne, syncSceneUrl]);
 
   const saveSceneAs = useCallback(async () => {
     const handle = canvasRef.current;
@@ -219,6 +239,7 @@ export function App() {
       if (target === null) return;
       const json = prepareSceneForSave();
       portfolioSourceRef.current = null;
+      syncSceneUrl(null);
       if (target === "download") {
         downloadSceneFile(suggested, json);
         markClean(suggested);
@@ -231,7 +252,7 @@ export function App() {
       console.error(err);
       window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
-  }, [fileName, markClean, prepareSceneForSave]);
+  }, [fileName, markClean, prepareSceneForSave, syncSceneUrl]);
 
   const saveScene = useCallback(async () => {
     const handle = canvasRef.current;
@@ -262,6 +283,16 @@ export function App() {
       window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
   }, [markClean, saveSceneAs, prepareSceneForSave]);
+
+  // Refresh with unsaved changes should warn, not silently discard.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
 
   const handleDocumentChange = useCallback((fingerprint: number) => {
     setDirty(fingerprint !== savedFingerprintRef.current);
@@ -327,19 +358,21 @@ export function App() {
       await handle.loadSceneBlob(new Blob([text], { type: "application/json" }));
       fsHandleRef.current = null;
       portfolioSourceRef.current = { project, scene };
+      syncSceneUrl({ project, scene });
       markClean(`${project}/${scene}`);
       fitLayerOne();
     },
-    [markClean, fitLayerOne],
+    [markClean, fitLayerOne, syncSceneUrl],
   );
   const savePortfolioSceneAs = useCallback(
     async (project: string, scene: string) => {
       await savePortfolioScene(project, scene, prepareSceneForSave());
       fsHandleRef.current = null;
       portfolioSourceRef.current = { project, scene };
+      syncSceneUrl({ project, scene });
       markClean(`${project}/${scene}`);
     },
-    [markClean, prepareSceneForSave],
+    [markClean, prepareSceneForSave, syncSceneUrl],
   );
 
   // Startup scene load (?scene=<url>) runs in an effect so it acts only after

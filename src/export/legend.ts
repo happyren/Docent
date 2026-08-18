@@ -16,16 +16,32 @@ export interface LegendFacts {
   props: Record<string, string>;
 }
 
+const matchesCondition = (
+  style: GraphNode["style"],
+  shape: string,
+  attr: LegendRule["attr"],
+  value: string,
+): boolean =>
+  (attr === "shape" ? shape : String(style[attr] ?? "")) === value;
+
 export function applyLegend(
   style: GraphNode["style"],
   shape: string,
   legend: readonly LegendRule[],
 ): LegendFacts {
   const facts: LegendFacts = { kind: null, tags: [], props: {} };
-  for (const rule of legend) {
-    const actual =
-      rule.attr === "shape" ? shape : String(style[rule.attr] ?? "");
-    if (actual !== rule.value) continue;
+  // Composite rules (primary + `also` conditions) match only when every
+  // condition holds. Evaluation runs in ascending specificity (condition
+  // count, then legend order), so a more specific rule overwrites a
+  // generic one for the same key — "rectangle + solid + width 2 →
+  // kind: service" beats "rectangle → kind: node". Deterministic (I3).
+  const ordered = legend
+    .map((rule, index) => ({ rule, index, arity: 1 + (rule.also?.length ?? 0) }))
+    .sort((a, b) => a.arity - b.arity || a.index - b.index);
+  for (const { rule } of ordered) {
+    if (!matchesCondition(style, shape, rule.attr, rule.value)) continue;
+    if (rule.also?.some((c) => !matchesCondition(style, shape, c.attr, c.value)))
+      continue;
     if (rule.key === "kind") {
       facts.kind = rule.meaning;
     } else if (rule.key === "tag") {
@@ -52,8 +68,12 @@ export function legendToRecord(
 ): Record<string, string> {
   const record: Record<string, string> = {};
   for (const rule of legend) {
-    record[`${ATTR_PREFIX[rule.attr]}.${rule.value}`] =
-      `${rule.key}: ${rule.meaning}`;
+    // Composite rules join their conditions with "+" in author order.
+    const conditions = [
+      `${ATTR_PREFIX[rule.attr]}.${rule.value}`,
+      ...(rule.also ?? []).map((c) => `${ATTR_PREFIX[c.attr]}.${c.value}`),
+    ].join("+");
+    record[conditions] = `${rule.key}: ${rule.meaning}`;
   }
   return record;
 }
