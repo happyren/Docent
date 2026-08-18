@@ -105,7 +105,8 @@ export class CommandAPI {
         .flatMap((pool) => pool)
         .find((item) => item.id === id || item.sourceId === id);
       if (match) {
-        out.push(match.sourceId);
+        const node = graph.nodes.find((n) => n.id === match.id && n.composite);
+        out.push(...(node ? this.compositeMemberIds(node) : [match.sourceId]));
         continue;
       }
       const group = graph.groups.find((g) => g.id === id);
@@ -114,6 +115,16 @@ export class CommandAPI {
           const node = graph.nodes.find((n) => n.id === memberId);
           if (node) out.push(node.sourceId);
         }
+        continue;
+      }
+      // A collapsed composite (D22) is one node, so its group id no longer
+      // appears in `groups` — resolve it through the node that speaks for
+      // it, and light up every part of the glyph rather than one stroke.
+      const compositeNode = graph.nodes.find(
+        (n) => n.composite && n.groupIds.includes(id),
+      );
+      if (compositeNode) {
+        out.push(...this.compositeMemberIds(compositeNode));
         continue;
       }
       if (this.reader.getElementInfo(id)) {
@@ -125,6 +136,15 @@ export class CommandAPI {
       );
     }
     return out;
+  }
+
+  /** Every source element a composite node stands for (D22). */
+  private compositeMemberIds(node: { groupIds: string[]; sourceId: string }): string[] {
+    const ids = this.reader
+      .getSceneSnapshot()
+      .elements.filter((el) => el.groupIds.some((g) => node.groupIds.includes(g)))
+      .map((el) => el.id);
+    return ids.length ? ids : [node.sourceId];
   }
 
   /** Resolve a graph id (or raw element id) to its source element id. */

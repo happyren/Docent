@@ -22,7 +22,7 @@ address space into it.
 
 The demo that explains everything:
 
-> *"Claude, walk me through what happens when a request hits the API."*
+> *"Walk me through what happens when a request hits the API."*
 >
 > The camera glides to the ingress. The gateway glows. A pulse of light travels the arrow into
 > the auth service, then fans out along the write path — while the agent narrates each hop.
@@ -51,6 +51,7 @@ One canvas, many zoom-levels of meaning — overview → service → component �
 
 ### 📦 Semantic export
 - Resolves arrow `startBinding`/`endBinding` into an explicit **node/edge graph** — connections as data, not pixels.
+- **Library icons read as one component**: an imported shape (AWS, GCP, …) is a group of strokes to the data model but one thing to a reader, so Docent collapses it into a single node — its label, its box, its arrows. Override either way from the selection toolbar (`⧉ Merge` / `⧉ 1 component`); exports flag whether it was inferred or declared.
 - **Legend-aware stripping**: styling your legend maps to meaning is *converted* (`dashed` → `channel: async`), styling it doesn't map is stripped as noise — roughly **70% fewer tokens** than raw `.excalidraw` JSON, with zero meaning lost. Styling is only noise if the legend says so.
 - Emits **Mermaid** as the primary AI-facing format, plus a **compact JSON sidecar** carrying what Mermaid can't (spatial layout, frames, groups, intent).
 - **Provenance on every fact**: `explicit` (read from the drawing) · `declared` (author-stated intent) · `inferred` (heuristics, e.g. proximity-resolved arrows). The consuming model always knows whether it's reading the diagram, your recorded intent, or a guess — and the export never silently guesses.
@@ -79,6 +80,9 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - A scene opened from the portfolio saves back to it (`⌘S`); local `.excalidraw` file open/save is unchanged.
 - Scenes address by URL: `?project=work&scene=checkout`.
 - Storage is a plain file tree — `data/<project>/<scene>.excalidraw` on a named volume, no database. Anything the store can do, a file manager can too.
+
+### 🧱 Architecture shapes out of the box
+- A **software-architecture shape library** ships with the app — microservice, database, cache, event bus/pipeline, documents or code, browser, mobile device — merged into Excalidraw's library sidebar at startup, served from the deployment's own origin. Nothing to download, no call out to libraries.excalidraw.com. Attribution below.
 
 ---
 
@@ -285,3 +289,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 ## License
 
 MIT. Docent embeds [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT © Excalidraw contributors) as an npm dependency — their notice travels with the package.
+
+### Bundled third-party assets
+
+- `public/libraries/software-architecture.excalidrawlib` — **Software Architecture** shape library by **Youri Tjang** (`youritjang`, https://github.com/youritjang). Source: https://libraries.excalidraw.com/libraries/youritjang/software-architecture.excalidrawlib, published in [excalidraw/excalidraw-libraries](https://github.com/excalidraw/excalidraw-libraries) (`libraries/youritjang/software-architecture.excalidrawlib`) under that repository's MIT license (MIT © 2020 Excalidraw). Bundled verbatim — 7 items, unmodified.

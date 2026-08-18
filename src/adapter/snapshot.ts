@@ -46,6 +46,14 @@ export interface DocentElementData {
    * departs from (`from`). Validated against the live graph at read time.
    */
   refine: { to: string | null; from: string | null } | null;
+  /**
+   * Declared grouped-composite overrides (D22), keyed by group id: true =
+   * that group is ONE component, false = keep its members separate. A
+   * group with no entry falls to the glyph-signature heuristic. Keying by
+   * group is what lets an author split an outer grouping of several icons
+   * while each icon inside stays whole.
+   */
+  composite: Record<string, boolean>;
 }
 
 export interface SnapshotElement {
@@ -128,6 +136,15 @@ export function parseLegendRules(v: unknown): LegendRule[] | null {
   return rules;
 }
 
+function parseCompositeFlags(v: unknown): Record<string, boolean> {
+  if (typeof v !== "object" || v === null) return {};
+  const out: Record<string, boolean> = {};
+  for (const [group, value] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof value === "boolean") out[group] = value;
+  }
+  return out;
+}
+
 function parseDocent(customData: unknown): DocentElementData {
   const empty: DocentElementData = {
     detailFrameId: null,
@@ -137,6 +154,7 @@ function parseDocent(customData: unknown): DocentElementData {
     order: null,
     legend: null,
     refine: null,
+    composite: {},
   };
   if (typeof customData !== "object" || customData === null) return empty;
   const docent = (customData as Record<string, unknown>).docent;
@@ -159,6 +177,7 @@ function parseDocent(customData: unknown): DocentElementData {
   return {
     detailFrameId: detail ? asString(detail.frameId) : null,
     refine: refine && (refine.to || refine.from) ? refine : null,
+    composite: parseCompositeFlags(d.composite),
     tags,
     note: asString(d.note),
     narrative: asString(d.narrative),

@@ -26,6 +26,14 @@ export interface GraphNode {
   tags: string[];
   note: string | null;
   detailFrameId: string | null;
+  /**
+   * Set when this node stands for a grouped composite (D22) — a library
+   * icon drawn from many primitives reads as ONE component. `members` is
+   * how many source elements it collapses; `provenance` is `declared`
+   * when the author marked the group, `inferred` from the glyph
+   * signature (the group draws with primitives, not just shapes).
+   */
+  composite: { members: number; provenance: "declared" | "inferred" } | null;
   bounds: { x: number; y: number; width: number; height: number };
   style: {
     strokeColor: string;
@@ -119,6 +127,50 @@ function round(v: number): number {
   return Math.round(v);
 }
 
+/** How far apart two parts of one glyph may sit and still read as touching. */
+const CLUSTER_PAD = 8;
+
+/**
+ * Whether the shape members form a single connected cluster — parts of one
+ * drawn thing overlap or abut (a cylinder's ellipses and body), while
+ * separately grouped components stand apart. Text members float free (a
+ * caption sits below its glyph) and don't affect connectivity.
+ */
+function formsOneCluster(members: SnapshotElement[]): boolean {
+  const shapes = members.filter((m) => m.type !== "text");
+  if (shapes.length < 2) return true;
+  const touches = (a: SnapshotElement, b: SnapshotElement) =>
+    a.x - CLUSTER_PAD < b.x + b.width &&
+    b.x - CLUSTER_PAD < a.x + a.width &&
+    a.y - CLUSTER_PAD < b.y + b.height &&
+    b.y - CLUSTER_PAD < a.y + a.height;
+  const seen = new Set([shapes[0].id]);
+  const queue = [shapes[0]];
+  while (queue.length) {
+    const current = queue.pop()!;
+    for (const other of shapes) {
+      if (seen.has(other.id) || !touches(current, other)) continue;
+      seen.add(other.id);
+      queue.push(other);
+    }
+  }
+  return seen.size === shapes.length;
+}
+
+/** Enclosing box of several elements — a composite's real extent. */
+function unionBounds(elements: SnapshotElement[]): GraphNode["bounds"] {
+  const minX = Math.min(...elements.map((el) => el.x));
+  const minY = Math.min(...elements.map((el) => el.y));
+  const maxX = Math.max(...elements.map((el) => el.x + el.width));
+  const maxY = Math.max(...elements.map((el) => el.y + el.height));
+  return {
+    x: round(minX),
+    y: round(minY),
+    width: round(maxX - minX),
+    height: round(maxY - minY),
+  };
+}
+
 function boundsOf(el: SnapshotElement): GraphNode["bounds"] {
   return {
     x: round(el.x),
@@ -175,14 +227,96 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
   const legend =
     snapshot.elements.find((el) => isLegendCarrier(el))?.docent.legend ?? [];
 
-  const nodeElements = snapshot.elements.filter(
+  const frameElements = snapshot.elements.filter((el) => el.type === "frame");
+  const edgeElements = snapshot.elements.filter((el) => el.type === "arrow");
+
+  // Grouped composites (D22): a library icon is a group of primitives —
+  // lines, freedraw strokes, shapes — that means ONE component. Collapse
+  // such a group into a single node instead of exporting its drawing
+  // parts as separate components.
+  //
+  // Signature: the group draws with primitives (a member outside the
+  // node vocabulary), which is what separates an icon from a plain
+  // grouping of several real shapes. The author can always override:
+  // `customData.docent.composite` true forces a collapse, false forbids
+  // it — declared beats inferred (D10/I4).
+  const groupMembers = new Map<string, SnapshotElement[]>();
+  for (const el of snapshot.elements) {
+    if (el.type === "frame" || el.type === "arrow" || isLegendCarrier(el)) continue;
+    for (const groupId of el.groupIds) {
+      const members = groupMembers.get(groupId) ?? [];
+      members.push(el);
+      groupMembers.set(groupId, members);
+    }
+  }
+  const compositeGroups = new Map<
+    string,
+    { members: SnapshotElement[]; provenance: "declared" | "inferred" }
+  >();
+  for (const [groupId, members] of groupMembers) {
+    if (members.length < 2) continue;
+    // Declarations are keyed by group, so marking an outer grouping
+    // non-composite steps the search inward instead of silencing the icon
+    // groups nested inside it.
+    const flags = members
+      .map((m) => m.docent.composite[groupId])
+      .filter((v) => v !== undefined);
+    if (flags.length && flags.every((v) => v === false)) continue;
+    if (flags.some((v) => v === true)) {
+      compositeGroups.set(groupId, {
+        members: [...members].sort((a, b) => (a.id < b.id ? -1 : 1)),
+        provenance: "declared",
+      });
+      continue;
+    }
+    // Inferred signature, measured against real library items: a glyph
+    // names itself at most once (its caption), while a grouping of real
+    // components labels each one. Beyond that it either draws with
+    // primitives, or its shapes form a single touching cluster — a
+    // cylinder is stacked ellipses, whereas grouped services stand apart.
+    const labelled = members.filter((m) => labelFor(m, byId) !== null).length;
+    if (labelled > 1) continue;
+    const drawsPrimitives = members.some((m) => !NODE_TYPES.has(m.type));
+    if (!drawsPrimitives && !formsOneCluster(members)) continue;
+    compositeGroups.set(groupId, {
+      members: [...members].sort((a, b) => (a.id < b.id ? -1 : 1)),
+      provenance: "inferred",
+    });
+  }
+  // Library icons nest their groups: the icon's own parts carry inner
+  // groups (the strokes together, the box alone) inside one outer group
+  // that holds the whole glyph plus its label. Collapse at the OUTERMOST
+  // qualifying group — Excalidraw orders groupIds innermost-first, so
+  // that is the last entry — or the icon would split into its
+  // sub-groupings. Declaring a group non-composite steps the search
+  // inward, which is how a deliberate grouping of several icons keeps
+  // each icon whole.
+  const compositeOf = new Map<string, string>();
+  for (const el of snapshot.elements) {
+    const groupId = [...el.groupIds]
+      .reverse()
+      .find((g) => compositeGroups.has(g));
+    if (groupId) compositeOf.set(el.id, groupId);
+  }
+  /** Representative = smallest source id, preferring real shapes; stable
+   *  under resizes and restyles, so composite ids survive edits (I6). */
+  const representativeOf = new Map<string, SnapshotElement>();
+  for (const [groupId, { members }] of compositeGroups) {
+    const owned = members.filter((m) => compositeOf.get(m.id) === groupId);
+    if (!owned.length) continue;
+    const shapes = owned.filter((m) => NODE_TYPES.has(m.type));
+    representativeOf.set(groupId, (shapes[0] ?? owned[0]));
+  }
+
+  const plainNodeElements = snapshot.elements.filter(
     (el) =>
       NODE_TYPES.has(el.type) &&
       el.containerId === null && // bound labels belong to their containers
-      !isLegendCarrier(el),
+      !isLegendCarrier(el) &&
+      !compositeOf.has(el.id),
   );
-  const frameElements = snapshot.elements.filter((el) => el.type === "frame");
-  const edgeElements = snapshot.elements.filter((el) => el.type === "arrow");
+  const representatives = [...representativeOf.values()];
+  const nodeElements = [...plainNodeElements, ...representatives];
 
   // Deterministic id assignment: all graph elements sorted by source id, so
   // sanitization collisions resolve identically on every export (I3/I6).
@@ -192,6 +326,12 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     (a, b) => (a.id < b.id ? -1 : 1),
   )) {
     graphId.set(el.id, sanitizeId(el.id, taken));
+  }
+  // Every member resolves to its composite's id, so an arrow bound to any
+  // part of an icon lands on the one component.
+  for (const [memberId, groupId] of compositeOf) {
+    const rep = representativeOf.get(groupId);
+    if (rep) graphId.set(memberId, graphId.get(rep.id)!);
   }
 
   const frames: GraphFrame[] = frameElements
@@ -206,21 +346,37 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
   const nodes: GraphNode[] = nodeElements
-    .map((el) => ({
-      id: graphId.get(el.id)!,
-      sourceId: el.id,
-      label: labelFor(el, byId),
-      shape: el.type,
-      frameId: el.frameId ? (graphId.get(el.frameId) ?? null) : null,
-      groupIds: [...el.groupIds].sort(),
-      tags: [...el.docent.tags],
-      note: el.docent.note,
-      detailFrameId: el.docent.detailFrameId
-        ? (graphId.get(el.docent.detailFrameId) ?? null)
-        : null,
-      bounds: boundsOf(el),
-      style: styleOf(el),
-    }))
+    .map((el) => {
+      const groupId = compositeOf.get(el.id);
+      const composite = groupId ? compositeGroups.get(groupId) : undefined;
+      // A composite speaks for all its parts: any member's label, intent,
+      // and detail link belong to the one component, and its box is the
+      // whole glyph.
+      const parts = composite?.members ?? [el];
+      const label =
+        parts.map((p) => labelFor(p, byId)).find((l) => l !== null) ?? null;
+      const detailSource = parts.find((p) => p.docent.detailFrameId !== null);
+      const tags = [...new Set(parts.flatMap((p) => p.docent.tags))].sort();
+      const note = parts.map((p) => p.docent.note).find((n) => n !== null) ?? null;
+      return {
+        id: graphId.get(el.id)!,
+        sourceId: el.id,
+        label,
+        shape: el.type,
+        frameId: el.frameId ? (graphId.get(el.frameId) ?? null) : null,
+        groupIds: [...el.groupIds].sort(),
+        tags,
+        note,
+        detailFrameId: detailSource?.docent.detailFrameId
+          ? (graphId.get(detailSource.docent.detailFrameId) ?? null)
+          : null,
+        composite: composite
+          ? { members: parts.length, provenance: composite.provenance }
+          : null,
+        bounds: composite ? unionBounds(parts) : boundsOf(el),
+        style: styleOf(el),
+      };
+    })
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -282,15 +438,18 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     .filter((edge) => edge.from !== null || edge.to !== null)
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
-  const groupMembers = new Map<string, string[]>();
+  // Collapsed groups ARE nodes now — listing them as groups too would
+  // double-report the same thing.
+  const layoutGroupMembers = new Map<string, string[]>();
   for (const node of nodes) {
     for (const groupId of node.groupIds) {
-      const members = groupMembers.get(groupId) ?? [];
+      if (compositeGroups.has(groupId)) continue;
+      const members = layoutGroupMembers.get(groupId) ?? [];
       members.push(node.id);
-      groupMembers.set(groupId, members);
+      layoutGroupMembers.set(groupId, members);
     }
   }
-  const groups: GraphGroup[] = [...groupMembers.entries()]
+  const groups: GraphGroup[] = [...layoutGroupMembers.entries()]
     .map(([id, members]) => ({ id, members: members.sort() }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
