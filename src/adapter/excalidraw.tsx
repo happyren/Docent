@@ -15,8 +15,10 @@ import {
   elementsOverlappingBBox,
   getCommonBounds,
   hashElementsVersion,
+  exportToCanvas,
   loadFromBlob,
   newElementWith,
+  restoreElements,
   serializeAsJSON,
   viewportCoordsToSceneCoords,
 } from "@excalidraw/excalidraw";
@@ -182,6 +184,51 @@ export interface DocentCanvasHandle {
    * the legend travels inside the `.excalidraw` file (D9, B6).
    */
   setLegend(rules: LegendRule[]): void;
+}
+
+/**
+ * Rasterize a serialized `.excalidraw` scene to a PNG data URL (S12
+ * portfolio thumbnails). Pure of the live canvas: parses, restores, and
+ * exports off-screen. `includeIds` (graph/element ids — the typed surface)
+ * limits the render, letting callers scope tiered scenes to Layer 1
+ * without ever touching raw shapes; null renders everything.
+ */
+export async function renderSceneThumbnail(
+  sceneJSON: string,
+  includeIds: ReadonlySet<string> | null,
+  maxDim = 640,
+): Promise<string> {
+  const parsed = JSON.parse(sceneJSON) as {
+    elements?: unknown;
+    appState?: { viewBackgroundColor?: unknown };
+    files?: unknown;
+  };
+  const restored = restoreElements(
+    (Array.isArray(parsed.elements) ? parsed.elements : []) as never,
+    null,
+  ).filter((el) => !el.isDeleted && (!includeIds || includeIds.has(el.id)));
+  const background =
+    typeof parsed.appState?.viewBackgroundColor === "string"
+      ? parsed.appState.viewBackgroundColor
+      : "#ffffff";
+  if (restored.length === 0) {
+    const blank = document.createElement("canvas");
+    blank.width = 320;
+    blank.height = 200;
+    const ctx = blank.getContext("2d");
+    if (ctx) {
+      ctx.fillStyle = background;
+      ctx.fillRect(0, 0, blank.width, blank.height);
+    }
+    return blank.toDataURL("image/png");
+  }
+  const canvas = await exportToCanvas({
+    elements: restored,
+    appState: { viewBackgroundColor: background, exportBackground: true },
+    files: (parsed.files ?? null) as never,
+    maxWidthOrHeight: maxDim,
+  });
+  return canvas.toDataURL("image/png");
 }
 
 export interface SceneMenuActions {

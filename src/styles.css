@@ -402,16 +402,18 @@ body {
   pointer-events: none;
 }
 
-/* Portfolio modal (S12) — projects on the left, scenes on the right. */
+/* Portfolio modal (S12) — projects on the left, a large-snapshot scene
+   grid on the right. Big by design: the snapshots are the point. */
 .docent-portfolio {
-  width: min(860px, 94vw);
+  width: min(1280px, 96vw);
+  max-height: 92vh;
 }
 
 .docent-portfolio-body {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 240px 1fr;
   gap: 14px;
-  min-height: 260px;
+  min-height: 320px;
 }
 
 .docent-portfolio-projects,
@@ -505,5 +507,56 @@ body {
 
 .docent-portfolio-new input {
   flex: 1;
+  min-width: 0;
+}
+
+.docent-portfolio-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+  align-content: start;
+  max-height: 64vh;
+  padding-right: 4px;
+}
+
+.docent-scene-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+
+.docent-scene-card:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.docent-scene-thumb {
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.docent-scene-thumb.is-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--docent-muted);
+  font-size: 12px;
+}
+
+.docent-scene-caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
 }

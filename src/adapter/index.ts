@@ -1,4 +1,4 @@
-export { ExcalidrawCanvas } from "./excalidraw";
+export { ExcalidrawCanvas, renderSceneThumbnail } from "./excalidraw";
 export type {
   DocentCanvasHandle,
   EdgeGeometry,
