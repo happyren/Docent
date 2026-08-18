@@ -32,6 +32,7 @@ function makeReader(): SceneReader {
         bounds: { x: el.x, y: el.y, width: el.width, height: el.height },
         angle: el.angle,
         frameId: el.frameId,
+        groupIds: [],
         detailFrameId: null,
         tags: [],
         note: null,
@@ -80,6 +81,71 @@ function makeCamera() {
   return { flyTo: vi.fn().mockResolvedValue(true) } as unknown as CameraEngine;
 }
 
+// A grouped "library icon" scene: r_icon (a node) and l_icon (a line — NOT
+// a graph node type) share one group, the shape library import pattern.
+const ICON_ELEMENT_BASE = {
+  angle: 0,
+  strokeColor: "#000000",
+  backgroundColor: "transparent",
+  strokeStyle: "solid",
+  fillStyle: "solid",
+  strokeWidth: 1,
+  frameId: null,
+  isDeleted: false,
+};
+const iconSceneJSON = JSON.stringify({
+  type: "excalidraw",
+  version: 2,
+  elements: [
+    { ...ICON_ELEMENT_BASE, id: "r_icon", type: "rectangle", x: 0, y: 0, width: 60, height: 60, groupIds: ["g_icon"] },
+    { ...ICON_ELEMENT_BASE, id: "l_icon", type: "line", x: 10, y: 10, width: 40, height: 40, groupIds: ["g_icon"], points: [[0, 0], [40, 40]] },
+    { ...ICON_ELEMENT_BASE, id: "r_plain", type: "rectangle", x: 200, y: 0, width: 80, height: 40, groupIds: [] },
+  ],
+});
+const iconSnapshot = snapshotFromSceneJSON(iconSceneJSON);
+
+function makeIconReader(): SceneReader {
+  const byId = new Map(iconSnapshot.elements.map((el) => [el.id, el]));
+  const base = makeReader();
+  return {
+    ...base,
+    getSceneSnapshot: () => iconSnapshot,
+    getElementInfo: (id) => {
+      const el = byId.get(id);
+      if (!el) return null;
+      return {
+        id: el.id,
+        type: el.type,
+        label: null,
+        bounds: { x: el.x, y: el.y, width: el.width, height: el.height },
+        angle: el.angle,
+        frameId: el.frameId,
+        groupIds: el.groupIds,
+        detailFrameId: null,
+        tags: [],
+        note: null,
+        narrative: null,
+        order: null,
+        style: {
+          strokeColor: el.strokeColor,
+          backgroundColor: el.backgroundColor,
+          strokeStyle: el.strokeStyle,
+          fillStyle: el.fillStyle,
+          strokeWidth: el.strokeWidth,
+        },
+      };
+    },
+    getFrameInfo: () => null,
+    getEdgeGeometry: (id) => {
+      const el = byId.get(id);
+      if (!el || !el.points || (el.type !== "arrow" && el.type !== "line")) {
+        return null;
+      }
+      return { points: el.points, x: el.x, y: el.y, rounded: false, elbowed: false };
+    },
+  };
+}
+
 describe("command API (B4, I5)", () => {
   it("errors loudly on unknown ids — never silently no-ops", async () => {
     const api = new CommandAPI(makeReader(), makeCamera(), new OverlayStore());
@@ -98,6 +164,31 @@ describe("command API (B4, I5)", () => {
     const api = new CommandAPI(makeReader(), camera, new OverlayStore());
     await api.focus({ id: "f_ingress" });
     expect(camera.flyTo).toHaveBeenCalledOnce();
+  });
+
+  it("effects land on raw elements the graph doesn't model (library icons)", async () => {
+    const store = new OverlayStore();
+    const camera = makeCamera();
+    const api = new CommandAPI(makeIconReader(), camera, store);
+    // A line inside a grouped icon is no graph node — raw id still glows.
+    api.highlight({ ids: ["l_icon"], style: "glow" });
+    expect(store.get().highlight?.ids).toContain("l_icon");
+    // ...focuses...
+    await api.focus({ id: "l_icon" });
+    expect(camera.flyTo).toHaveBeenCalled();
+    // ...and pulses as a flow segment.
+    await api.flow({ path: ["l_icon"], speed: 1000 });
+    expect(store.get().flow?.path).toContain("l_icon");
+    // Unknown ids stay loud (I5).
+    expect(() => api.highlight({ ids: ["ghost"] })).toThrow(/Unknown/);
+  });
+
+  it("group ids expand to their member elements", () => {
+    const store = new OverlayStore();
+    const api = new CommandAPI(makeIconReader(), makeCamera(), store);
+    api.highlight({ ids: ["g_icon"], style: "spotlight" });
+    // The group's graph-node member resolves; the highlight is non-empty.
+    expect(store.get().highlight?.ids.length).toBeGreaterThan(0);
   });
 
   it("highlight is idempotent and clearable (S6)", () => {

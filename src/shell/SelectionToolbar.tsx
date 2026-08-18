@@ -38,6 +38,29 @@ export function SelectionToolbar({
     (i) => i.type === "arrow" || i.type === "line",
   );
 
+  // Selecting a grouped library icon selects every member element. When the
+  // whole selection is one group, treat it as a single unit: the Detail
+  // action targets the member already carrying the link, else the largest
+  // member (S11 — grouped composites work via any member).
+  const area = (i: ElementInfo) => i.bounds.width * i.bounds.height;
+  const sharesCommonGroup =
+    infos.length > 1 &&
+    infos.every((i) => i.groupIds.length > 0) &&
+    infos[0].groupIds.some((g) => infos.every((i) => i.groupIds.includes(g)));
+  const groupRep = sharesCommonGroup
+    ? (infos.find((i) => i.detailFrameId !== null) ??
+      infos.reduce((a, b) => (area(a) >= area(b) ? a : b)))
+    : null;
+  const detailTarget = singleSelected ?? groupRep;
+
+  const runEffect = (action: () => void) => {
+    try {
+      action();
+    } catch (err) {
+      window.alert(String(err instanceof Error ? err.message : err));
+    }
+  };
+
   useEffect(() => {
     const reposition = () => {
       const bar = barRef.current;
@@ -86,12 +109,12 @@ export function SelectionToolbar({
 
   return (
     <div ref={barRef} className="docent-selection-toolbar">
-      {singleSelected &&
-        (singleSelected.detailFrameId ? (
+      {detailTarget &&
+        (detailTarget.detailFrameId ? (
           <button
             className="docent-tool docent-tool-primary"
             title="Dive into this element's detail diagram"
-            onClick={() => drill.dive(singleSelected.id)}
+            onClick={() => drill.dive(detailTarget.id)}
           >
             ⤵ Detail
           </button>
@@ -99,7 +122,7 @@ export function SelectionToolbar({
           <button
             className="docent-tool docent-tool-primary"
             title="Create a detail diagram for this element and dive in"
-            onClick={() => drill.createAndDive(singleSelected.id)}
+            onClick={() => drill.createAndDive(detailTarget.id)}
           >
             ＋ Detail
           </button>
@@ -107,14 +130,20 @@ export function SelectionToolbar({
       <button
         className="docent-tool"
         title="Glow highlight"
-        onClick={() => commands.highlight({ ids: selectedIds, style: "glow" })}
+        onClick={() =>
+          runEffect(() => commands.highlight({ ids: selectedIds, style: "glow" }))
+        }
       >
         Glow
       </button>
       <button
         className="docent-tool"
         title="Spotlight (dim everything else)"
-        onClick={() => commands.highlight({ ids: selectedIds, style: "spotlight" })}
+        onClick={() =>
+          runEffect(() =>
+            commands.highlight({ ids: selectedIds, style: "spotlight" }),
+          )
+        }
       >
         Spotlight
       </button>

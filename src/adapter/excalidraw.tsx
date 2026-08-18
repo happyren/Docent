@@ -78,6 +78,9 @@ export interface ElementInfo {
   bounds: SceneBounds;
   angle: number;
   frameId: string | null;
+  /** Excalidraw group membership, innermost first — grouped library icons
+   * (e.g. cloud-provider shapes) select as many elements sharing these. */
+  groupIds: string[];
   /** Declared detail diagram (customData.docent.detail.frameId), if any. */
   detailFrameId: string | null;
   tags: string[];
@@ -357,6 +360,7 @@ function toElementInfo(
     bounds: boundsOf(element),
     angle: element.angle ?? 0,
     frameId: element.frameId ?? null,
+    groupIds: [...(element.groupIds ?? [])],
     detailFrameId: detailFrameIdOf(element, elements),
     tags: tagsOf(element),
     note: stringField(docent.note),
@@ -536,6 +540,17 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         nonFrames[0] ??
         ranked[0] ??
         null;
+      // Grouped composites (library icons) carry the detail link on one
+      // member — a click on any sibling should still find it (S11).
+      if (hit && detailFrameIdOf(hit, elements) === null && hit.groupIds?.length) {
+        const sibling = elements.find(
+          (el) =>
+            el.id !== hit.id &&
+            el.groupIds?.some((g) => hit.groupIds.includes(g)) &&
+            detailFrameIdOf(el, elements) !== null,
+        );
+        if (sibling) return toElementInfo(sibling, elements);
+      }
       return hit ? toElementInfo(hit, elements) : null;
     },
 
