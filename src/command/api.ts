@@ -87,6 +87,46 @@ export class CommandAPI {
     return buildSceneGraph(this.reader.getSceneSnapshot());
   }
 
+  /**
+   * Resolve highlight/effect targets: graph node/edge/frame ids, group ids
+   * (expanded to member elements), or raw element ids for anything the
+   * graph doesn't model as a node — grouped library icons are lines and
+   * freedraw strokes, and effects must still land on them. Unknown ids
+   * stay loud (I5).
+   */
+  private resolveEffectIds(graph: SceneGraph, ids: string[]): string[] {
+    const out: string[] = [];
+    for (const id of ids) {
+      const pools = [graph.nodes, graph.edges, graph.frames] as {
+        id: string;
+        sourceId: string;
+      }[][];
+      const match = pools
+        .flatMap((pool) => pool)
+        .find((item) => item.id === id || item.sourceId === id);
+      if (match) {
+        out.push(match.sourceId);
+        continue;
+      }
+      const group = graph.groups.find((g) => g.id === id);
+      if (group) {
+        for (const memberId of group.members) {
+          const node = graph.nodes.find((n) => n.id === memberId);
+          if (node) out.push(node.sourceId);
+        }
+        continue;
+      }
+      if (this.reader.getElementInfo(id)) {
+        out.push(id);
+        continue;
+      }
+      throw new Error(
+        `Unknown node/edge/frame/group id: ${id} — use ids from get_scene_graph`,
+      );
+    }
+    return out;
+  }
+
   /** Resolve a graph id (or raw element id) to its source element id. */
   private resolveSourceId(
     graph: SceneGraph,
@@ -107,13 +147,20 @@ export class CommandAPI {
   /** Tween the camera to an element's or frame's bounds. */
   async focus(params: { id: string; padding?: number }): Promise<void> {
     const graph = this.getSceneGraph();
-    const sourceId = this.resolveSourceId(graph, params.id, [
-      "frame",
-      "node",
-      "edge",
-    ]);
-    const info =
-      this.reader.getFrameInfo(sourceId) ?? this.reader.getElementInfo(sourceId);
+    let info: { bounds: SceneBounds } | null;
+    try {
+      const sourceId = this.resolveSourceId(graph, params.id, [
+        "frame",
+        "node",
+        "edge",
+      ]);
+      info =
+        this.reader.getFrameInfo(sourceId) ?? this.reader.getElementInfo(sourceId);
+    } catch (err) {
+      // Not a graph entity — a raw element (library icon part) still focuses.
+      info = this.reader.getElementInfo(params.id);
+      if (!info) throw err;
+    }
     if (!info) throw new Error(`Element vanished: ${params.id}`);
     await this.camera.flyTo(info.bounds, { padding: params.padding ?? 0.2 });
   }
@@ -125,9 +172,7 @@ export class CommandAPI {
       return;
     }
     const graph = this.getSceneGraph();
-    const sourceIds = params.ids.map((id) =>
-      this.resolveSourceId(graph, id, ["node", "edge", "frame"]),
-    );
+    const sourceIds = this.resolveEffectIds(graph, params.ids);
     this.overlay.setHighlight(sourceIds, params.style ?? "glow");
   }
 
@@ -150,7 +195,15 @@ export class CommandAPI {
     if (!(speed > 0)) throw new Error(`Invalid speed: ${params.speed}`);
     let totalLength = 0;
     const sourceIds = params.path.map((id) => {
-      const sourceId = this.resolveSourceId(graph, id, ["edge"]);
+      let sourceId: string;
+      try {
+        sourceId = this.resolveSourceId(graph, id, ["edge"]);
+      } catch (err) {
+        // Plain lines aren't graph edges but still carry drawn geometry —
+        // a selected line should pulse. Anything else stays loud (I5).
+        if (this.reader.getEdgeGeometry(id)) sourceId = id;
+        else throw err;
+      }
       const geometry = this.reader.getEdgeGeometry(sourceId);
       if (!geometry) throw new Error(`Not a linear element: ${id}`);
       for (let i = 1; i < geometry.points.length; i++) {
