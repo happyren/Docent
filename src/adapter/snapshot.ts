@@ -19,6 +19,13 @@ export interface LegendRule {
     | "shape";
   /** Exact attribute value, e.g. "dashed", "#a5d8ff", "ellipse", "4". */
   value: string;
+  /**
+   * Additional conditions for composite rules — the rule matches only when
+   * the primary attr/value AND every entry here match (e.g. rectangle +
+   * solid #1e1e1e stroke + width 2 → kind: service). Absent for simple
+   * rules, keeping their serialized form (and every existing file) intact.
+   */
+  also?: { attr: LegendRule["attr"]; value: string }[];
   /** Semantic key the match declares, e.g. "channel", "kind", "tag". */
   key: string;
   /** Semantic value, e.g. "async", "datastore", "hot-path". */
@@ -95,7 +102,21 @@ export function parseLegendRules(v: unknown): LegendRule[] | null {
     const key = asString(r.key);
     const meaning = asString(r.meaning);
     if (attr && LEGEND_ATTRS.has(attr) && value !== null && key && meaning !== null) {
-      rules.push({ attr: attr as LegendRule["attr"], value, key, meaning });
+      const rule: LegendRule = { attr: attr as LegendRule["attr"], value, key, meaning };
+      if (Array.isArray(r.also)) {
+        const also: NonNullable<LegendRule["also"]> = [];
+        for (const rawCond of r.also) {
+          if (typeof rawCond !== "object" || rawCond === null) continue;
+          const c = rawCond as Record<string, unknown>;
+          const cAttr = asString(c.attr);
+          const cValue = asString(c.value);
+          if (cAttr && LEGEND_ATTRS.has(cAttr) && cValue !== null) {
+            also.push({ attr: cAttr as LegendRule["attr"], value: cValue });
+          }
+        }
+        if (also.length) rule.also = also;
+      }
+      rules.push(rule);
     }
   }
   return rules;

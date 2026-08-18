@@ -83,6 +83,12 @@ export function LegendEditor({
   const [rules, setRules] = useState<LegendRule[]>(() => canvas.getLegend());
   // Focus lands on the meaning field of the rule a chip just created.
   const [focusIndex, setFocusIndex] = useState<number | null>(null);
+  // Chips toggle into a pending rule: one chip = a simple rule, several =
+  // a composite (all conditions must match, e.g. rectangle + solid black
+  // stroke + width 2 → kind: service).
+  const [picked, setPicked] = useState<StyleChip[]>([]);
+  const [pendingKey, setPendingKey] = useState("");
+  const [pendingMeaning, setPendingMeaning] = useState("");
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -96,27 +102,52 @@ export function LegendEditor({
     setRules((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   };
 
-  const addFromChip = (chip: StyleChip) => {
+  const toggleChip = (chip: StyleChip) => {
+    setPicked((prev) => {
+      const without = prev.filter((c) => c.attr !== chip.attr);
+      const wasPicked = without.length !== prev.length &&
+        prev.find((c) => c.attr === chip.attr)?.value === chip.value;
+      const next = wasPicked ? without : [...without, chip];
+      if (next.length && !pendingKey) {
+        const first = next[0];
+        const siblingKey = rules.find((r) => r.attr === first.attr && r.key)?.key;
+        setPendingKey(siblingKey ?? DEFAULT_KEYS[first.attr]);
+      }
+      return next;
+    });
+  };
+
+  const commitPending = () => {
+    if (!picked.length || !pendingKey.trim()) return;
+    const [primary, ...rest] = picked;
+    const rule: LegendRule = {
+      attr: primary.attr,
+      value: primary.value,
+      key: pendingKey.trim(),
+      meaning: pendingMeaning.trim(),
+    };
+    if (rest.length) {
+      rule.also = rest.map((c) => ({ attr: c.attr, value: c.value }));
+    }
+    // An identical simple rule already present: focus it instead.
     const existing = rules.findIndex(
-      (r) => r.attr === chip.attr && r.value === chip.value,
+      (r) =>
+        r.attr === rule.attr &&
+        r.value === rule.value &&
+        (r.also?.length ?? 0) === (rule.also?.length ?? 0) &&
+        (r.also ?? []).every(
+          (c, i) => rule.also?.[i].attr === c.attr && rule.also?.[i].value === c.value,
+        ),
     );
     if (existing !== -1) {
       setFocusIndex(existing);
-      return;
+    } else {
+      setRules((prev) => [...prev, rule]);
+      setFocusIndex(rules.length);
     }
-    // Reuse the key other rules already use for this attribute — one
-    // attribute maps to one semantic dimension in a coherent legend.
-    const siblingKey = rules.find((r) => r.attr === chip.attr && r.key)?.key;
-    setRules((prev) => [
-      ...prev,
-      {
-        attr: chip.attr,
-        value: chip.value,
-        key: siblingKey ?? DEFAULT_KEYS[chip.attr],
-        meaning: "",
-      },
-    ]);
-    setFocusIndex(rules.length);
+    setPicked([]);
+    setPendingKey("");
+    setPendingMeaning("");
   };
 
   const save = () => {
@@ -136,30 +167,70 @@ export function LegendEditor({
       </header>
       <p className="docent-modal-hint">
         Select an element on the canvas, then click the style that carries
-        its meaning — no typing of colors or values needed.
+        its meaning — pick several chips together for a composite rule
+        (all must match). No typing of colors or values needed.
       </p>
       {selection ? (
-        <div className="docent-legend-chips">
-          {chipsFor(selection).map((chip) => (
-            <button
-              key={`${chip.attr}:${chip.value}`}
-              className="docent-legend-chip"
-              title={`Map ${ATTRS.find((a) => a.value === chip.attr)?.label} = ${chip.value}`}
-              onClick={() => addFromChip(chip)}
-            >
-              {chip.swatch && (
-                <span
-                  className="docent-legend-swatch"
-                  style={{ background: chip.swatch }}
-                />
-              )}
-              <span className="docent-legend-chip-attr">
-                {ATTRS.find((a) => a.value === chip.attr)?.label}
+        <>
+          <div className="docent-legend-chips">
+            {chipsFor(selection).map((chip) => {
+              const isPicked = picked.some(
+                (c) => c.attr === chip.attr && c.value === chip.value,
+              );
+              return (
+                <button
+                  key={`${chip.attr}:${chip.value}`}
+                  className={
+                    "docent-legend-chip" + (isPicked ? " is-picked" : "")
+                  }
+                  title={`Toggle ${ATTRS.find((a) => a.value === chip.attr)?.label} = ${chip.value}. Pick several for a composite rule.`}
+                  onClick={() => toggleChip(chip)}
+                >
+                  {chip.swatch && (
+                    <span
+                      className="docent-legend-swatch"
+                      style={{ background: chip.swatch }}
+                    />
+                  )}
+                  <span className="docent-legend-chip-attr">
+                    {ATTRS.find((a) => a.value === chip.attr)?.label}
+                  </span>
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+          {picked.length > 0 && (
+            <div className="docent-legend-pending">
+              <span className="docent-legend-pending-summary">
+                {picked.map((c) => c.label).join(" + ")} →
               </span>
-              {chip.label}
-            </button>
-          ))}
-        </div>
+              <div className="docent-legend-row">
+                <input
+                  className="docent-legend-key"
+                  value={pendingKey}
+                  placeholder="channel / kind / tag"
+                  onChange={(e) => setPendingKey(e.target.value)}
+                />
+                <input
+                  value={pendingMeaning}
+                  placeholder="service / async / hot-path"
+                  autoFocus
+                  onChange={(e) => setPendingMeaning(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && commitPending()}
+                />
+                <button
+                  className="docent-primary"
+                  disabled={!pendingKey.trim() || !pendingMeaning.trim()}
+                  onClick={commitPending}
+                  title="Add this rule"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       ) : (
         <p className="docent-modal-hint">
           Nothing selected — click a shape on the canvas to see its styles
@@ -203,6 +274,55 @@ export function LegendEditor({
                 ✕
               </button>
             </div>
+            {(rule.also ?? []).map((cond, ci) => (
+              <div className="docent-legend-row" key={ci}>
+                <span className="docent-legend-plus">+</span>
+                <select
+                  value={cond.attr}
+                  onChange={(e) =>
+                    update(i, {
+                      also: rule.also?.map((c, cj) =>
+                        cj === ci
+                          ? { ...c, attr: e.target.value as LegendRule["attr"] }
+                          : c,
+                      ),
+                    })
+                  }
+                >
+                  {ATTRS.map((a) => (
+                    <option key={a.value} value={a.value}>
+                      {a.label}
+                    </option>
+                  ))}
+                </select>
+                {isColor(cond.attr) && cond.value && (
+                  <span
+                    className="docent-legend-swatch"
+                    style={{ background: cond.value }}
+                  />
+                )}
+                <input
+                  value={cond.value}
+                  placeholder="solid / #1e1e1e / 2"
+                  onChange={(e) =>
+                    update(i, {
+                      also: rule.also?.map((c, cj) =>
+                        cj === ci ? { ...c, value: e.target.value } : c,
+                      ),
+                    })
+                  }
+                />
+                <button
+                  title="Remove condition"
+                  onClick={() => {
+                    const remaining = rule.also?.filter((_, cj) => cj !== ci);
+                    update(i, { also: remaining?.length ? remaining : undefined });
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
             <div className="docent-legend-row">
               <span className="docent-legend-arrow">→</span>
               <input

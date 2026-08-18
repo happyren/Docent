@@ -12,7 +12,8 @@ import { describe, expect, it } from "vitest";
 import { encode } from "gpt-tokenizer";
 import { snapshotFromSceneJSON } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
-import { exportScene } from "../src/export";
+import { exportScene, applyLegend, legendToRecord } from "../src/export";
+import type { LegendRule } from "../src/adapter/snapshot";
 
 const FIXTURES = fileURLToPath(new URL("../fixtures", import.meta.url));
 const demoJSON = readFileSync(join(FIXTURES, "demo.excalidraw"), "utf8");
@@ -119,5 +120,58 @@ describe("provenance (I4) on the demo fixture", () => {
   it("keeps the legend carrier out of the node list", () => {
     expect(graph.nodes.some((n) => n.sourceId === "legend_carrier")).toBe(false);
     expect(graph.legend).toHaveLength(3);
+  });
+});
+
+
+describe("composite legend rules (D9 extension)", () => {
+  const style = {
+    strokeColor: "#1e1e1e",
+    backgroundColor: "transparent",
+    strokeStyle: "solid",
+    fillStyle: "solid",
+    strokeWidth: 2,
+  };
+  const serviceRule: LegendRule = {
+    attr: "shape",
+    value: "rectangle",
+    also: [
+      { attr: "strokeColor", value: "#1e1e1e" },
+      { attr: "strokeWidth", value: "2" },
+    ],
+    key: "kind",
+    meaning: "service",
+  };
+
+  it("matches only when every condition holds", () => {
+    expect(applyLegend(style, "rectangle", [serviceRule]).kind).toBe("service");
+    // wrong shape
+    expect(applyLegend(style, "ellipse", [serviceRule]).kind).toBeNull();
+    // wrong stroke width
+    expect(
+      applyLegend({ ...style, strokeWidth: 4 }, "rectangle", [serviceRule]).kind,
+    ).toBeNull();
+  });
+
+  it("more specific rules override generic ones for the same key", () => {
+    const generic: LegendRule = {
+      attr: "shape",
+      value: "rectangle",
+      key: "kind",
+      meaning: "node",
+    };
+    // Order in the legend must not matter — specificity decides.
+    expect(applyLegend(style, "rectangle", [serviceRule, generic]).kind).toBe(
+      "service",
+    );
+    expect(applyLegend(style, "rectangle", [generic, serviceRule]).kind).toBe(
+      "service",
+    );
+  });
+
+  it("serializes composite conditions joined with + in the sidecar record", () => {
+    expect(legendToRecord([serviceRule])).toEqual({
+      "shape.rectangle+color.#1e1e1e+strokeWidth.2": "kind: service",
+    });
   });
 });
