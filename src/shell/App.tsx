@@ -47,17 +47,24 @@ export function App() {
     [canvas, camera, overlayStore],
   );
 
-  // Agent bridge (S8): attach to a local MCP server when one is running.
+  // Agent bridge (S8): strictly manual — automatic attempts would log
+  // connection errors on every launch without an MCP server. Connect via
+  // Menu → "Connect agent bridge", or opt in per-URL with ?agent.
   const bridgeRef = useRef<AgentBridge | null>(null);
-  useEffect(() => {
+  const connectAgent = useCallback(() => {
     if (!commands) return;
-    const bridge = connectAgentBridge(commands);
-    bridgeRef.current = bridge;
-    return () => {
-      bridgeRef.current = null;
-      bridge.dispose();
-    };
+    if (bridgeRef.current) bridgeRef.current.reconnect();
+    else bridgeRef.current = connectAgentBridge(commands);
   }, [commands]);
+  useEffect(() => {
+    if (commands && new URLSearchParams(window.location.search).has("agent")) {
+      connectAgent();
+    }
+    return () => {
+      bridgeRef.current?.dispose();
+      bridgeRef.current = null;
+    };
+  }, [commands, connectAgent]);
 
   // Esc interrupts an agent tour outside presentation mode.
   const presentationActiveForEscRef = useRef(false);
@@ -231,22 +238,20 @@ export function App() {
     setCanvas(handle);
   }, []);
 
-  // Startup scene load (?scene=<url>) runs in an effect so it acts only after
-  // the canvas is mounted — the excalidrawAPI callback fires mid-mount, and
-  // viewport calls made then are silently dropped.
+  // Console hook. The Q4 perf harness ships in every build — it measures
+  // the deployed app, per release. Debug internals stay dev-only.
   useEffect(() => {
     if (!canvas) return;
-    const sceneUrl = new URLSearchParams(window.location.search).get("scene");
-
+    const hook: Record<string, unknown> = {
+      measurePerformance: (windowMs?: number) =>
+        camera && commands
+          ? import("./perf").then((m) =>
+              m.measurePerformance(canvas, camera, commands, windowMs),
+            )
+          : Promise.reject(new Error("Not ready")),
+    };
     if (import.meta.env.DEV) {
-      // Dev-only hook for scripted verification; not part of the app surface.
-      (window as unknown as Record<string, unknown>).__docent = {
-        measurePerformance: (windowMs?: number) =>
-          camera && commands
-            ? import("./perf").then((m) =>
-                m.measurePerformance(canvas, camera, commands, windowMs),
-              )
-            : Promise.reject(new Error("Not ready")),
+      Object.assign(hook, {
         serializeScene: () => canvas.serializeScene(),
         loadSceneJSON: (json: string) =>
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
@@ -256,9 +261,17 @@ export function App() {
         canvas,
         camera,
         commands,
-      };
+      });
     }
+    (window as unknown as Record<string, unknown>).__docent = hook;
+  }, [canvas, camera, commands, prepareSceneForSave]);
 
+  // Startup scene load (?scene=<url>) runs in an effect so it acts only after
+  // the canvas is mounted — the excalidrawAPI callback fires mid-mount, and
+  // viewport calls made then are silently dropped.
+  useEffect(() => {
+    if (!canvas) return;
+    const sceneUrl = new URLSearchParams(window.location.search).get("scene");
     if (!sceneUrl) return;
     const controller = new AbortController();
     void (async () => {
@@ -526,7 +539,7 @@ export function App() {
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
-            onConnectAgent: () => bridgeRef.current?.reconnect(),
+            onConnectAgent: connectAgent,
           }}
         />
         {canvas && (
