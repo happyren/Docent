@@ -12,10 +12,46 @@ import {
   deleteScene,
   listProjects,
   listScenes,
+  saveScene,
   storeAvailable,
   type ProjectInfo,
   type SceneInfo,
 } from "../portfolio/client";
+import { portfolioThumbnail } from "./sceneThumbnails";
+
+/** A brand-new scene is just an empty `.excalidraw` file (D17). */
+const EMPTY_SCENE = JSON.stringify({
+  type: "excalidraw",
+  version: 2,
+  source: "docent",
+  elements: [],
+  appState: {},
+  files: {},
+});
+
+/** Large Layer-1 snapshot of a scene, rendered lazily and cached. */
+function SceneThumb({ project, scene }: { project: string; scene: SceneInfo }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    setSrc(null);
+    portfolioThumbnail(project, scene.name, scene.updatedAt)
+      .then((url) => live && setSrc(url))
+      .catch(() => live && setSrc(""));
+    return () => {
+      live = false;
+    };
+  }, [project, scene.name, scene.updatedAt]);
+  if (src === null) {
+    return <div className="docent-scene-thumb is-loading">rendering…</div>;
+  }
+  if (src === "") {
+    return <div className="docent-scene-thumb is-loading">no preview</div>;
+  }
+  return (
+    <img className="docent-scene-thumb" src={src} alt={`${scene.name} preview`} />
+  );
+}
 
 export interface PortfolioModalProps {
   /** Load a portfolio scene into the canvas. Resolves when loaded. */
@@ -121,6 +157,23 @@ export function PortfolioModal({
     });
   };
 
+  const newScene = () => {
+    if (!selected) return;
+    void run(async () => {
+      const name = saveName.trim().replace(/\.excalidraw$/i, "");
+      if (!name) return;
+      if (scenes.some((s) => s.name === name)) {
+        window.alert(
+          `Scene "${selected}/${name}" already exists — pick another name, or use "Save current scene here" to overwrite it.`,
+        );
+        return;
+      }
+      await saveScene(selected, name, EMPTY_SCENE);
+      await onOpenScene(selected, name);
+      onClose();
+    });
+  };
+
   const saveHere = () => {
     if (!selected) return;
     void run(async () => {
@@ -212,34 +265,38 @@ export function PortfolioModal({
               )}
               {selected && (
                 <>
-                  <div className="docent-portfolio-list">
+                  <div className="docent-portfolio-grid">
                     {scenes.length === 0 && (
                       <p className="docent-modal-hint">
-                        No scenes in {selected} yet — save the current one
-                        below.
+                        No scenes in {selected} yet — create one below, or
+                        save the current canvas into it.
                       </p>
                     )}
                     {scenes.map((s) => (
-                      <div key={s.name} className="docent-portfolio-item">
-                        <button
-                          className="docent-portfolio-open"
-                          disabled={busy}
-                          onClick={() => openScene(s.name)}
-                          title={`Open ${selected}/${s.name}`}
-                        >
-                          {s.name}
-                        </button>
-                        <span className="docent-portfolio-meta">
-                          {fmtTime(s.updatedAt)}
-                        </span>
-                        <button
-                          className="docent-portfolio-delete"
-                          title="Delete scene"
-                          disabled={busy}
-                          onClick={() => removeScene(s.name)}
-                        >
-                          ✕
-                        </button>
+                      <div
+                        key={s.name}
+                        className="docent-scene-card"
+                        onClick={() => !busy && openScene(s.name)}
+                        title={`Open ${selected}/${s.name}`}
+                      >
+                        <SceneThumb project={selected} scene={s} />
+                        <div className="docent-scene-caption">
+                          <span className="docent-portfolio-name">{s.name}</span>
+                          <span className="docent-portfolio-meta">
+                            {fmtTime(s.updatedAt)}
+                          </span>
+                          <button
+                            className="docent-portfolio-delete"
+                            title="Delete scene"
+                            disabled={busy}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeScene(s.name);
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -249,12 +306,19 @@ export function PortfolioModal({
                       value={saveName}
                       disabled={busy}
                       onChange={(e) => setSaveName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && saveHere()}
+                      onKeyDown={(e) => e.key === "Enter" && newScene()}
                     />
                     <button
                       disabled={busy || !saveName.trim()}
+                      onClick={newScene}
+                      title={`Create a blank scene in ${selected} and open it`}
+                    >
+                      ＋ New scene
+                    </button>
+                    <button
+                      disabled={busy || !saveName.trim()}
                       onClick={saveHere}
-                      title={`Save the current scene into ${selected}`}
+                      title={`Save the current canvas into ${selected}`}
                     >
                       Save current scene here
                     </button>
