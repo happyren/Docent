@@ -15,7 +15,9 @@ import {
   writeSceneFile,
 } from "./scene-file";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
+import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
 import { IntentPanel } from "./IntentPanel";
+import { PortfolioModal } from "./PortfolioModal";
 import { LegendEditor } from "./LegendEditor";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
@@ -33,6 +35,10 @@ export function App() {
   const [dirty, setDirty] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [portfolioOpen, setPortfolioOpen] = useState(false);
+  // When the current scene came from the portfolio, Save writes back to it
+  // (S12). Any local open/save-as clears this and returns Save to file mode.
+  const portfolioSourceRef = useRef<{ project: string; scene: string } | null>(null);
   // Bumped on document changes so selection-derived UI re-reads element intent.
   const [docVersion, setDocVersion] = useState(0);
 
@@ -195,6 +201,7 @@ export function App() {
       if (!picked) return;
       await handle.loadSceneBlob(picked.blob);
       fsHandleRef.current = picked.handle;
+      portfolioSourceRef.current = null;
       markClean(picked.name);
       fitLayerOne();
     } catch (err) {
@@ -211,6 +218,7 @@ export function App() {
       const target = await pickSaveTarget(suggested);
       if (target === null) return;
       const json = prepareSceneForSave();
+      portfolioSourceRef.current = null;
       if (target === "download") {
         downloadSceneFile(suggested, json);
         markClean(suggested);
@@ -228,6 +236,19 @@ export function App() {
   const saveScene = useCallback(async () => {
     const handle = canvasRef.current;
     if (!handle) return;
+    const source = portfolioSourceRef.current;
+    if (source) {
+      try {
+        await savePortfolioScene(source.project, source.scene, prepareSceneForSave());
+        markClean(null);
+      } catch (err) {
+        console.error(err);
+        window.alert(
+          `Could not save to portfolio: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+      return;
+    }
     const fsHandle = fsHandleRef.current;
     if (!fsHandle) {
       await saveSceneAs();
@@ -297,12 +318,50 @@ export function App() {
     (window as unknown as Record<string, unknown>).__docent = hook;
   }, [canvas, camera, commands, prepareSceneForSave]);
 
+  // Portfolio flows (S12). Opening tracks the source so Save writes back.
+  const openPortfolioScene = useCallback(
+    async (project: string, scene: string) => {
+      const handle = canvasRef.current;
+      if (!handle) throw new Error("Canvas not ready");
+      const text = await loadPortfolioScene(project, scene);
+      await handle.loadSceneBlob(new Blob([text], { type: "application/json" }));
+      fsHandleRef.current = null;
+      portfolioSourceRef.current = { project, scene };
+      markClean(`${project}/${scene}`);
+      fitLayerOne();
+    },
+    [markClean, fitLayerOne],
+  );
+  const savePortfolioSceneAs = useCallback(
+    async (project: string, scene: string) => {
+      await savePortfolioScene(project, scene, prepareSceneForSave());
+      fsHandleRef.current = null;
+      portfolioSourceRef.current = { project, scene };
+      markClean(`${project}/${scene}`);
+    },
+    [markClean, prepareSceneForSave],
+  );
+
   // Startup scene load (?scene=<url>) runs in an effect so it acts only after
   // the canvas is mounted — the excalidrawAPI callback fires mid-mount, and
   // viewport calls made then are silently dropped.
   useEffect(() => {
     if (!canvas) return;
-    const sceneUrl = new URLSearchParams(window.location.search).get("scene");
+    const params = new URLSearchParams(window.location.search);
+    const projectParam = params.get("project");
+    const sceneParam = params.get("scene");
+    // ?project=<p>&scene=<s> addresses a portfolio scene (S12);
+    // ?scene=<url> alone keeps meaning "fetch this URL".
+    if (projectParam && sceneParam) {
+      void openPortfolioScene(projectParam, sceneParam).catch((err: unknown) => {
+        console.error(`Failed to load ?project=${projectParam}&scene=${sceneParam}`, err);
+        window.alert(
+          `Could not load "${projectParam}/${sceneParam}": ${err instanceof Error ? err.message : err}`,
+        );
+      });
+      return;
+    }
+    const sceneUrl = sceneParam;
     if (!sceneUrl) return;
     const controller = new AbortController();
     void (async () => {
@@ -337,7 +396,7 @@ export function App() {
       }
     })();
     return () => controller.abort();
-  }, [canvas, camera, commands, markClean, fitLayerOne, prepareSceneForSave]);
+  }, [canvas, camera, commands, markClean, fitLayerOne, prepareSceneForSave, openPortfolioScene]);
 
   // File shortcuts (always active).
   useEffect(() => {
@@ -489,6 +548,7 @@ export function App() {
             onSaveAs: () => void saveSceneAs(),
             onPresent: () => presentation.enter(),
             onOpenLegend: () => setLegendOpen(true),
+            onOpenPortfolio: () => setPortfolioOpen(true),
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
@@ -563,6 +623,14 @@ export function App() {
           </div>
         )}
       </main>
+      {portfolioOpen && canvas && (
+        <PortfolioModal
+          onOpenScene={openPortfolioScene}
+          onSaveScene={savePortfolioSceneAs}
+          suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^.*\//, "")}
+          onClose={() => setPortfolioOpen(false)}
+        />
+      )}
       {legendOpen && canvas && (
         <LegendEditor
           canvas={canvas}
