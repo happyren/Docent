@@ -43,16 +43,22 @@ export function App() {
   // compositor layer, so the scale is GPU-only work, and UI chrome (menus,
   // zoom controls, breadcrumbs) must not move during a glide.
   const zoomStageRef = useRef<HTMLDivElement | null>(null);
+  const lastFakeZoomRef = useRef(1);
   const camera = useMemo(
     () =>
       canvas
         ? new CameraEngine(canvas, {
             apply: (scale) => {
+              // The engine calls this every animation frame; skip identical
+              // values so pans (residual pinned at 1) write no style at all.
+              if (scale === lastFakeZoomRef.current) return;
+              lastFakeZoomRef.current = scale;
               canvas.setCanvasScale(scale);
               const el = zoomStageRef.current;
               if (el) el.style.transform = scale === 1 ? "" : `scale(${scale})`;
             },
             clear: () => {
+              lastFakeZoomRef.current = 1;
               canvas.setCanvasScale(1);
               const el = zoomStageRef.current;
               if (el) el.style.transform = "";

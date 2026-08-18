@@ -397,9 +397,13 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         "canvas.excalidraw__canvas",
       );
       canvases.forEach((c) => {
+        // Persistent will-change keeps each canvas its own compositor layer
+        // even while the transform is empty — without it, per-frame scale
+        // changes trigger paint instead of pure GPU compositing, and the
+        // clear-on-settle churns layers.
+        c.style.willChange = "transform";
         if (scale === 1) {
           c.style.transform = "";
-          c.style.transformOrigin = "";
         } else {
           c.style.transformOrigin = "50% 50%";
           c.style.transform = `scale(${scale})`;
