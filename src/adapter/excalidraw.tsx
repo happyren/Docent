@@ -183,6 +183,7 @@ export interface SceneMenuActions {
   onExportMermaid: () => void;
   onExportSidecar: () => void;
   onArrangeTiers: () => void;
+  onConnectAgent: () => void;
 }
 
 export interface ExcalidrawCanvasProps {
@@ -761,6 +762,9 @@ export function ExcalidrawCanvas({
         </MainMenu.Item>
         <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
           Arrange detail tiers
+        </MainMenu.Item>
+        <MainMenu.Item onSelect={menuActions.onConnectAgent}>
+          Connect agent bridge
         </MainMenu.Item>
         <MainMenu.Separator />
         <MainMenu.DefaultItems.SaveAsImage />
