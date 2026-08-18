@@ -17,6 +17,7 @@ import {
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { IntentPanel } from "./IntentPanel";
 import { LegendEditor } from "./LegendEditor";
+import { SelectionToolbar } from "./SelectionToolbar";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
 
@@ -424,43 +425,6 @@ export function App() {
           presentation.waypoints.length
         }`;
 
-  const contextActions = [
-    ...(!presentation.active && selectedIds.length > 0 && commands
-      ? [
-          {
-            label: "Glow",
-            onSelect: () => commands.highlight({ ids: selectedIds, style: "glow" }),
-          },
-          {
-            label: "Spotlight",
-            onSelect: () =>
-              commands.highlight({ ids: selectedIds, style: "spotlight" }),
-          },
-          {
-            label: "Flow",
-            onSelect: () =>
-              void commands
-                .flow({ path: selectedIds })
-                .catch((err) => window.alert(String(err))),
-          },
-          { label: "Clear FX", onSelect: () => commands.clearEffects() },
-        ]
-      : []),
-    ...(singleSelected
-      ? [
-          singleSelected.detailFrameId
-            ? {
-                label: "Dive into detail",
-                onSelect: () => drill.dive(singleSelected.id),
-              }
-            : {
-                label: "Create detail diagram",
-                onSelect: () => drill.createAndDive(singleSelected.id),
-              },
-        ]
-      : []),
-  ];
-
   return (
     <div className="docent-app">
       <main
@@ -484,7 +448,6 @@ export function App() {
             onArrangeTiers: arrangeTiers,
             onConnectAgent: connectAgent,
           }}
-          contextActions={contextActions}
         />
         {!presentation.active && (
           <div className="docent-file-chip" title={fileName ?? "untitled"}>
@@ -520,6 +483,16 @@ export function App() {
         )}
         {canvas && (
           <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
+        )}
+        {!presentation.active && selectedIds.length > 0 && canvas && commands && (
+          <SelectionToolbar
+            canvas={canvas}
+            selectedIds={selectedIds}
+            singleSelected={singleSelected}
+            commands={commands}
+            drill={drill}
+            revision={docVersion}
+          />
         )}
         {singleSelected && canvas && (
           <IntentPanel
