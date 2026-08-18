@@ -36,7 +36,7 @@ The demo that explains everything:
 - Continuous camera: pan/zoom tweens with easing between waypoints — dive into a frame, pull back to the whole canvas, glide to the next.
 - Keyboard-driven presenting (next / prev / overview), shareable as a self-hosted URL.
 - The hand-drawn roughjs aesthetic does the charm; Docent does the motion.
-- **Controls:** ▶ Present in the top bar · `→`/`Space` next · `←` prev · `Home` overview · click a linked component to dive into its detail diagram · `⌫` climbs back a tier · `Esc` exits. Load any scene straight into the app with `?scene=<url>` (try `?scene=samples/demo.excalidraw`).
+- **Controls:** ▶ Present lives in the hamburger menu (as do all Docent actions — the canvas is full-bleed) · `→`/`Space` next · `←` prev · `Home` overview · click a linked component to dive into its detail diagram · `⌫` climbs back a tier · `Esc` exits. Selection-contextual actions (highlight, flow, drill) appear at the top of the same menu. Load any scene straight into the app with `?scene=<url>` (try `?scene=samples/demo.excalidraw`).
 
 ### 🪆 Tiered drill-down
 One canvas, many zoom-levels of meaning — overview → service → component → logic:

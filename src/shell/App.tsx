@@ -424,18 +424,78 @@ export function App() {
           presentation.waypoints.length
         }`;
 
+  const contextActions = [
+    ...(!presentation.active && selectedIds.length > 0 && commands
+      ? [
+          {
+            label: "Glow",
+            onSelect: () => commands.highlight({ ids: selectedIds, style: "glow" }),
+          },
+          {
+            label: "Spotlight",
+            onSelect: () =>
+              commands.highlight({ ids: selectedIds, style: "spotlight" }),
+          },
+          {
+            label: "Flow",
+            onSelect: () =>
+              void commands
+                .flow({ path: selectedIds })
+                .catch((err) => window.alert(String(err))),
+          },
+          { label: "Clear FX", onSelect: () => commands.clearEffects() },
+        ]
+      : []),
+    ...(singleSelected
+      ? [
+          singleSelected.detailFrameId
+            ? {
+                label: "Dive into detail",
+                onSelect: () => drill.dive(singleSelected.id),
+              }
+            : {
+                label: "Create detail diagram",
+                onSelect: () => drill.createAndDive(singleSelected.id),
+              },
+        ]
+      : []),
+  ];
+
   return (
     <div className="docent-app">
-      <header className="docent-topbar">
-        <span className="docent-brand">Docent</span>
-        <span className="docent-file">
-          {fileName ?? "untitled"}
-          {dirty && (
-            <span className="docent-dirty" title="Unsaved changes">
-              ●
-            </span>
-          )}
-        </span>
+      <main
+        className="docent-canvas"
+        ref={(el) => {
+          canvasHostRef.current = el;
+        }}
+      >
+        <ExcalidrawCanvas
+          onReady={handleReady}
+          onDocumentChange={handleDocumentChange}
+          onSelectionChange={setSelectedIds}
+          menuActions={{
+            onOpen: () => void openScene(),
+            onSave: () => void saveScene(),
+            onSaveAs: () => void saveSceneAs(),
+            onPresent: () => presentation.enter(),
+            onOpenLegend: () => setLegendOpen(true),
+            onExportMermaid: exportMermaidFile,
+            onExportSidecar: exportSidecarFile,
+            onArrangeTiers: arrangeTiers,
+            onConnectAgent: connectAgent,
+          }}
+          contextActions={contextActions}
+        />
+        {!presentation.active && (
+          <div className="docent-file-chip" title={fileName ?? "untitled"}>
+            {fileName ?? "untitled"}
+            {dirty && (
+              <span className="docent-dirty" title="Unsaved changes">
+                ●
+              </span>
+            )}
+          </div>
+        )}
         {(trail.length > 0 || drill.stack.length > 0) && (
           <nav className="docent-breadcrumbs">
             <button className="docent-chip" onClick={() => drill.up()}>
@@ -458,90 +518,6 @@ export function App() {
             ))}
           </nav>
         )}
-        <div className="docent-actions">
-          {!presentation.active && selectedIds.length > 0 && commands && (
-            <>
-              <button
-                onClick={() => commands.highlight({ ids: selectedIds, style: "glow" })}
-              >
-                Glow
-              </button>
-              <button
-                onClick={() =>
-                  commands.highlight({ ids: selectedIds, style: "spotlight" })
-                }
-              >
-                Spotlight
-              </button>
-              <button
-                onClick={() =>
-                  void commands
-                    .flow({ path: selectedIds })
-                    .catch((err) => window.alert(String(err)))
-                }
-              >
-                Flow
-              </button>
-              <button onClick={() => commands.clearEffects()}>Clear FX</button>
-            </>
-          )}
-          {singleSelected &&
-            (singleSelected.detailFrameId ? (
-              <button onClick={() => drill.dive(singleSelected.id)}>
-                Dive into detail
-              </button>
-            ) : (
-              <button onClick={() => drill.createAndDive(singleSelected.id)}>
-                Create detail diagram
-              </button>
-            ))}
-          {!presentation.active && (
-            <>
-              <button onClick={() => setLegendOpen(true)}>Legend</button>
-              <button onClick={() => void openScene()}>Open</button>
-              <button onClick={() => void saveScene()}>Save</button>
-              <button onClick={() => void saveSceneAs()}>Save as…</button>
-              <button
-                className="docent-present"
-                onClick={() => presentation.enter()}
-                disabled={!canvas}
-              >
-                ▶ Present
-              </button>
-            </>
-          )}
-          {presentation.active && (
-            <button
-              onClick={() => {
-                drill.reset();
-                presentation.exit();
-              }}
-            >
-              Exit
-            </button>
-          )}
-        </div>
-      </header>
-      <main
-        className="docent-canvas"
-        ref={(el) => {
-          canvasHostRef.current = el;
-        }}
-      >
-        <ExcalidrawCanvas
-          onReady={handleReady}
-          onDocumentChange={handleDocumentChange}
-          onSelectionChange={setSelectedIds}
-          menuActions={{
-            onOpen: () => void openScene(),
-            onSave: () => void saveScene(),
-            onSaveAs: () => void saveSceneAs(),
-            onExportMermaid: exportMermaidFile,
-            onExportSidecar: exportSidecarFile,
-            onArrangeTiers: arrangeTiers,
-            onConnectAgent: connectAgent,
-          }}
-        />
         {canvas && (
           <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
         )}
