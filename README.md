@@ -13,6 +13,24 @@ Docent is a **wrapper, never a fork**. Excalidraw stays upstream and pinned; eve
 
 ---
 
+## Built on Excalidraw ❤️
+
+Docent is **inspired by and built upon [Excalidraw](https://github.com/excalidraw/excalidraw)**,
+the MIT-licensed virtual whiteboard. The canvas you draw on, the hand-sketched
+rendering, and the `.excalidraw` file format are Excalidraw's work — Docent embeds
+it as a pinned, unmodified dependency and adds a presentation, semantics, and
+agent layer *beside* it. Docent's own constitution makes forking or patching
+Excalidraw a permanent non-goal (invariant I1).
+
+Full license texts for Excalidraw and every other shipped third-party component
+travel with the source and with every distributed artifact in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Docent is an independent
+project, **not affiliated with or endorsed by Excalidraw**. If Docent is useful
+to you, consider [supporting Excalidraw](https://plus.excalidraw.com) — the
+foundation everything here stands on.
+
+---
+
 ## Why
 
 Architecture diagrams fail twice. They bore humans (static walls of boxes) and they blind AI
@@ -299,7 +317,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 
 ## License
 
-MIT. Docent embeds [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT © Excalidraw contributors) as an npm dependency — their notice travels with the package.
+MIT. Docent embeds [Excalidraw](https://github.com/excalidraw/excalidraw) (MIT © 2020 Excalidraw) as an npm dependency — see [Built on Excalidraw](#built-on-excalidraw-️) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full credits and license texts that accompany every distribution.
 
 ### Bundled third-party assets
 
