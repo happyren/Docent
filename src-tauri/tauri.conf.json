@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Docent",
+  "version": "../package.json",
+  "identifier": "io.github.happyren.docent",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "DeveloperTool",
+    "shortDescription": "Presentation and semantics layer for Excalidraw diagrams",
+    "longDescription": "Docent wraps self-hosted Excalidraw with continuous-camera presentations, tiered drill-down, intent capture, and a deterministic semantic export.",
+    "copyright": "MIT © 2026 Kaixiang Ren. Built on Excalidraw (MIT © 2020 Excalidraw); not affiliated with or endorsed by Excalidraw.",
+    "licenseFile": "../LICENSE",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    }
+  }
+}

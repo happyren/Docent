@@ -1,0 +1,512 @@
+//! Contract tests for the desktop portfolio store (S13, D25): the same
+//! semantics `tests/store.test.ts` holds the Node store to — CRUD round-trips,
+//! the on-disk file-tree shape (D17), the name gate that makes traversal
+//! impossible, the `.excalidraw`-only write gate, and 404 semantics — plus the
+//! two things only the desktop has: an atomic write that leaves no `.tmp`
+//! behind and a CORS allowlist, because here the store is cross-origin.
+//!
+//! Each test gets its own data directory and its own ephemeral port, so they
+//! run in parallel without sharing state.
+
+use std::fs;
+use std::io::{Read, Write};
+use std::net::{Shutdown, TcpStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use docent_lib::store::{self, StoreHandle};
+
+const SCENE: &str = r#"{"type":"excalidraw","version":2,"elements":[]}"#;
+const WEBVIEW_ORIGIN: &str = "tauri://localhost";
+
+// ---------------------------------------------------------------------------
+// fixture
+// ---------------------------------------------------------------------------
+
+struct Fixture {
+    store: Option<StoreHandle>,
+    data_dir: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = format!(
+            "docent-store-{}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::SeqCst),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let data_dir = std::env::temp_dir().join(unique);
+        let store = store::spawn(data_dir.clone()).expect("store binds loopback");
+        Self {
+            store: Some(store),
+            data_dir,
+        }
+    }
+
+    fn port(&self) -> u16 {
+        self.store.as_ref().expect("store running").port()
+    }
+
+    fn data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        drop(self.store.take());
+        let _ = fs::remove_dir_all(&self.data_dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// a request client small enough to not need a dependency
+// ---------------------------------------------------------------------------
+
+struct Res {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+impl Res {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn json(&self) -> serde_json::Value {
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|err| panic!("expected JSON, got {:?} ({err})", self.body))
+    }
+}
+
+fn send(port: u16, method: &str, path: &str, body: Option<&str>, origin: Option<&str>) -> Res {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("store accepts connections");
+    let mut head =
+        format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n");
+    if let Some(origin) = origin {
+        head.push_str(&format!("Origin: {origin}\r\n"));
+    }
+    head.push_str(&format!(
+        "Content-Length: {}\r\n\r\n",
+        body.map_or(0, str::len)
+    ));
+    stream.write_all(head.as_bytes()).unwrap();
+    if let Some(body) = body {
+        stream.write_all(body.as_bytes()).unwrap();
+    }
+    stream.flush().unwrap();
+    // Half-close: the connection is single-use, and an explicit EOF frees the
+    // server from waiting on a body that will never grow.
+    stream.shutdown(Shutdown::Write).unwrap();
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    let text = String::from_utf8_lossy(&raw).into_owned();
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .unwrap_or_else(|| panic!("malformed response: {text:?}"));
+    let mut lines = head.split("\r\n");
+    let status = lines
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse().ok())
+        .unwrap_or_else(|| panic!("no status line in {head:?}"));
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+        .collect();
+    Res {
+        status,
+        headers,
+        body: body.to_string(),
+    }
+}
+
+fn get(port: u16, path: &str) -> Res {
+    send(port, "GET", path, None, Some(WEBVIEW_ORIGIN))
+}
+
+fn put(port: u16, path: &str, body: Option<&str>) -> Res {
+    send(port, "PUT", path, body, Some(WEBVIEW_ORIGIN))
+}
+
+fn delete(port: u16, path: &str) -> Res {
+    send(port, "DELETE", path, None, Some(WEBVIEW_ORIGIN))
+}
+
+fn encode(name: &str) -> String {
+    name.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'!'
+            | b'~'
+            | b'*'
+            | b'\''
+            | b'('
+            | b')' => (byte as char).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// contract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reports_health() {
+    let fixture = Fixture::new();
+    let res = get(fixture.port(), "/api/health");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "ok": true }));
+}
+
+#[test]
+fn starts_empty() {
+    let fixture = Fixture::new();
+    let res = get(fixture.port(), "/api/projects");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!([]));
+}
+
+#[test]
+fn creates_projects_and_scenes_as_a_plain_file_tree() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    let create = put(port, "/api/projects/work", None);
+    assert_eq!(create.status, 201);
+    assert_eq!(create.json(), serde_json::json!({ "id": "work" }));
+
+    let write = put(port, "/api/projects/work/scenes/checkout", Some(SCENE));
+    assert_eq!(write.status, 200);
+    assert_eq!(write.json(), serde_json::json!({ "ok": true }));
+
+    // The store adds no format of its own: the scene is a plain .excalidraw
+    // file at <data>/<project>/<scene>.excalidraw (D17).
+    let on_disk = fs::read_to_string(fixture.data_dir().join("work").join("checkout.excalidraw"))
+        .expect("scene is a plain file on disk");
+    assert_eq!(on_disk, SCENE);
+    assert_eq!(entries(fixture.data_dir()), vec!["work".to_string()]);
+
+    let projects = get(port, "/api/projects").json();
+    assert_eq!(projects.as_array().expect("array").len(), 1);
+    assert_eq!(projects[0]["id"], "work");
+    assert_eq!(projects[0]["scenes"], 1);
+    assert!(
+        projects[0]["updatedAt"].as_str().unwrap().ends_with('Z'),
+        "updatedAt is an ISO timestamp: {:?}",
+        projects[0]["updatedAt"]
+    );
+
+    let scenes = get(port, "/api/projects/work/scenes").json();
+    assert_eq!(
+        scenes
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|scene| scene["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["checkout".to_string()]
+    );
+    assert_eq!(scenes[0]["size"], SCENE.len());
+
+    let round_trip = get(port, "/api/projects/work/scenes/checkout");
+    assert_eq!(round_trip.status, 200);
+    assert_eq!(round_trip.body, SCENE);
+    assert_eq!(round_trip.header("content-type"), Some("application/json"));
+}
+
+#[test]
+fn rejects_path_escaping_and_malformed_names() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    for name in ["..", "a/b", ".hidden", "-flag", &"a".repeat(65)] {
+        let res = put(port, &format!("/api/projects/{}", encode(name)), None);
+        assert!(
+            [400, 404].contains(&res.status),
+            "{name} should be refused, got {}",
+            res.status
+        );
+    }
+
+    put(port, "/api/projects/work", None);
+    let res = put(
+        port,
+        &format!("/api/projects/work/scenes/{}", encode("../escape")),
+        Some(SCENE),
+    );
+    assert_eq!(res.status, 400);
+
+    // Nothing escaped: the project directory holds no scene, and the data
+    // root holds nothing but the project.
+    assert_eq!(entries(fixture.data_dir()), vec!["work".to_string()]);
+    assert!(entries(&fixture.data_dir().join("work")).is_empty());
+}
+
+#[test]
+fn only_persists_excalidraw_scenes() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    let not_json = put(port, "/api/projects/work/scenes/bad", Some("not json"));
+    assert_eq!(not_json.status, 400);
+    assert_eq!(not_json.json()["error"], "body is not JSON");
+
+    let wrong_type = put(
+        port,
+        "/api/projects/work/scenes/bad",
+        Some(r#"{"type":"other"}"#),
+    );
+    assert_eq!(wrong_type.status, 400);
+    assert_eq!(
+        wrong_type.json()["error"],
+        "body is not an .excalidraw scene"
+    );
+
+    assert!(entries(&fixture.data_dir().join("work")).is_empty());
+}
+
+#[test]
+fn four_oh_fours_on_missing_projects_and_scenes() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    assert_eq!(get(port, "/api/projects/nope/scenes").status, 404);
+    assert_eq!(get(port, "/api/projects/work/scenes/nope").status, 404);
+    assert_eq!(
+        put(port, "/api/projects/nope/scenes/x", Some(SCENE)).status,
+        404
+    );
+    assert_eq!(delete(port, "/api/projects/work/scenes/nope").status, 404);
+    assert_eq!(get(port, "/api/nonsense").status, 404);
+    assert_eq!(get(port, "/nothing").status, 404);
+}
+
+#[test]
+fn deletes_scenes_and_projects() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+    put(port, "/api/projects/work/scenes/checkout", Some(SCENE));
+
+    let scene = delete(port, "/api/projects/work/scenes/checkout");
+    assert_eq!(scene.status, 200);
+    assert_eq!(
+        get(port, "/api/projects/work/scenes").json(),
+        serde_json::json!([])
+    );
+
+    let project = delete(port, "/api/projects/work");
+    assert_eq!(project.status, 200);
+    assert_eq!(get(port, "/api/projects").json(), serde_json::json!([]));
+    assert!(entries(fixture.data_dir()).is_empty());
+}
+
+#[test]
+fn writes_atomically_and_leaves_no_temporary_file() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    let updated = r#"{"type":"excalidraw","version":2,"elements":[{"id":"a"}]}"#;
+    for body in [SCENE, updated] {
+        assert_eq!(
+            put(port, "/api/projects/work/scenes/checkout", Some(body)).status,
+            200
+        );
+        // The rename target is the only thing left behind; a half-written
+        // .tmp would mean a crash could truncate an existing scene.
+        assert_eq!(
+            entries(&fixture.data_dir().join("work")),
+            vec!["checkout.excalidraw".to_string()]
+        );
+    }
+
+    assert_eq!(
+        get(port, "/api/projects/work/scenes/checkout").body,
+        updated
+    );
+}
+
+#[test]
+fn overlong_bodies_are_refused_before_they_land() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    // Declared over the 50 MB ceiling: refused on the header, without the
+    // body ever being read.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let head = format!(
+        "PUT /api/projects/work/scenes/huge HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Connection: close\r\nContent-Length: {}\r\n\r\n",
+        50 * 1024 * 1024 + 1
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut raw = String::new();
+    let _ = stream.read_to_string(&mut raw);
+    assert!(
+        raw.starts_with("HTTP/1.1 413"),
+        "expected 413, got {:?}",
+        raw.lines().next()
+    );
+    assert!(entries(&fixture.data_dir().join("work")).is_empty());
+}
+
+#[test]
+fn answers_cors_for_the_webview_origin_only() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    for origin in [
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+        "http://localhost:3000",
+    ] {
+        let preflight = send(port, "OPTIONS", "/api/projects/work", None, Some(origin));
+        assert_eq!(preflight.status, 204);
+        assert_eq!(
+            preflight.header("access-control-allow-origin"),
+            Some(origin),
+            "preflight for {origin}"
+        );
+        assert_eq!(
+            preflight.header("access-control-allow-methods"),
+            Some("GET, PUT, DELETE, OPTIONS")
+        );
+
+        let res = send(port, "GET", "/api/health", None, Some(origin));
+        assert_eq!(res.header("access-control-allow-origin"), Some(origin));
+    }
+
+    // A page the user happened to open elsewhere gets no allowance, so its
+    // preflight fails and it can never PUT or DELETE the portfolio.
+    let hostile = send(
+        port,
+        "OPTIONS",
+        "/api/projects/work",
+        None,
+        Some("https://example.com"),
+    );
+    assert_eq!(hostile.status, 204);
+    assert_eq!(hostile.header("access-control-allow-origin"), None);
+    assert_eq!(hostile.header("vary"), Some("Origin"));
+
+    let hostile_read = send(
+        port,
+        "GET",
+        "/api/health",
+        None,
+        Some("https://example.com"),
+    );
+    assert_eq!(hostile_read.header("access-control-allow-origin"), None);
+}
+
+#[test]
+fn listings_are_ordered_and_count_only_scenes() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    for project in ["zeta", "Alpha", "middle"] {
+        assert_eq!(
+            put(port, &format!("/api/projects/{project}"), None).status,
+            201
+        );
+    }
+    for scene in ["gamma", "Beta", "alpha"] {
+        assert_eq!(
+            put(
+                port,
+                &format!("/api/projects/zeta/scenes/{scene}"),
+                Some(SCENE)
+            )
+            .status,
+            200
+        );
+    }
+    // A stray file the store did not write is not a scene.
+    fs::write(fixture.data_dir().join("zeta").join("notes.txt"), "hello").unwrap();
+
+    let projects = get(port, "/api/projects").json();
+    assert_eq!(
+        projects
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["Alpha", "middle", "zeta"]
+    );
+    assert_eq!(projects[0]["scenes"], 0);
+    assert_eq!(projects[0]["updatedAt"], serde_json::Value::Null);
+    assert_eq!(projects[2]["scenes"], 3);
+
+    let scenes = get(port, "/api/projects/zeta/scenes").json();
+    assert_eq!(
+        scenes
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "Beta", "gamma"]
+    );
+}
+
+#[test]
+fn scene_names_may_carry_spaces_and_round_trip() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/My%20Work", None);
+    assert_eq!(
+        put(
+            port,
+            "/api/projects/My%20Work/scenes/check%20out",
+            Some(SCENE)
+        )
+        .status,
+        200
+    );
+    assert_eq!(
+        entries(&fixture.data_dir().join("My Work")),
+        vec!["check out.excalidraw".to_string()]
+    );
+    assert_eq!(
+        get(port, "/api/projects/My%20Work/scenes/check%20out").body,
+        SCENE
+    );
+}
+
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|read| {
+            read.filter_map(|entry| entry.ok())
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}

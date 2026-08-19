@@ -13,7 +13,10 @@
     "comprehension": "node scripts/comprehension-eval.mjs",
     "mcp": "node server/docent-mcp.mjs",
     "mcp:proxy": "node server/docent-mcp-proxy.mjs",
-    "store": "node server/docent-store.mjs"
+    "store": "node server/docent-store.mjs",
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "0.18.1",
@@ -21,6 +24,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

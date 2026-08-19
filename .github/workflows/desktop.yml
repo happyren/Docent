@@ -1,0 +1,81 @@
+name: Desktop
+
+# Installers for S13. Manual, or on a version tag. Nothing here publishes a
+# release: the bundles land as workflow artifacts and a human decides what
+# ships. Docker self-hosting is untouched by this workflow — see ci.yml.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One bundle for both Mac architectures; the runner is arm64, so the
+          # Intel half needs its target added explicitly.
+          - platform: macos-latest
+            label: macOS
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            label: Linux
+            args: ""
+            rust-targets: ""
+          - platform: windows-latest
+            label: Windows
+            args: ""
+            rust-targets: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Store contract tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ matrix.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docent-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/universal-apple-darwin/release/bundle/**/*
