@@ -98,6 +98,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - A scene opened from the portfolio saves back to it (`⌘S`); local `.excalidraw` file open/save is unchanged.
 - Scenes address by URL: `?project=work&scene=checkout`.
 - Storage is a plain file tree — `data/<project>/<scene>.excalidraw` on a named volume, no database. Anything the store can do, a file manager can too.
+- The **desktop app** (macOS · Windows · Linux) keeps the identical tree under your OS app-data directory — one store contract, two thin implementations, no Docker required. See [Quick start](#quick-start).
 
 ### 🧱 Architecture shapes out of the box
 - A **software-architecture shape library** ships with the app — microservice, database, cache, event bus/pipeline, documents or code, browser, mobile device — merged into Excalidraw's library sidebar at startup, served from the deployment's own origin. Nothing to download, no call out to libraries.excalidraw.com. Attribution below.
@@ -207,6 +208,17 @@ Provenance levels: `explicit` — read from the drawing · `declared` — author
 
 ## Quick start
 
+Two ways to run Docent, both wrapping the same SPA build — neither replaces the other:
+
+| | Self-host with Docker | Desktop app |
+|---|---|---|
+| Runs | on a box you own, in any browser on your LAN | as a native window on macOS, Windows, or Linux |
+| Needs | Docker | nothing — one download |
+| Portfolio | `data/<project>/<scene>.excalidraw` on a named volume | the same file tree, under your OS app-data directory |
+| Agent control (MCP) | yes | not in v1 — agent control stays a self-host capability |
+
+### Self-host with Docker
+
 ```bash
 # self-host
 docker compose up
@@ -256,6 +268,44 @@ or open the canvas with `?agent`
 (e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). The
 last-connected canvas answers the agents. Ask for `get_scene_graph` and start
 touring.
+
+### Desktop app
+
+The same canvas in a native window — a [Tauri](https://v2.tauri.app) shell around
+the same SPA build, with the portfolio store running natively inside the app
+(S13). No Docker, no Node, no browser tab.
+
+**Download** the build for your platform from the
+[Desktop workflow](https://github.com/happyren/Docent/actions/workflows/desktop.yml)
+— each run uploads `.dmg`/`.app` (macOS, universal), `.msi`/`.exe` (Windows), and
+`.deb`/`.rpm`/`.AppImage` (Linux) as artifacts.
+
+**Or build it yourself** — needs a [Rust toolchain](https://rustup.rs) plus your
+platform's webview packages ([Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
+
+```bash
+pnpm install
+pnpm desktop:build   # bundles into src-tauri/target/release/bundle/
+pnpm desktop:dev     # or run the shell against the Vite dev server
+```
+
+Your diagrams stay a plain file tree — the same D17 layout the self-hosted store
+uses, rooted in the OS app-data directory:
+
+| OS | Portfolio location |
+|---|---|
+| macOS | `~/Library/Application Support/io.github.happyren.docent/portfolio` |
+| Windows | `%APPDATA%\io.github.happyren.docent\portfolio` |
+| Linux | `~/.local/share/io.github.happyren.docent/portfolio` |
+
+**The builds are unsigned for now.** On macOS, Gatekeeper refuses a double-click:
+right-click the app → **Open** → **Open**, once. On Windows, SmartScreen shows
+**More info** → **Run anyway**.
+
+The MCP endpoint is deliberately absent from the desktop app — agent *driving*
+remains a self-host capability (S13). For that, run the compose stack above.
+
+### Quality gates
 
 ```bash
 # quality gates

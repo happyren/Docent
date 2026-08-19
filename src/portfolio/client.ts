@@ -5,6 +5,15 @@
  * connection error, which `storeAvailable` turns into a clean false.
  */
 
+/**
+ * The desktop shell (S13) runs its native store on loopback and announces it
+ * before the page loads, because a webview origin is not one an HTTP server
+ * can answer on. Everywhere else the global is absent and requests stay
+ * same-origin, exactly as before.
+ */
+const API_BASE =
+  (window as { __DOCENT_API_BASE__?: string }).__DOCENT_API_BASE__ ?? "";
+
 export interface ProjectInfo {
   id: string;
   scenes: number;
@@ -18,7 +27,7 @@ export interface SceneInfo {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await fetch(API_BASE + path, init);
   const text = await res.text();
   let body: unknown;
   try {
@@ -70,7 +79,7 @@ const sceneUrl = (project: string, scene: string) =>
 
 /** Raw scene JSON text (already validated as .excalidraw by the store). */
 export async function loadScene(project: string, scene: string): Promise<string> {
-  const res = await fetch(sceneUrl(project, scene));
+  const res = await fetch(API_BASE + sceneUrl(project, scene));
   const text = await res.text();
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
