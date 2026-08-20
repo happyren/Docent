@@ -298,9 +298,18 @@ uses, rooted in the OS app-data directory:
 | Windows | `%APPDATA%\io.github.happyren.docent\portfolio` |
 | Linux | `~/.local/share/io.github.happyren.docent/portfolio` |
 
-**The builds are unsigned for now.** On macOS, Gatekeeper refuses a double-click:
-right-click the app → **Open** → **Open**, once. On Windows, SmartScreen shows
-**More info** → **Run anyway**.
+**The builds are unsigned for now.** Recent macOS releases hard-block unsigned
+downloads — the app may even claim to be "damaged" (that's the quarantine flag,
+not actual damage) and right-click → Open no longer bypasses it. Two ways in:
+
+- attempt to open it once, then **System Settings → Privacy & Security** →
+  scroll to the *"Docent" was blocked* notice → **Open Anyway**; or
+- clear the quarantine flag in a terminal:
+  `xattr -cr /Applications/Docent.app` (adjust the path to where you put it).
+
+Building on your own machine (`pnpm desktop:build`) produces an app with no
+quarantine flag at all — it opens with a plain double-click. On Windows,
+SmartScreen shows **More info** → **Run anyway**.
 
 The MCP endpoint is deliberately absent from the desktop app — agent *driving*
 remains a self-host capability (S13). For that, run the compose stack above.
