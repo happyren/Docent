@@ -45,7 +45,14 @@ export interface Binding {
   owner: string;
   repo: string;
   path: string;
+  /** Where every scene operation lands — the branch being drafted on. */
   branch: string;
+  /**
+   * What a pull request would target (S14, D28). Equal to `branch` when the
+   * project is sitting on its own base, which is where a binding starts and
+   * where a binding written before branch-aware sync stays.
+   */
+  baseBranch: string;
   apiBase: string;
   hasToken: boolean;
   /**
@@ -64,17 +71,33 @@ export interface Binding {
 export interface BindingResult {
   ok: boolean;
   canWrite: boolean | null;
+  /** The base the store recorded — the repository's default branch, usually. */
+  baseBranch: string;
   warning?: string;
 }
 
-/** What the binding form sends. `token` is write-only: omitted keeps the stored one. */
+/**
+ * What the binding form sends. `token` is write-only: omitted keeps the stored
+ * one, and so does an omitted `baseBranch` — which is what makes switching
+ * branches a PUT of the same binding on another `branch`.
+ */
 export interface BindingInput {
   owner: string;
   repo: string;
   path?: string;
   branch?: string;
+  baseBranch?: string;
   apiBase?: string;
   token?: string;
+}
+
+/** One branch of the bound repository (D28). */
+export interface BranchInfo {
+  name: string;
+  /** The branch a pull request would target. */
+  isBase: boolean;
+  /** The branch the project is on, where every save lands. */
+  isActive: boolean;
 }
 
 /**
@@ -155,6 +178,65 @@ export function putBinding(
 
 export function deleteBinding(project: string): Promise<{ ok: boolean }> {
   return request(bindingUrl(project), { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// branches and pull requests (S14, D28)
+// ---------------------------------------------------------------------------
+
+const branchesUrl = (project: string) =>
+  `/api/projects/${encodeURIComponent(project)}/branches`;
+
+/** The bound repository's branches, with the base and the active one marked. */
+export function listBranches(project: string): Promise<BranchInfo[]> {
+  return request(branchesUrl(project));
+}
+
+/**
+ * Cut a branch off `from` (the active branch by default) and start drafting on
+ * it: the store switches the binding as part of the same call, so the next
+ * save commits there.
+ */
+export function createBranch(
+  project: string,
+  name: string,
+  from?: string,
+): Promise<{ ok: boolean; branch: string }> {
+  return request(branchesUrl(project), {
+    method: "POST",
+    body: JSON.stringify(from ? { name, from } : { name }),
+  });
+}
+
+/** Open a pull request from the active branch onto the recorded base. */
+export function openPullRequest(
+  project: string,
+  input: { title?: string; body?: string } = {},
+): Promise<{ ok: boolean; url: string; number: number }> {
+  return request(`/api/projects/${encodeURIComponent(project)}/pull-request`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Move the project to an existing branch. It is the binding PUT and nothing
+ * else — the store keeps every field this does not state, so the base, the
+ * token and the probe's verdict all survive the switch.
+ */
+export async function switchBranch(
+  project: string,
+  branch: string,
+): Promise<BindingResult> {
+  const binding = await getBinding(project);
+  if (!binding) throw new Error(`no GitHub binding for project: ${project}`);
+  return putBinding(project, {
+    owner: binding.owner,
+    repo: binding.repo,
+    path: binding.path,
+    branch,
+    apiBase: binding.apiBase,
+  });
 }
 
 const sceneUrl = (project: string, scene: string) =>

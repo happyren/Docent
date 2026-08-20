@@ -593,6 +593,26 @@ body {
   cursor: pointer;
 }
 
+/* The branch row (D28): one line under the target, never a second panel. */
+.docent-portfolio-github-branches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.docent-portfolio-github-branches select,
+.docent-portfolio-github-branches input {
+  background: #26262c;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  max-width: 260px;
+}
+
 .docent-portfolio-github-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

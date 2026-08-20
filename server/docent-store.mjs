@@ -19,14 +19,22 @@
  * Run:  node server/docent-store.mjs      (port 3400, data dir ./data)
  * Env:  DOCENT_STORE_PORT, DOCENT_DATA, DOCENT_SECRETS
  *
+ * A bound project also gets the repository's own review flow (D28): the
+ * binding records a `baseBranch`, the active `branch` is where every scene
+ * operation lands, and the two branch routes below are how a user drafts on a
+ * branch and opens a pull request back onto the base.
+ *
  * API (JSON in/out; errors are { error } with a 4xx/5xx status):
  *   GET    /api/health                          → { ok: true }
  *   GET    /api/projects                        → [{ id, scenes, updatedAt, bound?, canWrite? }]
  *   PUT    /api/projects/:project               → { id }            (create)
  *   DELETE /api/projects/:project               → { ok }            (recursive)
- *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, apiBase, hasToken, canWrite }
- *   PUT    /api/projects/:project/binding       → { ok, canWrite, warning? }  (token write-only)
+ *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, baseBranch, apiBase, hasToken, canWrite }
+ *   PUT    /api/projects/:project/binding       → { ok, canWrite, baseBranch, warning? }  (token write-only)
  *   DELETE /api/projects/:project/binding       → { ok }            (local dir stays)
+ *   GET    /api/projects/:project/branches      → [{ name, isBase, isActive }]
+ *   POST   /api/projects/:project/branches      → { ok, branch }    (creates it and switches to it)
+ *   POST   /api/projects/:project/pull-request  → { ok, url, number }
  *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size, sha? }]
  *   GET    /api/projects/:project/scenes/:name  → scene JSON        (+ X-Docent-Scene-Sha when bound)
  *   PUT    /api/projects/:project/scenes/:name  → { ok, sha? }      (atomic; X-Docent-Scene-Sha guards bound writes)
@@ -87,6 +95,12 @@ const DEFAULT_BRANCH = "main";
 /** GitHub's own account/repository shape, spelled out rather than guessed. */
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const BRANCH_RE = /^[A-Za-z0-9._/-]{1,255}$/;
+/**
+ * A branch this store is asked to *create* (D28), which is stricter than one
+ * it merely addresses: it must start with a letter or a digit and stay short
+ * enough to read in a select. Whatever GitHub already has keeps BRANCH_RE.
+ */
+const NEW_BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const API_BASE_RE = /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/;
 
 /** Every GitHub answer that means "your credential is the problem". */
@@ -169,6 +183,17 @@ async function tokenFor(project) {
 }
 
 /**
+ * The branch a draft is measured against. A binding written before D28 has no
+ * `baseBranch` at all, and it behaves exactly as it always did: the branch it
+ * points at *is* its base, so nothing is a draft and no pull request is
+ * offered. No migration step, no rewrite of anyone's dotfile.
+ */
+const baseBranchOf = (binding) =>
+  typeof binding.baseBranch === "string" && binding.baseBranch !== ""
+    ? binding.baseBranch
+    : binding.branch;
+
+/**
  * A binding as the API states it — never with the token, in either direction.
  * `canWrite` is what the last bind-time probe learned, and null whenever
  * nothing has been learned: an older binding, one stored without a token, or a
@@ -179,6 +204,7 @@ const publicBinding = (binding, hasToken) => ({
   repo: binding.repo,
   path: binding.path,
   branch: binding.branch,
+  baseBranch: baseBranchOf(binding),
   apiBase: binding.apiBase,
   hasToken,
   canWrite: typeof binding.canWrite === "boolean" ? binding.canWrite : null,
@@ -204,6 +230,35 @@ const PATH_ERROR =
   'invalid path — a repository directory prefix, no "..", no backslashes (max 512)';
 const BRANCH_ERROR =
   'invalid branch — letters, digits, ., _, - or / (max 255, no "..")';
+const BRANCH_NAME_ERROR =
+  'invalid branch name — letters, digits, ., _, - or / (max 200, no "..", no "//", no leading or trailing "/")';
+
+/** A branch this store may address: an existing one, on either store. */
+function checkBranch(branch) {
+  if (
+    !BRANCH_RE.test(branch) ||
+    branch.includes("..") ||
+    branch.startsWith("/") ||
+    branch.endsWith("/")
+  ) {
+    throw bad(BRANCH_ERROR);
+  }
+  return branch;
+}
+
+/** A branch this store may create — the stricter gate (see NEW_BRANCH_RE). */
+function checkNewBranch(name) {
+  if (
+    typeof name !== "string" ||
+    !NEW_BRANCH_RE.test(name) ||
+    name.includes("..") ||
+    name.includes("//") ||
+    name.endsWith("/")
+  ) {
+    throw bad(BRANCH_NAME_ERROR);
+  }
+  return name;
+}
 
 /**
  * Validate what the client sent and fill in the two defaults. The token is
@@ -232,13 +287,14 @@ function normalizeBinding(input) {
   if (!OWNER_RE.test(owner)) throw bad(ownerError);
   if (!OWNER_RE.test(repo)) throw bad(repoError);
   const repoPath = normalizeRepoPath(textOr("path", "", PATH_ERROR));
-  const branch = textOr("branch", DEFAULT_BRANCH, BRANCH_ERROR);
-  if (!BRANCH_RE.test(branch) || branch.includes("..") || branch.startsWith("/") || branch.endsWith("/")) {
-    throw bad(BRANCH_ERROR);
-  }
+  const branch = checkBranch(textOr("branch", DEFAULT_BRANCH, BRANCH_ERROR));
+  // Stating the base is allowed but never required: putBinding resolves it
+  // from the repository when the client leaves it out (D28).
+  const baseBranch = textOr("baseBranch", "", BRANCH_ERROR);
+  if (baseBranch !== "") checkBranch(baseBranch);
   const apiBase = textOr("apiBase", DEFAULT_API_BASE, apiBaseError).replace(/\/+$/, "");
   if (apiBase.length > 512 || !API_BASE_RE.test(apiBase)) throw bad(apiBaseError);
-  return { owner, repo, path: repoPath, branch, apiBase };
+  return { owner, repo, path: repoPath, branch, baseBranch, apiBase };
 }
 
 /** Optional on update: absent or empty means "keep whatever is stored". */
@@ -257,7 +313,7 @@ async function putBinding(project, body) {
   } catch {
     throw new HttpError(400, "body is not JSON");
   }
-  const binding = normalizeBinding(input);
+  const requested = normalizeBinding(input);
   const newToken = normalizeToken(input.token);
   // A bound project still owns a local directory: it is where it came from,
   // and where it returns to if the binding is removed.
@@ -265,13 +321,37 @@ async function putBinding(project, body) {
   // Whatever token this binding will run on — the one just given, or the one
   // already stored. Without either there is nothing to probe with.
   const token = newToken ?? (await tokenFor(project));
-  const probe = token === null ? { canWrite: null } : await probeAccess(binding, token);
+  const probe =
+    token === null
+      ? { canWrite: null, defaultBranch: null }
+      : await probeAccess(requested, token);
   const bindings = await readBindings();
-  // Unknown is stored as an absent field rather than an explicit null, so a
-  // binding written before this existed and one written now are the same
-  // bytes — and so both stores keep writing the same file.
-  bindings[project] =
-    probe.canWrite === null ? binding : { ...binding, canWrite: probe.canWrite };
+  const stored = bindings[project];
+  // The base is sticky, and every step of this fallback is a real case: what
+  // the client stated, else what this project already recorded — which is what
+  // makes switching branches a PUT of `{ branch }` and nothing else — else the
+  // repository's own default branch as the probe just read it, else the branch
+  // being bound, because a store that cannot ask still has to answer.
+  const baseBranch =
+    requested.baseBranch ||
+    (typeof stored?.baseBranch === "string" && stored.baseBranch !== ""
+      ? stored.baseBranch
+      : "") ||
+    probe.defaultBranch ||
+    requested.branch;
+  // Field order is the order the desktop store's struct declares, so the
+  // dotfile stays byte-comparable across the two implementations. Unknown
+  // `canWrite` is stored as an absent field rather than an explicit null, so a
+  // binding written before it existed and one written now are the same bytes.
+  bindings[project] = {
+    owner: requested.owner,
+    repo: requested.repo,
+    path: requested.path,
+    branch: requested.branch,
+    baseBranch,
+    apiBase: requested.apiBase,
+    ...(probe.canWrite === null ? {} : { canWrite: probe.canWrite }),
+  };
   await writeJsonFile(BINDINGS_FILE, bindings);
   if (newToken !== null) {
     const secrets = await readSecrets();
@@ -283,6 +363,7 @@ async function putBinding(project, body) {
   return {
     ok: true,
     canWrite: probe.canWrite,
+    baseBranch,
     ...(probe.warning ? { warning: probe.warning } : {}),
   };
 }
@@ -382,12 +463,16 @@ function githubWriteFailure(binding, status, text) {
  * token here is the whole point: otherwise the user learns it from a failed
  * save, long after the form is closed.
  *
+ * The same answer carries `default_branch`, which is the repository's own
+ * opinion of what a pull request should target (D28) — so the base branch is
+ * learned from the one call that was already being made, not a second one.
+ *
  * It never throws. A binding is worth storing even when the probe cannot
  * reach GitHub, so every unhappy answer is reported as "unknown" plus a
  * warning rather than as a refusal to bind.
  */
 async function probeAccess(binding, token) {
-  const unverified = { canWrite: null, warning: unverifiedAccess(binding) };
+  const unverified = { canWrite: null, defaultBranch: null, warning: unverifiedAccess(binding) };
   let res;
   try {
     res = await github(token, "GET", repoUrl(binding, ""));
@@ -397,17 +482,29 @@ async function probeAccess(binding, token) {
     return unverified;
   }
   if (res.status !== 200) return unverified;
-  let permissions;
+  let repo;
   try {
-    permissions = JSON.parse(res.text)?.permissions;
+    repo = JSON.parse(res.text);
   } catch {
-    return { canWrite: null };
+    return { canWrite: null, defaultBranch: null };
+  }
+  const permissions = repo?.permissions;
+  // A default branch is only worth recording if this store could address it;
+  // an Enterprise answer with something odd in it falls back like an absent one.
+  let defaultBranch = null;
+  if (typeof repo?.default_branch === "string" && repo.default_branch !== "") {
+    try {
+      defaultBranch = checkBranch(repo.default_branch);
+    } catch {
+      defaultBranch = null;
+    }
   }
   // An answer without a permissions object (an unauthenticated read, some
   // Enterprise versions) says nothing either way — and guessing "writable"
   // there is exactly the lie this probe exists to stop.
   return {
     canWrite: typeof permissions?.push === "boolean" ? permissions.push : null,
+    defaultBranch,
   };
 }
 
@@ -599,6 +696,167 @@ async function githubDelete(project, binding, token, scene) {
   return { ok: true };
 }
 
+// ---------------------------------------------------------------------------
+// branches and pull requests (D28) — the repository's own review flow
+// ---------------------------------------------------------------------------
+
+/**
+ * The repository's branches. One page of 100 is the v1 cap: GitHub paginates
+ * this endpoint, and a store that fetched every page would spend a user's rate
+ * limit walking release history to fill a select. A repository with more
+ * branches than that shows the first hundred GitHub names.
+ */
+async function githubBranches(binding, token) {
+  const res = await github(token, "GET", repoUrl(binding, "/branches?per_page=100"));
+  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
+  const entries = parseJson(res.text);
+  if (!Array.isArray(entries)) {
+    throw new HttpError(502, "GitHub API error (branches are not a list)");
+  }
+  const base = baseBranchOf(binding);
+  // GitHub's own order, kept: it is the repository's alphabetical listing, and
+  // re-sorting it here would only be a second opinion about the same data.
+  return entries
+    .filter((entry) => typeof entry?.name === "string" && entry.name !== "")
+    .map((entry) => ({
+      name: entry.name,
+      isBase: entry.name === base,
+      isActive: entry.name === binding.branch,
+    }));
+}
+
+/** The body of a POST, as an object; anything else is the client's mistake. */
+function objectBody(body, what) {
+  const text = body.trim();
+  if (text === "") return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new HttpError(400, "body is not JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw bad(`body is not ${what}`);
+  }
+  return parsed;
+}
+
+/**
+ * Point the binding at another branch, keeping everything else exactly as it
+ * is — the base, the probe's verdict, the token (which lives elsewhere
+ * entirely). Spreading over the stored object rather than rebuilding it is
+ * what makes that true even for fields added later.
+ */
+async function setActiveBranch(project, branch) {
+  const bindings = await readBindings();
+  const binding = bindings[project];
+  if (!binding) return;
+  bindings[project] = { ...binding, branch };
+  await writeJsonFile(BINDINGS_FILE, bindings);
+  // A different branch is a different set of scenes: whatever this process
+  // remembered about the old one is now wrong rather than merely stale.
+  listingCache.delete(project);
+  boundCounts.delete(project);
+}
+
+/**
+ * Create a branch off another one and start drafting on it. Creating without
+ * switching would leave the user editing the base they just branched away
+ * from, which is the mistake this route exists to prevent.
+ */
+async function createBranch(project, binding, token, body) {
+  const input = objectBody(body, "a branch");
+  const name = checkNewBranch(input.name);
+  let from = binding.branch;
+  if (input.from !== undefined && input.from !== null && input.from !== "") {
+    if (typeof input.from !== "string") throw bad(BRANCH_ERROR);
+    from = checkBranch(input.from);
+  }
+  const heads = `/git/ref/heads/${encodeSegments(from.split("/"))}`;
+  const ref = await github(token, "GET", repoUrl(binding, heads));
+  if (ref.status === 404) {
+    throw new HttpError(404, `no branch named ${from} on ${binding.owner}/${binding.repo}`);
+  }
+  if (ref.status < 200 || ref.status >= 300) throw githubFailure(ref.status, ref.text);
+  const sha = parseJson(ref.text)?.object?.sha;
+  if (typeof sha !== "string" || sha === "") {
+    throw new HttpError(502, "GitHub API error (ref carried no sha)");
+  }
+  const created = await github(token, "POST", repoUrl(binding, "/git/refs"), {
+    body: JSON.stringify({ ref: `refs/heads/${name}`, sha }),
+  });
+  // GitHub answers a duplicate ref with a 422. That is not a lost race like a
+  // stale scene sha — it is a name already taken, and saying so is the fix.
+  if (created.status === 422 && /already exists/i.test(created.text)) {
+    throw new HttpError(
+      409,
+      `branch ${name} already exists on ${binding.owner}/${binding.repo}`,
+    );
+  }
+  if (created.status < 200 || created.status >= 300) {
+    throw githubWriteFailure(binding, created.status, created.text);
+  }
+  await setActiveBranch(project, name);
+  return { ok: true, branch: name };
+}
+
+/**
+ * GitHub's own sentence about a refusal. The Validation-Failed envelope's
+ * top-level message says nothing ("Validation Failed"); the useful line — "No
+ * commits between main and x", "A pull request already exists for acme:x" —
+ * is the first entry of `errors`.
+ */
+function githubMessage(text) {
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return "";
+  }
+  const detailed = Array.isArray(body?.errors)
+    ? body.errors.find((entry) => typeof entry?.message === "string" && entry.message !== "")
+    : null;
+  if (detailed) return detailed.message;
+  return typeof body?.message === "string" ? body.message : "";
+}
+
+/** Open a pull request from the active branch onto the recorded base. */
+async function openPullRequest(binding, token, body) {
+  const input = objectBody(body, "a pull request");
+  const base = baseBranchOf(binding);
+  if (binding.branch === base) {
+    // Nothing to review: the drafts and the base are the same branch, which is
+    // exactly the state a binding starts in.
+    throw new HttpError(
+      400,
+      `the active branch ${binding.branch} is the base branch — create a branch first`,
+    );
+  }
+  const title =
+    typeof input.title === "string" && input.title.trim() !== ""
+      ? input.title
+      : "docent: update diagrams";
+  const description = typeof input.body === "string" ? input.body : "";
+  const res = await github(token, "POST", repoUrl(binding, "/pulls"), {
+    body: JSON.stringify({ title, head: binding.branch, base, body: description }),
+  });
+  // No commits between the two branches, or a pull request already open for
+  // them: GitHub knows which, and its sentence is the one worth relaying.
+  if (res.status === 422) {
+    const message = githubMessage(res.text);
+    throw new HttpError(409, `GitHub: ${message || "the pull request was refused"}`);
+  }
+  if (res.status < 200 || res.status >= 300) {
+    throw githubWriteFailure(binding, res.status, res.text);
+  }
+  const created = parseJson(res.text);
+  return {
+    ok: true,
+    url: typeof created?.html_url === "string" ? created.html_url : "",
+    number: typeof created?.number === "number" ? created.number : 0,
+  };
+}
+
 /**
  * Resolve a bound project to everything a GitHub call needs. A binding with no
  * token is refused here rather than at GitHub, so the answer is the same 401
@@ -610,6 +868,13 @@ async function boundContext(project) {
   const token = await tokenFor(project);
   if (!token) throw new HttpError(401, TOKEN_ERROR);
   return { binding, token };
+}
+
+/** The same, for routes that only exist on a bound project (D28). */
+async function boundOrFail(project) {
+  const bound = await boundContext(project);
+  if (!bound) throw new HttpError(404, `no GitHub binding for project: ${project}`);
+  return bound;
 }
 
 // ---------------------------------------------------------------------------
@@ -740,6 +1005,35 @@ async function handle(req, res) {
     // Idempotent, like the project delete above: unbinding what is already
     // unbound is a success.
     if (req.method === "DELETE") return removeBinding(project);
+  }
+
+  // Branch routes (D28). Only a bound project has branches at all, so an
+  // unbound one answers the same 404 its binding does.
+  if (parts.length === 4 && parts[3] === "branches") {
+    const project = checkName(parts[2], "project");
+    if (req.method === "GET") {
+      const bound = await boundOrFail(project);
+      return githubBranches(bound.binding, bound.token);
+    }
+    if (req.method === "POST") {
+      const bound = await boundOrFail(project);
+      const created = await createBranch(
+        project,
+        bound.binding,
+        bound.token,
+        await readBody(req),
+      );
+      res.statusCode = 201;
+      return created;
+    }
+  }
+
+  if (parts.length === 4 && parts[3] === "pull-request" && req.method === "POST") {
+    const project = checkName(parts[2], "project");
+    const bound = await boundOrFail(project);
+    const opened = await openPullRequest(bound.binding, bound.token, await readBody(req));
+    res.statusCode = 201;
+    return opened;
   }
 
   if (parts.length === 4 && parts[3] === "scenes" && req.method === "GET") {

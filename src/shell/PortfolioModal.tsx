@@ -11,20 +11,29 @@
  * store's bind-time probe found a token that can read the repository but not
  * write to it. Everything else about the modal is the same either way — the
  * store makes a bound project look like any other.
+ *
+ * The strip's branch row (D28) is the repository's own review flow: pick a
+ * branch to work on, cut a new one to draft in, and open a pull request back
+ * onto the base when the drafting is done.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  createBranch,
   createProject,
   deleteBinding,
   deleteProject,
   deleteScene,
   getBinding,
+  listBranches,
   listProjects,
   listScenes,
+  openPullRequest,
   putBinding,
   saveScene,
   storeAvailable,
+  switchBranch,
   type Binding,
+  type BranchInfo,
   type ProjectInfo,
   type SceneInfo,
 } from "../portfolio/client";
@@ -41,21 +50,31 @@ const EMPTY_SCENE = JSON.stringify({
 });
 
 /** Large Layer-1 snapshot of a scene, rendered lazily and cached. */
-function SceneThumb({ project, scene }: { project: string; scene: SceneInfo }) {
+function SceneThumb({
+  project,
+  scene,
+  revision,
+}: {
+  project: string;
+  scene: SceneInfo;
+  revision: number;
+}) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     setSrc(null);
     // The revision the thumbnail cache keys on. A bound project stamps every
     // scene with the branch's last commit, so any change there re-renders all
-    // of them — and an unknown stamp simply never invalidates.
-    portfolioThumbnail(project, scene.name, scene.updatedAt ?? "unknown")
+    // of them — and an unknown stamp simply never invalidates. `revision` is
+    // what covers the case a timestamp cannot: two branches whose scenes share
+    // a name and a last-commit date are still two different pictures.
+    portfolioThumbnail(project, scene.name, `${scene.updatedAt ?? "unknown"}#${revision}`)
       .then((url) => live && setSrc(url))
       .catch(() => live && setSrc(""));
     return () => {
       live = false;
     };
-  }, [project, scene.name, scene.updatedAt]);
+  }, [project, scene.name, scene.updatedAt, revision]);
   if (src === null) {
     return <div className="docent-scene-thumb is-loading">rendering…</div>;
   }
@@ -76,6 +95,171 @@ const EMPTY_FORM = {
   apiBase: "",
   token: "",
 };
+
+/** What a new branch is called unless the user says otherwise (D28). */
+const suggestedBranch = () =>
+  `docent/diagrams-${new Date().toISOString().slice(0, 10)}`;
+
+/**
+ * The branch row (D28): which branch this project's scenes come from and go
+ * to, a way to cut a new one, and — once the project is off its base — the
+ * pull request that puts the drafts up for review.
+ *
+ * Every action here changes what the scene grid should be showing, so each one
+ * ends in `onChanged`, which re-reads the binding, the scene listing, and the
+ * thumbnails.
+ */
+function BranchRow({
+  project,
+  binding,
+  disabled,
+  onChanged,
+}: {
+  project: string;
+  binding: Binding;
+  disabled: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [branches, setBranches] = useState<BranchInfo[] | null>(null);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setBranches(null);
+    listBranches(project)
+      // A repository that cannot be listed is not a reason to hide the row:
+      // the active branch is still known, and it is still switchable back to.
+      .then((list) => live && setBranches(list))
+      .catch(() => live && setBranches([]));
+    return () => {
+      live = false;
+    };
+  }, [project, binding.branch, binding.baseBranch]);
+
+  // The listing is one page (the store says so), and a branch created outside
+  // Docent may not be on it — so the branch actually in use is always an
+  // option, or the select would render blank.
+  const options = useMemo(() => {
+    const listed = branches ?? [];
+    if (listed.some((entry) => entry.name === binding.branch)) return listed;
+    return [
+      {
+        name: binding.branch,
+        isBase: binding.branch === binding.baseBranch,
+        isActive: true,
+      },
+      ...listed,
+    ];
+  }, [branches, binding.branch, binding.baseBranch]);
+
+  const act = (action: () => Promise<void>) =>
+    void (async () => {
+      setBusy(true);
+      try {
+        await action();
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+
+  const pick = (branch: string) => {
+    if (branch === binding.branch) return;
+    act(async () => {
+      await switchBranch(project, branch);
+      await onChanged();
+    });
+  };
+
+  const cut = () =>
+    act(async () => {
+      const wanted = name.trim();
+      if (!wanted) return;
+      // The store switches the binding to the new branch as part of creating
+      // it, so there is nothing to do here but re-read everything.
+      await createBranch(project, wanted);
+      setNaming(false);
+      setName("");
+      await onChanged();
+    });
+
+  const propose = () =>
+    act(async () => {
+      const pull = await openPullRequest(project);
+      // The system webview can quietly ignore window.open — nothing happens,
+      // no error — so the alert is what actually guarantees the user leaves
+      // with the URL. It is deliberately not one or the other.
+      window.open(pull.url, "_blank");
+      window.alert(`Pull request #${pull.number} opened:\n\n${pull.url}`);
+    });
+
+  const working = busy || disabled;
+  const drafting = binding.branch !== binding.baseBranch;
+
+  return (
+    <div className="docent-portfolio-github-branches">
+      <span className="docent-portfolio-github-label">Branch</span>
+      <select
+        value={binding.branch}
+        disabled={working || branches === null}
+        title="Scenes are read from and saved to this branch"
+        onChange={(e) => pick(e.target.value)}
+      >
+        {options.map((entry) => (
+          <option key={entry.name} value={entry.name}>
+            {entry.isBase ? `${entry.name} (base)` : entry.name}
+          </option>
+        ))}
+      </select>
+      {naming ? (
+        <>
+          <input
+            autoFocus
+            value={name}
+            disabled={working}
+            placeholder={suggestedBranch()}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") cut();
+              if (e.key === "Escape") setNaming(false);
+            }}
+          />
+          <button disabled={working || !name.trim()} onClick={cut}>
+            Create
+          </button>
+          <button disabled={working} onClick={() => setNaming(false)}>
+            Cancel
+          </button>
+        </>
+      ) : (
+        <button
+          disabled={working}
+          title={`Branch off ${binding.branch} and draft there`}
+          onClick={() => {
+            setName(suggestedBranch());
+            setNaming(true);
+          }}
+        >
+          ＋ Branch
+        </button>
+      )}
+      {/* Only once there is something to review: on the base branch a pull
+          request would have nowhere to go. */}
+      {drafting && !naming && (
+        <button
+          disabled={working}
+          title={`Open a pull request from ${binding.branch} into ${binding.baseBranch}`}
+          onClick={propose}
+        >
+          Open PR
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * The GitHub strip (S14) for the selected project: connect it to a repository,
@@ -111,6 +295,16 @@ function GitHubPanel({
 
   const edit = (patch: Partial<typeof EMPTY_FORM>) =>
     setForm((current) => ({ ...current, ...patch }));
+
+  /**
+   * What every branch action ends with: the binding moved, so re-read it and
+   * tell the modal that its scene listing and thumbnails are about a branch
+   * that is no longer the one on screen.
+   */
+  const reload = async () => {
+    setBinding(await getBinding(project));
+    onChanged();
+  };
 
   const openForm = () => {
     setForm({
@@ -231,6 +425,16 @@ function GitHubPanel({
           </>
         )}
       </div>
+      {/* Branches need a token to ask about at all, and the line above already
+          says when there isn't one. */}
+      {binding && binding.hasToken && (
+        <BranchRow
+          project={project}
+          binding={binding}
+          disabled={busy}
+          onChanged={reload}
+        />
+      )}
       {open && (
         <div className="docent-portfolio-github-form">
           <label className="docent-field">
@@ -352,6 +556,11 @@ export function PortfolioModal({
   const [newProject, setNewProject] = useState("");
   const [saveName, setSaveName] = useState(suggestedName);
   const [busy, setBusy] = useState(false);
+  // Bumped whenever the scenes on screen start coming from somewhere else —
+  // a new binding, or another branch of the same repository (D28). Thumbnails
+  // are cached per scene revision, and "the same name at the same timestamp on
+  // a different branch" is the one case a timestamp cannot tell apart.
+  const [thumbRevision, setThumbRevision] = useState(0);
   const saveNameRef = useRef<HTMLInputElement | null>(null);
 
   const fail = (err: unknown) =>
@@ -373,25 +582,27 @@ export function PortfolioModal({
     })();
   }, [refreshProjects]);
 
+  const refreshScenes = useCallback(async (project: string) => {
+    const list = await listScenes(project);
+    setScenes(list);
+    // The projects listing never waits on GitHub, so a bound project's count
+    // there is whatever the store last saw — and right after a binding or
+    // branch change, that is nothing at all. This listing *is* that count, so
+    // reconcile the sidebar from it rather than asking again.
+    setProjects((current) =>
+      current.map((p) =>
+        p.id === project && p.bound ? { ...p, scenes: list.length } : p,
+      ),
+    );
+  }, []);
+
   useEffect(() => {
     if (!selected) {
       setScenes([]);
       return;
     }
-    listScenes(selected)
-      .then((list) => {
-        setScenes(list);
-        // The projects listing never waits on GitHub, so a bound project's
-        // count there is whatever the store last saw. This listing *is* that —
-        // reconcile the sidebar from it rather than asking again.
-        setProjects((current) =>
-          current.map((p) =>
-            p.id === selected && p.bound ? { ...p, scenes: list.length } : p,
-          ),
-        );
-      })
-      .catch(fail);
-  }, [selected]);
+    refreshScenes(selected).catch(fail);
+  }, [selected, refreshScenes]);
 
   // Opened to save: put the caret in the name field with the suggestion
   // selected, so typing replaces it. The field only exists once a project is
@@ -604,7 +815,11 @@ export function PortfolioModal({
                         onClick={() => !busy && openScene(s.name)}
                         title={`Open ${selected}/${s.name}`}
                       >
-                        <SceneThumb project={selected} scene={s} />
+                        <SceneThumb
+                          project={selected}
+                          scene={s}
+                          revision={thumbRevision}
+                        />
                         <div className="docent-scene-caption">
                           <span className="docent-portfolio-name">{s.name}</span>
                           <span className="docent-portfolio-meta">
@@ -653,10 +868,16 @@ export function PortfolioModal({
                   <GitHubPanel
                     project={selected}
                     onChanged={() => {
-                      // Binding or unbinding swaps where the scenes come from,
-                      // so both listings are stale the moment it lands.
-                      void refreshProjects().catch(fail);
-                      listScenes(selected).then(setScenes).catch(fail);
+                      // Binding, unbinding, and switching branches all swap
+                      // where the scenes come from, so both listings — and
+                      // every thumbnail — are stale the moment it lands. The
+                      // scene listing goes second on purpose: it is what puts
+                      // the bound project's count back into the sidebar.
+                      setThumbRevision((revision) => revision + 1);
+                      void (async () => {
+                        await refreshProjects();
+                        await refreshScenes(selected);
+                      })().catch(fail);
                     }}
                   />
                 </>

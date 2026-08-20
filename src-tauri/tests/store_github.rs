@@ -70,6 +70,12 @@ struct Seen {
 struct Repository {
     files: BTreeMap<String, String>,
     seen: Vec<Seen>,
+    /// Branch name → head sha, which is all the ref endpoints need (D28).
+    branches: BTreeMap<String, String>,
+    /// Pull request numbers, handed out in order like GitHub's.
+    pulls: i64,
+    /// What `GET /repos/acme/diagrams` calls the repository's default branch.
+    default_branch: String,
     /// Bumped by every write, so the listing's ETag changes when it should.
     version: u64,
     /// A token that may read and not write — what a fine-grained PAT is by
@@ -99,6 +105,9 @@ impl MockGitHub {
         let server = Arc::new(server);
         let repo = Arc::new(Mutex::new(Repository {
             version: 1,
+            // One branch, which is also the repository's default.
+            branches: BTreeMap::from([("main".to_string(), "sha-main".to_string())]),
+            default_branch: "main".to_string(),
             ..Repository::default()
         }));
         let worker = {
@@ -156,6 +165,30 @@ impl MockGitHub {
     /// Make the repository itself unreachable, so the probe learns nothing.
     fn set_repo_missing(&self, missing: bool) {
         self.repo.lock().expect("repository").repo_missing = missing;
+    }
+
+    /// Put a branch at a sha — creating it, or moving it so a pull request
+    /// has something to review (D28).
+    fn set_branch(&self, name: &str, sha: &str) {
+        self.repo
+            .lock()
+            .expect("repository")
+            .branches
+            .insert(name.to_string(), sha.to_string());
+    }
+
+    fn has_branch(&self, name: &str) -> bool {
+        self.repo
+            .lock()
+            .expect("repository")
+            .branches
+            .contains_key(name)
+    }
+
+    /// What the repository calls its default branch, which is where a
+    /// binding's base comes from.
+    fn set_default_branch(&self, name: &str) {
+        self.repo.lock().expect("repository").default_branch = name.to_string();
     }
 
     fn seen(&self) -> Vec<Seen> {
@@ -328,6 +361,9 @@ fn answer(
             200,
             Payload::json(serde_json::json!({
                 "full_name": "acme/diagrams",
+                // The same answer names the branch a pull request should
+                // target, which is where a binding's base comes from (D28).
+                "default_branch": repo.default_branch,
                 "permissions": {
                     "admin": false,
                     "maintain": false,
@@ -340,6 +376,115 @@ fn answer(
     }
 
     match rest.first() {
+        // Alphabetical, as GitHub answers it — which a BTreeMap already is.
+        Some(&"branches") if rest.len() == 1 && method == "GET" => (
+            200,
+            Payload::json(serde_json::Value::Array(
+                repo.branches
+                    .iter()
+                    .map(
+                        |(name, sha)| serde_json::json!({ "name": name, "commit": { "sha": sha } }),
+                    )
+                    .collect(),
+            )),
+        ),
+        // The two Git-Data calls a branch is cut with: read the source's head,
+        // then create the new ref at that sha.
+        Some(&"git")
+            if rest.get(1) == Some(&"ref") && rest.get(2) == Some(&"heads") && method == "GET" =>
+        {
+            let wanted = rest[3..].join("/");
+            match repo.branches.get(&wanted) {
+                Some(sha) => (
+                    200,
+                    Payload::json(serde_json::json!({
+                        "ref": format!("refs/heads/{wanted}"),
+                        "object": { "sha": sha, "type": "commit" },
+                    })),
+                ),
+                None => not_found(),
+            }
+        }
+        Some(&"git") if rest.get(1) == Some(&"refs") && rest.len() == 2 && method == "POST" => {
+            if repo.read_only {
+                return refused();
+            }
+            let payload: serde_json::Value =
+                serde_json::from_str(body).expect("the store sends JSON");
+            let reference = payload
+                .get("ref")
+                .and_then(|reference| reference.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let sha = payload
+                .get("sha")
+                .and_then(|sha| sha.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = reference
+                .strip_prefix("refs/heads/")
+                .unwrap_or(&reference)
+                .to_string();
+            if repo.branches.contains_key(&name) {
+                return (
+                    422,
+                    Payload::json(serde_json::json!({ "message": "Reference already exists" })),
+                );
+            }
+            repo.branches.insert(name, sha.clone());
+            (
+                201,
+                Payload::json(serde_json::json!({
+                    "ref": reference,
+                    "object": { "sha": sha, "type": "commit" },
+                })),
+            )
+        }
+        Some(&"pulls") if rest.len() == 1 && method == "POST" => {
+            if repo.read_only {
+                return refused();
+            }
+            let payload: serde_json::Value =
+                serde_json::from_str(body).expect("the store sends JSON");
+            let head = payload
+                .get("head")
+                .and_then(|head| head.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let base = payload
+                .get("base")
+                .and_then(|base| base.as_str())
+                .unwrap_or_default()
+                .to_string();
+            // A branch that has not moved since it was cut has nothing to
+            // merge, and GitHub says so inside the Validation-Failed envelope
+            // rather than at its top level.
+            if repo.branches.get(&head) == repo.branches.get(&base) {
+                return (
+                    422,
+                    Payload::json(serde_json::json!({
+                        "message": "Validation Failed",
+                        "errors": [{
+                            "resource": "PullRequest",
+                            "field": "base",
+                            "code": "invalid",
+                            "message": format!("No commits between {base} and {head}"),
+                        }],
+                    })),
+                );
+            }
+            repo.pulls += 1;
+            let number = repo.pulls;
+            (
+                201,
+                Payload::json(serde_json::json!({
+                    "number": number,
+                    "html_url": format!("https://github.com/acme/diagrams/pull/{number}"),
+                    "head": { "ref": head },
+                    "base": { "ref": base },
+                })),
+            )
+        }
         Some(&"commits") if method == "GET" => (
             200,
             Payload::json(serde_json::json!([
@@ -663,10 +808,19 @@ impl Res {
 
 fn send(port: u16, method: &str, path: &str, body: Option<&str>, extra: &[(&str, &str)]) -> Res {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("store accepts connections");
+    // The webview's origin unless the case states another one: the store reads
+    // the first Origin header it finds, so this may never be sent twice.
+    let origin = extra
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Origin"))
+        .map_or(WEBVIEW_ORIGIN, |(_, value)| value);
     let mut head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nOrigin: {WEBVIEW_ORIGIN}\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nOrigin: {origin}\r\n"
     );
     for (name, value) in extra {
+        if name.eq_ignore_ascii_case("Origin") {
+            continue;
+        }
         head.push_str(&format!("{name}: {value}\r\n"));
     }
     head.push_str(&format!(
@@ -711,6 +865,10 @@ fn put(port: u16, path: &str, body: Option<&str>) -> Res {
     send(port, "PUT", path, body, &[])
 }
 
+fn post(port: u16, path: &str, body: Option<&str>) -> Res {
+    send(port, "POST", path, body, &[])
+}
+
 fn delete(port: u16, path: &str) -> Res {
     send(port, "DELETE", path, None, &[])
 }
@@ -733,6 +891,9 @@ fn binds_a_project_and_the_token_never_comes_back_out() {
             "repo": "diagrams",
             "path": "docs/diagrams",
             "branch": "main",
+            // The repository's default branch, learned by the same bind-time
+            // probe that learned the write bit (D28).
+            "baseBranch": "main",
             "apiBase": fixture.github.url,
             "hasToken": true,
             // The bind-time probe found a token that can write, and says so.
@@ -760,6 +921,7 @@ fn keeps_metadata_in_the_dotfile_and_the_token_out_of_the_data_tree() {
             "repo": "diagrams",
             "path": "docs/diagrams",
             "branch": "main",
+            "baseBranch": "main",
             "apiBase": fixture.github.url,
             // The probe's verdict is metadata, not a secret, so it lives here too.
             "canWrite": true,
@@ -818,9 +980,10 @@ fn defaults_the_branch_and_the_api_base() {
     assert_eq!(res.status, 200);
     // No token anywhere, so nothing was probed and nothing is claimed — and in
     // particular no request left the machine for the default API base.
+    // …and with nothing to ask, the base falls back to the bound branch.
     assert_eq!(
         res.json(),
-        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null })
+        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null, "baseBranch": "main" })
     );
 
     assert_eq!(
@@ -830,6 +993,7 @@ fn defaults_the_branch_and_the_api_base() {
             "repo": "diagrams",
             "path": "",
             "branch": "main",
+            "baseBranch": "main",
             "apiBase": "https://api.github.com",
             "hasToken": false,
             "canWrite": serde_json::Value::Null,
@@ -859,6 +1023,10 @@ fn refuses_bindings_it_cannot_trust() {
         ),
         (
             r#"{"owner":"acme","repo":"diagrams","branch":"a/../b"}"#,
+            "invalid branch",
+        ),
+        (
+            r#"{"owner":"acme","repo":"diagrams","baseBranch":"a/../b"}"#,
             "invalid branch",
         ),
         (
@@ -1355,7 +1523,7 @@ fn a_read_only_token_is_named_at_bind_time_and_remembered() {
     assert_eq!(put_binding.status, 200, "{}", put_binding.body);
     assert_eq!(
         put_binding.json(),
-        serde_json::json!({ "ok": true, "canWrite": false })
+        serde_json::json!({ "ok": true, "canWrite": false, "baseBranch": "main" })
     );
 
     // Persisted as metadata (not a secret), echoed by the binding route, and
@@ -1381,7 +1549,7 @@ fn a_read_only_token_is_named_at_bind_time_and_remembered() {
     let again = fixture.bind("readonly", serde_json::json!({}));
     assert_eq!(
         again.json(),
-        serde_json::json!({ "ok": true, "canWrite": true })
+        serde_json::json!({ "ok": true, "canWrite": true, "baseBranch": "main" })
     );
     assert_eq!(bindings_of(&fixture)["readonly"]["canWrite"], true);
 }
@@ -1483,6 +1651,9 @@ fn an_unreachable_repository_still_binds_and_says_why() {
         serde_json::json!({
             "ok": true,
             "canWrite": serde_json::Value::Null,
+            // Unreachable means the default branch could not be read either,
+            // so the base falls back to the branch being bound.
+            "baseBranch": "main",
             "warning": UNVERIFIED_MESSAGE,
         })
     );
@@ -1510,7 +1681,7 @@ fn no_token_means_no_probe_at_all() {
     assert_eq!(res.status, 200, "{}", res.body);
     assert_eq!(
         res.json(),
-        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null })
+        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null, "baseBranch": "main" })
     );
     // Nothing to ask with, so nothing was asked.
     assert!(fixture
@@ -1518,6 +1689,536 @@ fn no_token_means_no_probe_at_all() {
         .seen()
         .iter()
         .all(|entry| entry.url != "/repos/acme/diagrams"));
+}
+
+// ---------------------------------------------------------------------------
+// branch-aware sync (D28): drafting on a branch, and the pull request back
+// ---------------------------------------------------------------------------
+
+const BRANCH_NAME_MESSAGE: &str = "invalid branch name — letters, digits, ., _, - or / (max 200, no \"..\", no \"//\", no leading or trailing \"/\")";
+
+/// `POST /branches` with a body, which is how every branch is cut.
+fn create_branch(fixture: &Fixture, project: &str, body: serde_json::Value) -> Res {
+    post(
+        fixture.port(),
+        &format!("/api/projects/{project}/branches"),
+        Some(&body.to_string()),
+    )
+}
+
+fn pull_request(fixture: &Fixture, project: &str, body: serde_json::Value) -> Res {
+    post(
+        fixture.port(),
+        &format!("/api/projects/{project}/pull-request"),
+        Some(&body.to_string()),
+    )
+}
+
+fn binding_of(fixture: &Fixture, project: &str) -> serde_json::Value {
+    get(fixture.port(), &format!("/api/projects/{project}/binding")).json()
+}
+
+#[test]
+fn lists_the_repositorys_branches_marking_the_base_and_the_active_one() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+    fixture.github.set_branch("docent/older", "sha-older");
+
+    let res = get(fixture.port(), "/api/projects/work/branches");
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!([
+            { "name": "docent/older", "isBase": false, "isActive": false },
+            { "name": "main", "isBase": true, "isActive": true },
+        ])
+    );
+    // One page, and the store says so rather than walking the repository's
+    // release history to fill a select.
+    assert!(!fixture
+        .github
+        .requests_to("/branches?per_page=100")
+        .is_empty());
+}
+
+#[test]
+fn creates_a_branch_switches_to_it_and_keeps_the_base_and_the_token() {
+    let fixture = Fixture::new();
+    fixture.bound_project("drafts");
+
+    let created = create_branch(
+        &fixture,
+        "drafts",
+        serde_json::json!({ "name": "docent/diagrams-2026-08-20" }),
+    );
+    assert_eq!(created.status, 201, "{}", created.body);
+    assert_eq!(
+        created.json(),
+        serde_json::json!({ "ok": true, "branch": "docent/diagrams-2026-08-20" })
+    );
+    // Cut from the branch the project was on, at that branch's head.
+    let ref_write = fixture
+        .github
+        .requests_to("/git/refs")
+        .into_iter()
+        .rfind(|entry| entry.method == "POST")
+        .expect("a ref was created");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&ref_write.body).expect("JSON"),
+        serde_json::json!({
+            "ref": "refs/heads/docent/diagrams-2026-08-20",
+            "sha": "sha-main",
+        })
+    );
+
+    // The binding moved, and nothing else about it did.
+    let binding = binding_of(&fixture, "drafts");
+    assert_eq!(binding["branch"], "docent/diagrams-2026-08-20");
+    assert_eq!(binding["baseBranch"], "main");
+    assert_eq!(binding["hasToken"], true);
+    assert_eq!(binding["canWrite"], true);
+    assert_eq!(
+        bindings_of(&fixture)["drafts"],
+        serde_json::json!({
+            "owner": "acme",
+            "repo": "diagrams",
+            "path": "docs/diagrams",
+            "branch": "docent/diagrams-2026-08-20",
+            "baseBranch": "main",
+            "apiBase": fixture.github.url,
+            "canWrite": true,
+        })
+    );
+    let secrets: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&fixture.secrets_file).expect("secrets file"))
+            .expect("valid JSON");
+    assert_eq!(
+        secrets["drafts"], TOKEN,
+        "the token is untouched by a branch switch"
+    );
+
+    // …and the next save commits to the branch that was just created.
+    let saved = put(
+        fixture.port(),
+        "/api/projects/drafts/scenes/draft",
+        Some(SCENE),
+    );
+    assert_eq!(saved.status, 200, "{}", saved.body);
+    let write = fixture
+        .github
+        .requests_to("/contents/docs/diagrams/draft.excalidraw")
+        .into_iter()
+        .rfind(|entry| entry.method == "PUT")
+        .expect("a write");
+    let payload: serde_json::Value = serde_json::from_str(&write.body).expect("JSON");
+    assert_eq!(payload["branch"], "docent/diagrams-2026-08-20");
+
+    // The listing now says which branch is which.
+    assert_eq!(
+        get(fixture.port(), "/api/projects/drafts/branches").json(),
+        serde_json::json!([
+            { "name": "docent/diagrams-2026-08-20", "isBase": false, "isActive": true },
+            { "name": "main", "isBase": true, "isActive": false },
+        ])
+    );
+}
+
+#[test]
+fn switches_branches_with_a_binding_put_that_keeps_the_base_and_the_token() {
+    let fixture = Fixture::new();
+    fixture.bound_project("drafts");
+    fixture.github.set_branch("docent/existing", "sha-existing");
+
+    // Exactly what the client sends: the binding it already has, on another
+    // branch. No base, no token.
+    let switched = put(
+        fixture.port(),
+        "/api/projects/drafts/binding",
+        Some(
+            &serde_json::json!({
+                "owner": "acme",
+                "repo": "diagrams",
+                "path": "docs/diagrams",
+                "branch": "docent/existing",
+                "apiBase": fixture.github.url,
+            })
+            .to_string(),
+        ),
+    );
+    assert_eq!(switched.status, 200, "{}", switched.body);
+    assert_eq!(
+        switched.json(),
+        serde_json::json!({ "ok": true, "canWrite": true, "baseBranch": "main" })
+    );
+    let binding = binding_of(&fixture, "drafts");
+    assert_eq!(binding["branch"], "docent/existing");
+    assert_eq!(binding["baseBranch"], "main");
+    assert_eq!(binding["hasToken"], true);
+}
+
+#[test]
+fn refuses_a_branch_that_already_exists() {
+    let fixture = Fixture::new();
+    fixture.bound_project("dupes");
+    assert_eq!(
+        create_branch(
+            &fixture,
+            "dupes",
+            serde_json::json!({ "name": "docent/taken" })
+        )
+        .status,
+        201
+    );
+
+    let again = create_branch(
+        &fixture,
+        "dupes",
+        serde_json::json!({ "name": "docent/taken" }),
+    );
+    assert_eq!(again.status, 409, "{}", again.body);
+    assert_eq!(
+        again.json(),
+        serde_json::json!({ "error": "branch docent/taken already exists on acme/diagrams" })
+    );
+    // The project stays where it was rather than half-moving.
+    assert_eq!(binding_of(&fixture, "dupes")["branch"], "docent/taken");
+}
+
+#[test]
+fn refuses_branch_names_it_cannot_address() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+
+    for name in [
+        serde_json::json!(""),
+        serde_json::json!("-nope"),
+        serde_json::json!("docent/a..b"),
+        serde_json::json!("docent//b"),
+        serde_json::json!("docent/trailing/"),
+        serde_json::json!("x".repeat(201)),
+        serde_json::json!(42),
+        serde_json::Value::Null,
+    ] {
+        let res = create_branch(&fixture, "work", serde_json::json!({ "name": name }));
+        assert_eq!(res.status, 400, "{name}: {}", res.body);
+        assert_eq!(
+            res.json(),
+            serde_json::json!({ "error": BRANCH_NAME_MESSAGE })
+        );
+    }
+
+    // A body with no name at all is the same refusal.
+    let nameless = create_branch(&fixture, "work", serde_json::json!({}));
+    assert_eq!(nameless.status, 400, "{}", nameless.body);
+    assert_eq!(
+        nameless.json(),
+        serde_json::json!({ "error": BRANCH_NAME_MESSAGE })
+    );
+
+    // A source branch is held to the gate every branch is held to.
+    let bad_from = create_branch(
+        &fixture,
+        "work",
+        serde_json::json!({ "name": "docent/ok", "from": "a/../b" }),
+    );
+    assert_eq!(bad_from.status, 400);
+    assert!(
+        bad_from.json()["error"]
+            .as_str()
+            .expect("an error message")
+            .starts_with("invalid branch"),
+        "{}",
+        bad_from.body
+    );
+    assert!(
+        fixture.github.requests_to("/git/refs").is_empty(),
+        "nothing reached the repository"
+    );
+}
+
+#[test]
+fn names_a_source_branch_the_repository_does_not_have() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+
+    let res = create_branch(
+        &fixture,
+        "work",
+        serde_json::json!({ "name": "docent/orphan", "from": "nope" }),
+    );
+    assert_eq!(res.status, 404, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({ "error": "no branch named nope on acme/diagrams" })
+    );
+}
+
+#[test]
+fn opens_a_pull_request_from_the_active_branch_onto_the_base() {
+    let fixture = Fixture::new();
+    fixture.bound_project("review");
+    assert_eq!(
+        create_branch(
+            &fixture,
+            "review",
+            serde_json::json!({ "name": "docent/review-me" })
+        )
+        .status,
+        201
+    );
+    // The branch has moved since it was cut, so there is something to review.
+    fixture.github.set_branch("docent/review-me", "sha-review");
+
+    let res = pull_request(
+        &fixture,
+        "review",
+        serde_json::json!({ "title": "Diagrams: the checkout flow" }),
+    );
+    assert_eq!(res.status, 201, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({
+            "ok": true,
+            "url": "https://github.com/acme/diagrams/pull/1",
+            "number": 1,
+        })
+    );
+    let sent = fixture
+        .github
+        .requests_to("/pulls")
+        .into_iter()
+        .next_back()
+        .expect("a pull request");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&sent.body).expect("JSON"),
+        serde_json::json!({
+            "title": "Diagrams: the checkout flow",
+            "head": "docent/review-me",
+            "base": "main",
+            "body": "",
+        })
+    );
+
+    // Without a title it says what it is, which is all a diagram commit needs.
+    fixture
+        .github
+        .set_branch("docent/review-me", "sha-review-2");
+    assert_eq!(
+        pull_request(&fixture, "review", serde_json::json!({})).status,
+        201
+    );
+    let untitled = fixture
+        .github
+        .requests_to("/pulls")
+        .into_iter()
+        .next_back()
+        .expect("a pull request");
+    let payload: serde_json::Value = serde_json::from_str(&untitled.body).expect("JSON");
+    assert_eq!(payload["title"], "docent: update diagrams");
+}
+
+#[test]
+fn refuses_a_pull_request_from_the_base_branch_itself() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+
+    let res = pull_request(&fixture, "work", serde_json::json!({}));
+    assert_eq!(res.status, 400, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({
+            "error": "the active branch main is the base branch — create a branch first",
+        })
+    );
+    assert!(
+        fixture.github.requests_to("/pulls").is_empty(),
+        "nothing was asked of GitHub"
+    );
+}
+
+#[test]
+fn passes_githubs_refusal_through_when_there_is_nothing_to_merge() {
+    let fixture = Fixture::new();
+    fixture.bound_project("nodiff");
+    assert_eq!(
+        create_branch(
+            &fixture,
+            "nodiff",
+            serde_json::json!({ "name": "docent/untouched" })
+        )
+        .status,
+        201
+    );
+
+    let res = pull_request(&fixture, "nodiff", serde_json::json!({}));
+    assert_eq!(res.status, 409, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({ "error": "GitHub: No commits between main and docent/untouched" })
+    );
+}
+
+#[test]
+fn four_oh_fours_branch_routes_on_an_unbound_project() {
+    let fixture = Fixture::new();
+    assert_eq!(put(fixture.port(), "/api/projects/plain", None).status, 201);
+    let expected = serde_json::json!({ "error": "no GitHub binding for project: plain" });
+
+    let listed = get(fixture.port(), "/api/projects/plain/branches");
+    assert_eq!(listed.status, 404);
+    assert_eq!(listed.json(), expected);
+
+    let created = create_branch(
+        &fixture,
+        "plain",
+        serde_json::json!({ "name": "docent/nowhere" }),
+    );
+    assert_eq!(created.status, 404);
+    assert_eq!(created.json(), expected);
+
+    let pr = pull_request(&fixture, "plain", serde_json::json!({}));
+    assert_eq!(pr.status, 404);
+    assert_eq!(pr.json(), expected);
+}
+
+#[test]
+fn records_the_repositorys_default_branch_as_the_base_at_bind_time() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        put(fixture.port(), "/api/projects/trunky", None).status,
+        201
+    );
+    fixture.github.set_default_branch("trunk");
+
+    let res = fixture.bind("trunky", serde_json::json!({ "branch": "docent/wip" }));
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({ "ok": true, "canWrite": true, "baseBranch": "trunk" })
+    );
+    let binding = binding_of(&fixture, "trunky");
+    assert_eq!(binding["branch"], "docent/wip");
+    assert_eq!(binding["baseBranch"], "trunk");
+}
+
+#[test]
+fn falls_back_to_the_bound_branch_when_the_default_cannot_be_read() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        put(fixture.port(), "/api/projects/nobase", None).status,
+        201
+    );
+    fixture.github.set_repo_missing(true);
+
+    let res = fixture.bind("nobase", serde_json::json!({ "branch": "release/1" }));
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({
+            "ok": true,
+            "canWrite": serde_json::Value::Null,
+            "baseBranch": "release/1",
+            "warning": UNVERIFIED_MESSAGE,
+        })
+    );
+    fixture.github.set_repo_missing(false);
+    assert_eq!(binding_of(&fixture, "nobase")["baseBranch"], "release/1");
+}
+
+#[test]
+fn a_binding_written_before_branch_aware_sync_is_its_own_base() {
+    let fixture = Fixture::new();
+    fixture.bound_project("legacy");
+    // Rewrite the dotfile the way the store wrote it before D28 existed: no
+    // baseBranch at all. Nothing migrates it, and nothing has to.
+    let file = fixture.data_dir().join(".docent").join("bindings.json");
+    let mut stored: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&file).expect("the dotfile")).expect("valid JSON");
+    stored["legacy"]
+        .as_object_mut()
+        .expect("the binding")
+        .remove("baseBranch");
+    fs::write(
+        &file,
+        format!("{}\n", serde_json::to_string_pretty(&stored).unwrap()),
+    )
+    .expect("rewrote the dotfile");
+
+    let binding = binding_of(&fixture, "legacy");
+    assert_eq!(binding["branch"], "main");
+    assert_eq!(
+        binding["baseBranch"], "main",
+        "the branch it points at is its own base"
+    );
+    let listed = get(fixture.port(), "/api/projects/legacy/branches").json();
+    assert!(listed
+        .as_array()
+        .expect("array")
+        .iter()
+        .any(|entry| entry["isBase"] == true));
+
+    // So nothing is a draft, and no pull request is on offer.
+    let pr = pull_request(&fixture, "legacy", serde_json::json!({}));
+    assert_eq!(pr.status, 400);
+    assert_eq!(
+        pr.json(),
+        serde_json::json!({
+            "error": "the active branch main is the base branch — create a branch first",
+        })
+    );
+
+    // …and the next binding PUT records a base without being asked to.
+    assert_eq!(fixture.bind("legacy", serde_json::json!({})).status, 200);
+    assert_eq!(binding_of(&fixture, "legacy")["baseBranch"], "main");
+}
+
+#[test]
+fn refuses_branch_work_with_the_permission_that_is_missing() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+    fixture.github.set_read_only(true);
+
+    let created = create_branch(
+        &fixture,
+        "work",
+        serde_json::json!({ "name": "docent/read-only" }),
+    );
+    assert_eq!(created.status, 403, "{}", created.body);
+    assert_eq!(
+        created.json(),
+        serde_json::json!({ "error": WRITE_MESSAGE })
+    );
+    assert!(!fixture.github.has_branch("docent/read-only"));
+}
+
+/// The desktop store is cross-origin, and a POST with a `text/plain` body is
+/// not preflighted — so a page in the user's browser could fire one at the
+/// loopback port. It may not create a branch with it.
+#[test]
+fn branch_writes_refuse_an_origin_that_is_not_the_app() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+
+    for path in [
+        "/api/projects/work/branches",
+        "/api/projects/work/pull-request",
+    ] {
+        let res = send(
+            fixture.port(),
+            "POST",
+            path,
+            Some(r#"{"name":"docent/hostile"}"#),
+            &[("Origin", "https://evil.example")],
+        );
+        assert_eq!(res.status, 403, "{path}: {}", res.body);
+        assert_eq!(res.json(), serde_json::json!({ "error": "forbidden" }));
+    }
+    assert!(!fixture.github.has_branch("docent/hostile"));
+    // Reading which branches exist is not a write, and stays a plain GET.
+    assert_eq!(
+        get(fixture.port(), "/api/projects/work/branches").status,
+        200
+    );
 }
 
 // ---------------------------------------------------------------------------

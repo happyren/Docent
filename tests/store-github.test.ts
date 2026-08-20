@@ -1,8 +1,10 @@
 /**
- * Per-project GitHub sync (S14, D27) against the real store process: binding
- * CRUD, the secrets boundary (no token in the data tree, none in any response),
- * and the bound read/write path — listing, load, save-as-commit, SHA conflict,
- * delete, the blob fallback, and the 401 a missing or rejected token gets.
+ * Per-project GitHub sync (S14, D27, D28) against the real store process:
+ * binding CRUD, the secrets boundary (no token in the data tree, none in any
+ * response), the bound read/write path — listing, load, save-as-commit, SHA
+ * conflict, delete, the blob fallback, and the 401 a missing or rejected token
+ * gets — and the branch-aware half: branches, drafting on one, and the pull
+ * request back onto the base.
  *
  * GitHub itself is a plain `node:http` server in this file. It is not a
  * simulation of the API, only of the six calls the store makes, but it answers
@@ -15,11 +17,11 @@
  * The Rust store's mirror of this suite is `src-tauri/tests/store_github.rs`;
  * the two exist to keep the one contract honest across both implementations.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -69,6 +71,12 @@ class MockGitHub {
   readonly server: http.Server;
   readonly files = new Map<string, string>();
   readonly seen: SeenRequest[] = [];
+  /** Branch name → head sha, which is all the ref endpoints need (D28). */
+  branches = new Map<string, string>([["main", "sha-main"]]);
+  /** Pull request numbers, handed out in order like GitHub's. */
+  pulls = 0;
+  /** What `GET /repos/acme/diagrams` calls the repository's default branch. */
+  defaultBranch = "main";
   /** Bumped by every write, so the listing's ETag changes when it should. */
   version = 1;
   port = 0;
@@ -140,6 +148,9 @@ class MockGitHub {
         200,
         {
           full_name: "acme/diagrams",
+          // The same answer names the branch a pull request should target,
+          // which is where a binding's base comes from (D28).
+          default_branch: this.defaultBranch,
           permissions: {
             admin: false,
             maintain: false,
@@ -147,6 +158,67 @@ class MockGitHub {
             triage: false,
             pull: true,
           },
+        },
+      ];
+    }
+    if (rest[0] === "branches" && rest.length === 1 && req.method === "GET") {
+      // Alphabetical, as GitHub answers it.
+      return [
+        200,
+        [...this.branches.keys()].sort().map((name) => ({
+          name,
+          commit: { sha: this.branches.get(name) },
+        })),
+      ];
+    }
+    // The two Git-Data calls a branch is cut with: read the source's head,
+    // then create the new ref at that sha.
+    if (rest[0] === "git" && rest[1] === "ref" && rest[2] === "heads" && req.method === "GET") {
+      const wanted = rest.slice(3).join("/");
+      const sha = this.branches.get(wanted);
+      if (sha === undefined) return [404, { message: "Not Found" }];
+      return [200, { ref: `refs/heads/${wanted}`, object: { sha, type: "commit" } }];
+    }
+    if (rest[0] === "git" && rest[1] === "refs" && rest.length === 2 && req.method === "POST") {
+      if (this.readOnly) return this.refused();
+      const payload = JSON.parse(body) as { ref: string; sha: string };
+      const name = payload.ref.replace(/^refs\/heads\//, "");
+      if (this.branches.has(name)) {
+        return [422, { message: "Reference already exists" }];
+      }
+      this.branches.set(name, payload.sha);
+      return [201, { ref: payload.ref, object: { sha: payload.sha, type: "commit" } }];
+    }
+    if (rest[0] === "pulls" && rest.length === 1 && req.method === "POST") {
+      if (this.readOnly) return this.refused();
+      const payload = JSON.parse(body) as { head: string; base: string };
+      // A branch that has not moved since it was cut has nothing to merge, and
+      // GitHub says so inside the Validation-Failed envelope rather than at
+      // its top level.
+      if (this.branches.get(payload.head) === this.branches.get(payload.base)) {
+        return [
+          422,
+          {
+            message: "Validation Failed",
+            errors: [
+              {
+                resource: "PullRequest",
+                field: "base",
+                code: "invalid",
+                message: `No commits between ${payload.base} and ${payload.head}`,
+              },
+            ],
+          },
+        ];
+      }
+      this.pulls += 1;
+      return [
+        201,
+        {
+          number: this.pulls,
+          html_url: `https://github.com/acme/diagrams/pull/${this.pulls}`,
+          head: { ref: payload.head },
+          base: { ref: payload.base },
         },
       ];
     }
@@ -337,7 +409,7 @@ describe("GitHub binding", () => {
     const put = await bind("work");
     expect(put.status).toBe(200);
     // The bind-time probe found a token that can write, and says so.
-    expect(await put.json()).toEqual({ ok: true, canWrite: true });
+    expect(await put.json()).toEqual({ ok: true, canWrite: true, baseBranch: "main" });
 
     const get = await fetch(`${BASE}/api/projects/work/binding`);
     expect(get.status).toBe(200);
@@ -347,6 +419,9 @@ describe("GitHub binding", () => {
       repo: "diagrams",
       path: "docs/diagrams",
       branch: "main",
+      // The repository's default branch, learned by the same bind-time probe
+      // that learned the write bit (D28).
+      baseBranch: "main",
       apiBase: github.base,
       hasToken: true,
       canWrite: true,
@@ -364,6 +439,7 @@ describe("GitHub binding", () => {
       repo: "diagrams",
       path: "docs/diagrams",
       branch: "main",
+      baseBranch: "main",
       apiBase: github.base,
       // The probe's verdict is metadata, not a secret, so it lives here too.
       canWrite: true,
@@ -402,13 +478,15 @@ describe("GitHub binding", () => {
     expect(put.status).toBe(200);
     // No token anywhere, so nothing was probed and nothing is claimed — and in
     // particular no request left the machine for the default API base.
-    expect(await put.json()).toEqual({ ok: true, canWrite: null });
+    // …and with nothing to ask, the base falls back to the bound branch.
+    expect(await put.json()).toEqual({ ok: true, canWrite: null, baseBranch: "main" });
     const binding = await (await fetch(`${BASE}/api/projects/defaults/binding`)).json();
     expect(binding).toEqual({
       owner: "acme",
       repo: "diagrams",
       path: "",
       branch: "main",
+      baseBranch: "main",
       apiBase: "https://api.github.com",
       hasToken: false,
       canWrite: null,
@@ -426,6 +504,7 @@ describe("GitHub binding", () => {
       [{ owner: "acme", repo: "diagrams", path: "a/../b" }, "invalid path"],
       [{ owner: "acme", repo: "diagrams", branch: "no spaces" }, "invalid branch"],
       [{ owner: "acme", repo: "diagrams", branch: "a/../b" }, "invalid branch"],
+      [{ owner: "acme", repo: "diagrams", baseBranch: "a/../b" }, "invalid branch"],
       [{ owner: "acme", repo: "diagrams", apiBase: "ftp://example.com" }, "invalid apiBase"],
       [{ owner: "acme", repo: "diagrams", apiBase: "not a url" }, "invalid apiBase"],
       [{ owner: "acme", repo: "diagrams", token: "has space" }, "invalid token"],
@@ -727,7 +806,7 @@ describe("read-only tokens", () => {
     await readOnly(async () => {
       const put = await bind("readonly");
       expect(put.status).toBe(200);
-      expect(await put.json()).toEqual({ ok: true, canWrite: false });
+      expect(await put.json()).toEqual({ ok: true, canWrite: false, baseBranch: "main" });
     });
 
     // Persisted as metadata (not a secret), echoed by the binding route, and
@@ -752,7 +831,7 @@ describe("read-only tokens", () => {
     // …and a token that can write clears the mark again, which is the loop the
     // message asks the user to close.
     const again = await bind("readonly");
-    expect(await again.json()).toEqual({ ok: true, canWrite: true });
+    expect(await again.json()).toEqual({ ok: true, canWrite: true, baseBranch: "main" });
     expect((await bindingsFile()).readonly.canWrite).toBe(true);
   });
 
@@ -812,6 +891,9 @@ describe("read-only tokens", () => {
       expect(await put.json()).toEqual({
         ok: true,
         canWrite: null,
+        // Unreachable means the default branch could not be read either, so
+        // the base falls back to the branch being bound.
+        baseBranch: "main",
         warning: UNVERIFIED_MESSAGE,
       });
     } finally {
@@ -833,7 +915,7 @@ describe("read-only tokens", () => {
     await fetch(`${BASE}/api/projects/unprobed`, { method: "PUT" });
     const put = await bind("unprobed", { token: undefined });
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ ok: true, canWrite: null });
+    expect(await put.json()).toEqual({ ok: true, canWrite: null, baseBranch: "main" });
     expect(probes(), "nothing to ask with, so nothing was asked").toBe(before);
     await fetch(`${BASE}/api/projects/unprobed`, { method: "DELETE" });
   });
@@ -873,5 +955,340 @@ describe("unbound projects", () => {
       (await fetch(`${BASE}/api/projects/nope/scenes/x`, { method: "PUT", body: SCENE }))
         .status,
     ).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// branch-aware sync (D28): drafting on a branch, and the pull request back
+// ---------------------------------------------------------------------------
+
+describe("branches and pull requests", () => {
+  const BRANCH_NAME_MESSAGE =
+    'invalid branch name — letters, digits, ., _, - or / (max 200, no "..", no "//", ' +
+    'no leading or trailing "/")';
+
+  // `dataDir` only exists once the fixture has run, so this is a call.
+  const bindingsFile = () => path.join(dataDir, ".docent", "bindings.json");
+
+  const branches = (project: string) =>
+    fetch(`${BASE}/api/projects/${project}/branches`);
+
+  const createBranch = (project: string, body: unknown) =>
+    fetch(`${BASE}/api/projects/${project}/branches`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+
+  const pullRequest = (project: string, body: unknown = {}) =>
+    fetch(`${BASE}/api/projects/${project}/pull-request`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+
+  const bindingOf = async (project: string) =>
+    (await (await fetch(`${BASE}/api/projects/${project}/binding`)).json()) as {
+      branch: string;
+      baseBranch: string;
+      hasToken: boolean;
+      canWrite: boolean | null;
+    };
+
+  // Every case starts from a repository with one branch and no pull requests,
+  // so what it asserts about is only ever what it did itself.
+  beforeEach(() => {
+    github.branches = new Map([["main", "sha-main"]]);
+    github.pulls = 0;
+  });
+
+  it("lists the repository's branches, marking the base and the active one", async () => {
+    github.branches.set("docent/older", "sha-older");
+    const res = await branches("work");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([
+      { name: "docent/older", isBase: false, isActive: false },
+      { name: "main", isBase: true, isActive: true },
+    ]);
+    // One page, and the store says so rather than walking the repository's
+    // release history to fill a select.
+    expect(github.requestsTo("/branches?per_page=100").length).toBeGreaterThan(0);
+  });
+
+  it("creates a branch, switches to it, and keeps the base and the token", async () => {
+    await fetch(`${BASE}/api/projects/drafts`, { method: "PUT" });
+    await bind("drafts");
+
+    const created = await createBranch("drafts", { name: "docent/diagrams-2026-08-20" });
+    expect(created.status).toBe(201);
+    expect(await created.json()).toEqual({
+      ok: true,
+      branch: "docent/diagrams-2026-08-20",
+    });
+    // Cut from the branch the project was on, at that branch's head.
+    const ref = github
+      .requestsTo("/git/refs")
+      .filter((entry) => entry.method === "POST")
+      .at(-1);
+    expect(JSON.parse(ref?.body ?? "{}")).toEqual({
+      ref: "refs/heads/docent/diagrams-2026-08-20",
+      sha: "sha-main",
+    });
+
+    // The binding moved, and nothing else about it did.
+    const binding = await bindingOf("drafts");
+    expect(binding.branch).toBe("docent/diagrams-2026-08-20");
+    expect(binding.baseBranch).toBe("main");
+    expect(binding.hasToken).toBe(true);
+    expect(binding.canWrite).toBe(true);
+    const stored = JSON.parse(await readFile(bindingsFile(), "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(stored.drafts).toEqual({
+      owner: "acme",
+      repo: "diagrams",
+      path: "docs/diagrams",
+      branch: "docent/diagrams-2026-08-20",
+      baseBranch: "main",
+      apiBase: github.base,
+      canWrite: true,
+    });
+    const secrets = JSON.parse(await readFile(secretsFile, "utf8")) as Record<string, string>;
+    expect(secrets.drafts, "the token is untouched by a branch switch").toBe(TOKEN);
+
+    // …and the next save commits to the branch that was just created.
+    const saved = await fetch(`${BASE}/api/projects/drafts/scenes/draft`, {
+      method: "PUT",
+      body: SCENE,
+    });
+    expect(saved.status).toBe(200);
+    const write = github.requestsTo("/contents/docs/diagrams/draft.excalidraw").at(-1);
+    expect((JSON.parse(write?.body ?? "{}") as { branch: string }).branch).toBe(
+      "docent/diagrams-2026-08-20",
+    );
+    // The listing now says which branch is which.
+    expect(await (await branches("drafts")).json()).toEqual([
+      { name: "docent/diagrams-2026-08-20", isBase: false, isActive: true },
+      { name: "main", isBase: true, isActive: false },
+    ]);
+  });
+
+  it("switches branches with a binding PUT that keeps the base and the token", async () => {
+    github.branches.set("docent/existing", "sha-existing");
+    const switched = await fetch(`${BASE}/api/projects/drafts/binding`, {
+      method: "PUT",
+      // Exactly what the client sends: the binding it already has, on another
+      // branch. No base, no token.
+      body: JSON.stringify({
+        owner: "acme",
+        repo: "diagrams",
+        path: "docs/diagrams",
+        branch: "docent/existing",
+        apiBase: github.base,
+      }),
+    });
+    expect(switched.status).toBe(200);
+    expect(await switched.json()).toEqual({
+      ok: true,
+      canWrite: true,
+      baseBranch: "main",
+    });
+    const binding = await bindingOf("drafts");
+    expect(binding.branch).toBe("docent/existing");
+    expect(binding.baseBranch).toBe("main");
+    expect(binding.hasToken).toBe(true);
+  });
+
+  it("refuses a branch that already exists", async () => {
+    await fetch(`${BASE}/api/projects/dupes`, { method: "PUT" });
+    await bind("dupes");
+    expect((await createBranch("dupes", { name: "docent/taken" })).status).toBe(201);
+
+    const again = await createBranch("dupes", { name: "docent/taken" });
+    expect(again.status).toBe(409);
+    expect(await again.json()).toEqual({
+      error: "branch docent/taken already exists on acme/diagrams",
+    });
+    // The project stays where it was rather than half-moving.
+    expect((await bindingOf("dupes")).branch).toBe("docent/taken");
+  });
+
+  it("refuses branch names it cannot address", async () => {
+    const refs = () => github.requestsTo("/git/refs").length;
+    const before = refs();
+    for (const name of [
+      "",
+      "-nope",
+      "docent/a..b",
+      "docent//b",
+      "docent/trailing/",
+      "x".repeat(201),
+      42,
+      null,
+      undefined,
+    ]) {
+      const res = await createBranch("work", { name });
+      expect(res.status, String(name)).toBe(400);
+      expect(await res.json()).toEqual({ error: BRANCH_NAME_MESSAGE });
+    }
+    // A source branch is held to the gate every branch is held to.
+    const badFrom = await createBranch("work", { name: "docent/ok", from: "a/../b" });
+    expect(badFrom.status).toBe(400);
+    expect(((await badFrom.json()) as { error: string }).error).toContain("invalid branch");
+    expect(refs(), "nothing reached the repository").toBe(before);
+  });
+
+  it("names a source branch the repository does not have", async () => {
+    const res = await createBranch("work", { name: "docent/orphan", from: "nope" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({
+      error: "no branch named nope on acme/diagrams",
+    });
+  });
+
+  it("opens a pull request from the active branch onto the base", async () => {
+    await fetch(`${BASE}/api/projects/review`, { method: "PUT" });
+    await bind("review");
+    expect((await createBranch("review", { name: "docent/review-me" })).status).toBe(201);
+    // The branch has moved since it was cut, so there is something to review.
+    github.branches.set("docent/review-me", "sha-review");
+
+    const res = await pullRequest("review", { title: "Diagrams: the checkout flow" });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toEqual({
+      ok: true,
+      url: "https://github.com/acme/diagrams/pull/1",
+      number: 1,
+    });
+    const sent = github.requestsTo("/pulls").at(-1);
+    expect(JSON.parse(sent?.body ?? "{}")).toEqual({
+      title: "Diagrams: the checkout flow",
+      head: "docent/review-me",
+      base: "main",
+      body: "",
+    });
+
+    // Without a title it says what it is, which is all a diagram commit needs.
+    github.branches.set("docent/review-me", "sha-review-2");
+    expect((await pullRequest("review")).status).toBe(201);
+    expect(
+      (JSON.parse(github.requestsTo("/pulls").at(-1)?.body ?? "{}") as { title: string })
+        .title,
+    ).toBe("docent: update diagrams");
+  });
+
+  it("refuses a pull request from the base branch itself", async () => {
+    const before = github.requestsTo("/pulls").length;
+    const res = await pullRequest("work");
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "the active branch main is the base branch — create a branch first",
+    });
+    expect(github.requestsTo("/pulls").length, "nothing was asked of GitHub").toBe(
+      before,
+    );
+  });
+
+  it("passes GitHub's refusal through when there is nothing to merge", async () => {
+    await fetch(`${BASE}/api/projects/nodiff`, { method: "PUT" });
+    await bind("nodiff");
+    expect((await createBranch("nodiff", { name: "docent/untouched" })).status).toBe(201);
+
+    const res = await pullRequest("nodiff");
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "GitHub: No commits between main and docent/untouched",
+    });
+  });
+
+  it("404s branch routes on an unbound project", async () => {
+    const expected = { error: "no GitHub binding for project: plain" };
+    const listed = await branches("plain");
+    expect(listed.status).toBe(404);
+    expect(await listed.json()).toEqual(expected);
+
+    const created = await createBranch("plain", { name: "docent/nowhere" });
+    expect(created.status).toBe(404);
+    expect(await created.json()).toEqual(expected);
+
+    const pr = await pullRequest("plain");
+    expect(pr.status).toBe(404);
+    expect(await pr.json()).toEqual(expected);
+  });
+
+  it("records the repository's default branch as the base at bind time", async () => {
+    github.defaultBranch = "trunk";
+    try {
+      await fetch(`${BASE}/api/projects/trunky`, { method: "PUT" });
+      const put = await bind("trunky", { branch: "docent/wip" });
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({
+        ok: true,
+        canWrite: true,
+        baseBranch: "trunk",
+      });
+      const binding = await bindingOf("trunky");
+      expect(binding.branch).toBe("docent/wip");
+      expect(binding.baseBranch).toBe("trunk");
+    } finally {
+      github.defaultBranch = "main";
+    }
+  });
+
+  it("falls back to the bound branch when the default cannot be read", async () => {
+    github.repoMissing = true;
+    try {
+      await fetch(`${BASE}/api/projects/nobase`, { method: "PUT" });
+      const put = await bind("nobase", { branch: "release/1" });
+      expect(await put.json()).toEqual({
+        ok: true,
+        canWrite: null,
+        baseBranch: "release/1",
+        warning: UNVERIFIED_MESSAGE,
+      });
+    } finally {
+      github.repoMissing = false;
+    }
+    expect((await bindingOf("nobase")).baseBranch).toBe("release/1");
+  });
+
+  it("treats a binding written before branch-aware sync as its own base", async () => {
+    await fetch(`${BASE}/api/projects/legacy`, { method: "PUT" });
+    await bind("legacy");
+    // Rewrite the dotfile the way the store wrote it before D28 existed: no
+    // baseBranch at all. Nothing migrates it, and nothing has to.
+    const stored = JSON.parse(await readFile(bindingsFile(), "utf8")) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    delete stored.legacy.baseBranch;
+    await writeFile(bindingsFile(), JSON.stringify(stored, null, 2) + "\n", "utf8");
+
+    const binding = await bindingOf("legacy");
+    expect(binding.branch).toBe("main");
+    expect(binding.baseBranch, "the branch it points at is its own base").toBe("main");
+    const listed = (await (await branches("legacy")).json()) as { isBase: boolean }[];
+    expect(listed.find((entry) => entry.isBase)).toBeDefined();
+    // So nothing is a draft, and no pull request is on offer.
+    const pr = await pullRequest("legacy");
+    expect(pr.status).toBe(400);
+    expect(await pr.json()).toEqual({
+      error: "the active branch main is the base branch — create a branch first",
+    });
+
+    // …and the next binding PUT records a base without being asked to.
+    await bind("legacy");
+    expect((await bindingOf("legacy")).baseBranch).toBe("main");
+  });
+
+  it("refuses branch work with the permission that is missing", async () => {
+    github.readOnly = true;
+    try {
+      const created = await createBranch("work", { name: "docent/read-only" });
+      expect(created.status).toBe(403);
+      expect(await created.json()).toEqual({ error: WRITE_MESSAGE });
+    } finally {
+      github.readOnly = false;
+    }
+    expect(github.branches.has("docent/read-only")).toBe(false);
   });
 });

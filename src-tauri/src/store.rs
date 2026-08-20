@@ -412,6 +412,33 @@ fn dispatch(
         }
     }
 
+    // Branch routes (S14, D28). Only a bound project has branches at all, so
+    // an unbound one answers the same 404 its binding does.
+    if segments.len() == 4 && part(3) == Some("branches") {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        if method == Method::Get {
+            let (binding, token) = bound_or_404(context, project)?;
+            let branches = github::list_branches(&binding, &token)?;
+            return Ok(Reply::ok(serde_json::to_string(&branches).map_err(json)?));
+        }
+        if method == Method::Post {
+            require_app_origin(origin)?;
+            let (binding, token) = bound_or_404(context, project)?;
+            let body = read_body(request)?;
+            return create_branch(context, project, &binding, &token, &body);
+        }
+    }
+
+    if segments.len() == 4 && part(3) == Some("pull-request") && method == Method::Post {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        require_app_origin(origin)?;
+        let (binding, token) = bound_or_404(context, project)?;
+        let body = read_body(request)?;
+        return open_pull_request(&binding, &token, &body);
+    }
+
     if segments.len() == 4 && part(3) == Some("scenes") && method == Method::Get {
         let project = &segments[2];
         if let Some((binding, token)) = bound(context, project)? {
@@ -518,6 +545,106 @@ fn bound(context: &Context, project: &str) -> Result<Option<(Binding, String)>> 
     Ok(Some((binding, token)))
 }
 
+/// The same, for routes that only exist on a bound project (D28).
+fn bound_or_404(context: &Context, project: &str) -> Result<(Binding, String)> {
+    bound(context, project)?
+        .ok_or_else(|| HttpError::new(404, format!("no GitHub binding for project: {project}")))
+}
+
+/// A POST with a `text/plain` body is a "simple request": no preflight, so the
+/// CORS answer alone would not stop a page in the user's browser from firing
+/// one at this store's loopback port. It could not read the reply — but the
+/// branch would exist, and the pull request would be open. So a request that
+/// names an origin has to name this app's, exactly as `/desktop` requires.
+/// An absent Origin is not a browser at all (curl, the parity harness).
+fn require_app_origin(origin: Option<&str>) -> Result<()> {
+    match origin {
+        Some(origin) if !ALLOWED_ORIGINS.contains(&origin) => Err(HttpError::new(403, "forbidden")),
+        _ => Ok(()),
+    }
+}
+
+/// Create a branch off another one and start drafting on it. Creating without
+/// switching would leave the user editing the base they just branched away
+/// from, which is the mistake this route exists to prevent.
+fn create_branch(
+    context: &Context,
+    project: &str,
+    binding: &Binding,
+    token: &str,
+    body: &str,
+) -> Result<Reply> {
+    let input = object_body(body, "a branch")?;
+    let name = match input.get("name") {
+        Some(serde_json::Value::String(name)) => name.clone(),
+        _ => return Err(HttpError::new(400, github::BRANCH_NAME_ERROR)),
+    };
+    github::check_new_branch(&name)?;
+    let from = match input.get("from") {
+        None | Some(serde_json::Value::Null) => binding.branch.clone(),
+        Some(serde_json::Value::String(from)) if from.is_empty() => binding.branch.clone(),
+        Some(serde_json::Value::String(from)) => {
+            github::check_branch(from)?;
+            from.clone()
+        }
+        Some(_) => return Err(HttpError::new(400, github::BRANCH_ERROR)),
+    };
+    github::create_branch(binding, token, &name, &from)?;
+    set_active_branch(context, project, &name)?;
+    Ok(Reply::new(
+        201,
+        serde_json::to_string(&BranchAnswer {
+            ok: true,
+            branch: name,
+        })
+        .map_err(json)?,
+    ))
+}
+
+fn open_pull_request(binding: &Binding, token: &str, body: &str) -> Result<Reply> {
+    let input = object_body(body, "a pull request")?;
+    let title = input.get("title").and_then(|title| title.as_str());
+    let description = input.get("body").and_then(|body| body.as_str());
+    let (url, number) = github::open_pull_request(binding, token, title, description)?;
+    Ok(Reply::new(
+        201,
+        serde_json::to_string(&PullRequestAnswer {
+            ok: true,
+            url,
+            number,
+        })
+        .map_err(json)?,
+    ))
+}
+
+/// The body of a POST, as an object; anything else is the client's mistake.
+fn object_body(body: &str, what: &str) -> Result<serde_json::Value> {
+    if body.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
+    if !parsed.is_object() {
+        return Err(HttpError::new(400, format!("body is not {what}")));
+    }
+    Ok(parsed)
+}
+
+/// Point the binding at another branch, keeping everything else exactly as it
+/// is — the base, the probe's verdict, the token (which lives elsewhere
+/// entirely).
+fn set_active_branch(context: &Context, project: &str, branch: &str) -> Result<()> {
+    let mut bindings = github::load_bindings(&context.data_dir);
+    if let Some(binding) = bindings.get_mut(project) {
+        binding.branch = branch.to_string();
+        github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
+    }
+    // A different branch is a different set of scenes: whatever this process
+    // remembered about the old one is now wrong rather than merely stale.
+    context.cache.forget_all(project);
+    Ok(())
+}
+
 /// What a stored binding answers with. A struct rather than a `json!` literal
 /// so the key order is the reference store's, which sorts nothing.
 #[derive(serde::Serialize)]
@@ -525,8 +652,25 @@ struct BindingAnswer {
     ok: bool,
     #[serde(rename = "canWrite")]
     can_write: Option<bool>,
+    #[serde(rename = "baseBranch")]
+    base_branch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+}
+
+/// What a created branch answers with (D28).
+#[derive(serde::Serialize)]
+struct BranchAnswer {
+    ok: bool,
+    branch: String,
+}
+
+/// …and an opened pull request: where to go and look at it.
+#[derive(serde::Serialize)]
+struct PullRequestAnswer {
+    ok: bool,
+    url: String,
+    number: i64,
 }
 
 fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
@@ -548,6 +692,24 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
     };
     binding.can_write = probe.can_write;
     let mut bindings = github::load_bindings(&context.data_dir);
+    // The base is sticky, and every step of this fallback is a real case: what
+    // the client stated, else what this project already recorded — which is
+    // what makes switching branches a PUT of `{ branch }` and nothing else —
+    // else the repository's own default branch as the probe just read it, else
+    // the branch being bound, because a store that cannot ask still has to
+    // answer.
+    let base_branch = binding
+        .base_branch
+        .clone()
+        .or_else(|| {
+            bindings
+                .get(project)
+                .and_then(|stored| stored.base_branch.clone())
+                .filter(|base| !base.is_empty())
+        })
+        .or_else(|| probe.default_branch.clone())
+        .unwrap_or_else(|| binding.branch.clone());
+    binding.base_branch = Some(base_branch.clone());
     bindings.insert(project.to_string(), binding);
     github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
     if let Some(token) = new_token {
@@ -560,6 +722,7 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         serde_json::to_string(&BindingAnswer {
             ok: true,
             can_write: probe.can_write,
+            base_branch,
             warning: probe.warning,
         })
         .map_err(json)?,

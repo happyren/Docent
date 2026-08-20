@@ -104,6 +104,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - Any project can **bind to a GitHub repository** — the diagrams then live next to the code they describe, with the history, review and team access the repository already has.
 - Every save is a **commit** (`docent: update work/checkout`); opening fetches the current file; deleting a scene commits its removal. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
 - Writes carry the file's SHA, so a scene someone changed on GitHub since you opened it is a **loud conflict**, never a silent overwrite: *"scene changed on GitHub since it was loaded — reload it to get the latest."*
+- **Branch, then propose.** Pick the branch a project works on, cut a new one for a set of changes, and open a **pull request** back onto the base — diagrams get reviewed the way the code beside them is.
 - Works against **GitHub Enterprise** too: the binding carries its own API base (`https://<host>/api/v3`).
 - Auth is a **fine-grained personal access token** with **Contents: Read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
 - Connecting **checks what the token can do** and says so: a token with read access but no write access binds as **read-only** — the scenes open, and the project wears a `read-only` tag — instead of failing later with a mystery on the first save.
@@ -407,9 +408,21 @@ tag in the list until a token that can write replaces it. A save that GitHub
 refuses says exactly what is missing: *"GitHub rejected the write — the token
 needs Contents: Read and write on `owner/repo`"*.
 
-**Where secrets live.** Binding metadata — owner, repo, path, branch, API base —
-goes in one dotfile at the data root, `data/.docent/bindings.json`, and carries
-no credentials, so a portfolio stays copyable and rsync-able. Tokens are kept
+**Branches and pull requests.** A bound project shows a **Branch** row: the
+branch its scenes come from and go to, with the repository's default marked
+`(base)`. Switching branches switches what the scene grid shows and where the
+next save commits. **＋ Branch** cuts a new branch off the current one
+(suggested name: `docent/diagrams-<date>`) and moves the project onto it in the
+same step, so drafts never land on `main` by accident. Once a project is off
+its base, **Open PR** opens a pull request from the working branch onto it and
+hands back the URL — the diagrams then go through exactly the review the code
+in that repository goes through. A project bound before this existed sits on
+its own base until you branch, and behaves as it always did.
+
+**Where secrets live.** Binding metadata — owner, repo, path, branch, base
+branch, API base — goes in one dotfile at the data root,
+`data/.docent/bindings.json`, and carries no credentials, so a portfolio stays
+copyable and rsync-able. Tokens are kept
 outside the data tree entirely:
 
 | | Token file |
@@ -498,6 +511,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 8. **Intent is captured, never guessed.** Meaning enters through the legend, `customData` annotations, and frame narratives at authoring time — it is not recoverable from the data model afterward. Narratives are the single source for both export and tour narration.
 9. **Completeness = round-trip comprehension.** "The export carries the diagram's meaning" is defined by a scored question bank in CI (CONSTITUTION.md Q6) — measured, not asserted.
 10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and SHA-based conflict detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
+11. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
 
 ---
 

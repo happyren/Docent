@@ -60,7 +60,9 @@ const EXT: &str = ".excalidraw";
 
 const PATH_ERROR: &str =
     "invalid path — a repository directory prefix, no \"..\", no backslashes (max 512)";
-const BRANCH_ERROR: &str = "invalid branch — letters, digits, ., _, - or / (max 255, no \"..\")";
+pub const BRANCH_ERROR: &str =
+    "invalid branch — letters, digits, ., _, - or / (max 255, no \"..\")";
+pub const BRANCH_NAME_ERROR: &str = "invalid branch name — letters, digits, ., _, - or / (max 200, no \"..\", no \"//\", no leading or trailing \"/\")";
 
 // ---------------------------------------------------------------------------
 // the binding
@@ -75,6 +77,16 @@ pub struct Binding {
     pub repo: String,
     pub path: String,
     pub branch: String,
+    /// The branch a draft is measured against (D28). Absent on a binding
+    /// written before branch-aware sync existed, and that binding keeps
+    /// behaving exactly as it did: base and branch are then the same thing,
+    /// nothing is a draft, and no pull request is offered. No migration step.
+    #[serde(
+        rename = "baseBranch",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub base_branch: Option<String>,
     #[serde(rename = "apiBase")]
     pub api_base: String,
     /// What the last bind-time probe learned about writing to this repository.
@@ -95,6 +107,8 @@ pub struct PublicBinding<'a> {
     repo: &'a str,
     path: &'a str,
     branch: &'a str,
+    #[serde(rename = "baseBranch")]
+    base_branch: &'a str,
     #[serde(rename = "apiBase")]
     api_base: &'a str,
     #[serde(rename = "hasToken")]
@@ -110,11 +124,32 @@ impl Binding {
             repo: &self.repo,
             path: &self.path,
             branch: &self.branch,
+            base_branch: self.base(),
             api_base: &self.api_base,
             has_token,
             can_write: self.can_write,
         }
     }
+
+    /// The branch a pull request would target: what was recorded, or — for a
+    /// binding written before D28 — the branch itself.
+    pub fn base(&self) -> &str {
+        match &self.base_branch {
+            Some(base) if !base.is_empty() => base,
+            _ => &self.branch,
+        }
+    }
+}
+
+/// One branch as the store states it: GitHub's name, plus the two facts the
+/// caller would otherwise have to work out from the binding.
+#[derive(serde::Serialize)]
+pub struct BranchInfo {
+    name: String,
+    #[serde(rename = "isBase")]
+    is_base: bool,
+    #[serde(rename = "isActive")]
+    is_active: bool,
 }
 
 /// One scene as GitHub lists it. `sha` is the conflict token a later write
@@ -186,7 +221,9 @@ fn normalize_repo_path(raw: &str) -> Result<String> {
     Ok(cleaned.to_string())
 }
 
-fn check_branch(branch: &str) -> Result<()> {
+/// A branch this store may address: an existing one, `^[A-Za-z0-9._/-]{1,255}$`
+/// with no `..` and no leading or trailing `/`.
+pub fn check_branch(branch: &str) -> Result<()> {
     let ok = !branch.is_empty()
         && branch.len() <= 255
         && branch
@@ -199,6 +236,28 @@ fn check_branch(branch: &str) -> Result<()> {
         Ok(())
     } else {
         Err(Failure::bad(BRANCH_ERROR))
+    }
+}
+
+/// A branch this store may *create* (D28) — `^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$`
+/// with no `..`, no `//` and no trailing `/`. Stricter than one it merely
+/// addresses: it must start with a letter or a digit and stay short enough to
+/// read in a select.
+pub fn check_new_branch(name: &str) -> Result<()> {
+    let bytes = name.as_bytes();
+    let ok = !bytes.is_empty()
+        && bytes.len() <= 200
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes[1..]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'/' | b'-'))
+        && !name.contains("..")
+        && !name.contains("//")
+        && !name.ends_with('/');
+    if ok {
+        Ok(())
+    } else {
+        Err(Failure::bad(BRANCH_NAME_ERROR))
     }
 }
 
@@ -285,6 +344,15 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
     let branch =
         text_or(input, "branch", DEFAULT_BRANCH).ok_or_else(|| Failure::bad(BRANCH_ERROR))?;
     check_branch(&branch)?;
+    // Stating the base is allowed but never required: the caller resolves it
+    // from the repository when the client leaves it out (D28).
+    let stated_base = text_or(input, "baseBranch", "").ok_or_else(|| Failure::bad(BRANCH_ERROR))?;
+    let base_branch = if stated_base.is_empty() {
+        None
+    } else {
+        check_branch(&stated_base)?;
+        Some(stated_base)
+    };
     let api_base = text_or(input, "apiBase", DEFAULT_API_BASE)
         .ok_or_else(|| Failure::bad("invalid apiBase — must be an http(s) URL"))?
         .trim_end_matches('/')
@@ -295,6 +363,7 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
         repo,
         path,
         branch,
+        base_branch,
         api_base,
         // Never taken from the request body: only a probe may set this.
         can_write: None,
@@ -679,6 +748,10 @@ fn write_failure(binding: &Binding, status: u16, text: &str) -> Failure {
 /// nothing about permissions"; with one, "GitHub could not be asked".
 pub struct Probe {
     pub can_write: Option<bool>,
+    /// The repository's own default branch, which is what a pull request
+    /// should target (D28) — learned from the call the probe was already
+    /// making rather than a second one.
+    pub default_branch: Option<String>,
     pub warning: Option<String>,
 }
 
@@ -687,6 +760,7 @@ impl Probe {
     pub fn unknown() -> Self {
         Self {
             can_write: None,
+            default_branch: None,
             warning: None,
         }
     }
@@ -705,6 +779,7 @@ impl Probe {
 pub fn probe_access(binding: &Binding, token: &str) -> Probe {
     let unverified = || Probe {
         can_write: None,
+        default_branch: None,
         warning: Some(unverified_access(&binding.owner, &binding.repo)),
     };
     // Unreachable, refused, timed out: the repository may be perfectly fine
@@ -715,18 +790,27 @@ pub fn probe_access(binding: &Binding, token: &str) -> Probe {
     if reply.status != 200 {
         return unverified();
     }
+    let body = serde_json::from_str::<serde_json::Value>(&reply.text).ok();
     // An answer without a permissions object (an unauthenticated read, some
     // Enterprise versions) says nothing either way — and guessing "writable"
     // there is exactly the lie this probe exists to stop.
-    let can_write = serde_json::from_str::<serde_json::Value>(&reply.text)
-        .ok()
-        .and_then(|body| {
-            body.get("permissions")
-                .and_then(|permissions| permissions.get("push"))
-                .and_then(|push| push.as_bool())
-        });
+    let can_write = body.as_ref().and_then(|body| {
+        body.get("permissions")
+            .and_then(|permissions| permissions.get("push"))
+            .and_then(|push| push.as_bool())
+    });
+    // A default branch is only worth recording if this store could address it;
+    // an Enterprise answer with something odd in it falls back like an absent
+    // one.
+    let default_branch = body
+        .as_ref()
+        .and_then(|body| body.get("default_branch"))
+        .and_then(|branch| branch.as_str())
+        .filter(|branch| check_branch(branch).is_ok())
+        .map(str::to_string);
     Probe {
         can_write,
+        default_branch,
         warning: None,
     }
 }
@@ -1025,6 +1109,193 @@ pub fn delete(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// branches and pull requests (D28) — the repository's own review flow
+// ---------------------------------------------------------------------------
+
+/// The repository's branches. One page of 100 is the v1 cap: GitHub paginates
+/// this endpoint, and a store that fetched every page would spend a user's
+/// rate limit walking release history to fill a select. A repository with more
+/// branches than that shows the first hundred GitHub names.
+pub fn list_branches(binding: &Binding, token: &str) -> Result<Vec<BranchInfo>> {
+    let reply = request(
+        token,
+        "GET",
+        &repo_url(binding, "/branches?per_page=100"),
+        None,
+        None,
+    )?;
+    if !reply.is_success() {
+        return Err(failure(reply.status, &reply.text));
+    }
+    let entries = parse_json(&reply.text)?;
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| Failure::new(502, "GitHub API error (branches are not a list)"))?;
+    let base = binding.base();
+    // GitHub's own order, kept: it is the repository's alphabetical listing,
+    // and re-sorting it here would only be a second opinion about the same data.
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let name = entry
+                .get("name")
+                .and_then(|name| name.as_str())
+                .filter(|name| !name.is_empty())?;
+            Some(BranchInfo {
+                name: name.to_string(),
+                is_base: name == base,
+                is_active: name == binding.branch,
+            })
+        })
+        .collect())
+}
+
+/// Create `name` off `from`, and answer nothing — the caller switches the
+/// binding to it, because only the caller owns the dotfile.
+pub fn create_branch(binding: &Binding, token: &str, name: &str, from: &str) -> Result<()> {
+    let heads = from
+        .split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let reply = request(
+        token,
+        "GET",
+        &repo_url(binding, &format!("/git/ref/heads/{heads}")),
+        None,
+        None,
+    )?;
+    if reply.status == 404 {
+        return Err(Failure::new(
+            404,
+            format!(
+                "no branch named {from} on {}/{}",
+                binding.owner, binding.repo
+            ),
+        ));
+    }
+    if !reply.is_success() {
+        return Err(failure(reply.status, &reply.text));
+    }
+    let sha = parse_json(&reply.text)?
+        .get("object")
+        .and_then(|object| object.get("sha"))
+        .and_then(|sha| sha.as_str())
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| Failure::new(502, "GitHub API error (ref carried no sha)"))?
+        .to_string();
+    let payload = serde_json::json!({ "ref": format!("refs/heads/{name}"), "sha": sha });
+    let created = request(
+        token,
+        "POST",
+        &repo_url(binding, "/git/refs"),
+        Some(payload.to_string()),
+        None,
+    )?;
+    // GitHub answers a duplicate ref with a 422. That is not a lost race like
+    // a stale scene sha — it is a name already taken, and saying so is the fix.
+    if created.status == 422 && created.text.to_lowercase().contains("already exists") {
+        return Err(Failure::new(
+            409,
+            format!(
+                "branch {name} already exists on {}/{}",
+                binding.owner, binding.repo
+            ),
+        ));
+    }
+    if !created.is_success() {
+        return Err(write_failure(binding, created.status, &created.text));
+    }
+    Ok(())
+}
+
+/// GitHub's own sentence about a refusal. The Validation-Failed envelope's
+/// top-level message says nothing ("Validation Failed"); the useful line — "No
+/// commits between main and x", "A pull request already exists for acme:x" —
+/// is the first entry of `errors`.
+fn github_message(text: &str) -> String {
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(text) else {
+        return String::new();
+    };
+    let detailed = body
+        .get("errors")
+        .and_then(|errors| errors.as_array())
+        .and_then(|errors| {
+            errors
+                .iter()
+                .filter_map(|entry| entry.get("message").and_then(|m| m.as_str()))
+                .find(|message| !message.is_empty())
+        });
+    detailed
+        .or_else(|| body.get("message").and_then(|message| message.as_str()))
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Open a pull request from the active branch onto the recorded base, and
+/// answer with what a user needs to go and look at it.
+pub fn open_pull_request(
+    binding: &Binding,
+    token: &str,
+    title: Option<&str>,
+    body: Option<&str>,
+) -> Result<(String, i64)> {
+    let base = binding.base();
+    if binding.branch == base {
+        // Nothing to review: the drafts and the base are the same branch,
+        // which is exactly the state a binding starts in.
+        return Err(Failure::bad(format!(
+            "the active branch {} is the base branch — create a branch first",
+            binding.branch
+        )));
+    }
+    // A blank title is no title: the default says what the branch holds, and
+    // the reference store draws the same line.
+    let title = match title {
+        Some(stated) if !stated.trim().is_empty() => stated,
+        _ => "docent: update diagrams",
+    };
+    let payload = serde_json::json!({
+        "title": title,
+        "head": binding.branch,
+        "base": base,
+        "body": body.unwrap_or_default(),
+    });
+    let reply = request(
+        token,
+        "POST",
+        &repo_url(binding, "/pulls"),
+        Some(payload.to_string()),
+        None,
+    )?;
+    // No commits between the two branches, or a pull request already open for
+    // them: GitHub knows which, and its sentence is the one worth relaying.
+    if reply.status == 422 {
+        let message = github_message(&reply.text);
+        let message = if message.is_empty() {
+            "the pull request was refused".to_string()
+        } else {
+            message
+        };
+        return Err(Failure::new(409, format!("GitHub: {message}")));
+    }
+    if !reply.is_success() {
+        return Err(write_failure(binding, reply.status, &reply.text));
+    }
+    let created = parse_json(&reply.text)?;
+    let url = created
+        .get("html_url")
+        .and_then(|url| url.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let number = created
+        .get("number")
+        .and_then(|number| number.as_i64())
+        .unwrap_or_default();
+    Ok((url, number))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,6 +1306,7 @@ mod tests {
             repo: "diagrams".into(),
             path: path.into(),
             branch: "main".into(),
+            base_branch: None,
             api_base: "https://api.github.com".into(),
             can_write: None,
         }
@@ -1136,6 +1408,45 @@ mod tests {
             assert_eq!(err.status, 400);
             assert!(err.message.starts_with(expected), "{}", err.message);
         }
+    }
+
+    #[test]
+    fn a_new_branch_is_held_to_a_stricter_gate_than_an_existing_one() {
+        for name in [
+            "docent/diagrams-2026-08-20",
+            "wip",
+            "a",
+            "v1.2_x",
+            &"a".repeat(200),
+        ] {
+            assert!(check_new_branch(name).is_ok(), "{name} should pass");
+        }
+        for name in [
+            "",
+            "-nope",
+            ".hidden",
+            "/leading",
+            "trailing/",
+            "docent//b",
+            "docent/a..b",
+            "has space",
+            &"a".repeat(201),
+        ] {
+            assert!(check_new_branch(name).is_err(), "{name} should fail");
+            // …while an existing branch may still start with a dot or an
+            // underscore, because GitHub allows it and this store only
+            // addresses it.
+        }
+        assert!(check_branch(".hidden").is_ok());
+        assert!(check_branch("has space").is_err());
+
+        // A binding written before D28 is its own base; one with a base keeps it.
+        let mut binding = binding("");
+        assert_eq!(binding.base(), "main");
+        binding.branch = "docent/wip".into();
+        assert_eq!(binding.base(), "docent/wip");
+        binding.base_branch = Some("trunk".into());
+        assert_eq!(binding.base(), "trunk");
     }
 
     #[test]
