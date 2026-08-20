@@ -84,14 +84,18 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - **Frame narratives** — one or two sentences per frame: "what this section means." The same text is the **single source of truth** for both the semantic export and the agent's `tour` narration. Capture once, serve both audiences.
 
 ### 🤖 Agent-drivable canvas
-- An **MCP server** exposes the Command API — MCP is an open protocol, so **any agent with any MCP client** can drive the canvas; nothing vendor-specific ships in Docent. It speaks **stdio** for locally-spawned clients and **MCP streamable HTTP** at `/mcp` on every deployment. Connected agents can:
-  - `get_scene_graph` — read the diagram as nodes/edges/frames with stable IDs
-  - `focus` — tween the camera to any element or frame
+- An **MCP server** exposes the Command API — MCP is an open protocol, so **any agent with any MCP client** can drive the canvas; nothing vendor-specific ships in Docent. It speaks **stdio** for locally-spawned clients and **MCP streamable HTTP** at `/mcp` — on every deployment, and on the desktop app at a loopback port (**Help → Agent Endpoint…** shows the paste-ready line). Connected agents can:
+  - `get_scene_graph` — read the diagram as nodes/edges/frames with stable IDs, legend meanings, refinements ("lands on" / "departs from"), tags, notes, and frame narratives
+  - `get_mermaid` / `read_frame` — the compact exports: the whole diagram as Mermaid, or one frame's semantic JSON one tier deep
+  - `list_projects` / `open_scene` / `get_view` — browse the portfolio, open the diagram the user asked about (refused over unsaved changes), and know where the camera stands
+  - `focus` — tween the camera to any element or frame; padding is the zoom
+  - `dive` / `climb` — navigate declared detail layers, tier by tier
+  - `present` — drive presentation mode: enter, next, prev, overview, exit
   - `highlight` — glow / spotlight / dim-others on any set of components
   - `flow` — animate a light pulse along one arrow or a chained multi-hop path
   - `tour` — run a full narrated sequence of the above
+- The agent surface is **read-only**: camera, overlay, narration, and navigation — the document is never mutated, undo history stays clean.
 - Agents operate purely in **ID-space**. They never address pixels, never touch Excalidraw internals.
-- All effects render on a **non-destructive overlay** — the document is never mutated, undo history stays clean.
 
 ### 🗂 Project portfolio
 - One deployment hosts many **projects**; a project holds many **scenes** (work, personal, …).
@@ -226,7 +230,7 @@ Two ways to run Docent, both wrapping the same SPA build — neither replaces th
 | Runs | on a box you own, in any browser on your LAN | as a native window on macOS, Windows, or Linux |
 | Needs | Docker | nothing — one download |
 | Portfolio | `data/<project>/<scene>.excalidraw` on a named volume | the same file tree, under your OS app-data directory |
-| Agent control (MCP) | yes | not in v1 — agent control stays a self-host capability |
+| Agent control (MCP) | yes — `/mcp` on the deployment | yes — loopback `/mcp`, read-only; **Help → Agent Endpoint…** has the line to paste |
 
 ### Self-host with Docker
 
@@ -276,6 +280,15 @@ pnpm mcp
 Either way, attach the canvas to the bridge — connection is always explicit, so
 the app never probes the network on its own: use **Menu → Connect agent bridge**,
 or open the canvas with `?agent`
+
+**On the desktop app** none of that ceremony exists: the shell serves `/mcp` on
+loopback (port 3301, or the next free one — **Help → Agent Endpoint…** shows the
+live URL), the canvas is wired to it from launch, and loopback is exempt from
+clients' https requirement, so one line connects any client:
+
+```bash
+claude mcp add --transport http docent http://127.0.0.1:3301/mcp
+```
 (e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). The
 last-connected canvas answers the agents. Ask for `get_scene_graph` and start
 touring.

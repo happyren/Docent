@@ -12,6 +12,7 @@
  * any time; a live connection that drops gets a fresh grace window.
  */
 import type { CommandAPI } from "../command/api";
+import { execute, type AgentShellHooks } from "./execute";
 
 // Same-origin: nginx proxies /bridge to the MCP service in deployments and
 // the dev server proxies it to a local `pnpm mcp`. The canvas never needs
@@ -32,47 +33,11 @@ export interface AgentBridge {
   dispose(): void;
 }
 
-async function execute(
-  commands: CommandAPI,
-  tool: string,
-  params: Record<string, unknown>,
-): Promise<unknown> {
-  switch (tool) {
-    case "get_scene_graph":
-      return commands.getSceneGraph();
-    case "focus":
-      await commands.focus(params as { id: string; padding?: number });
-      return { focused: (params as { id: string }).id };
-    case "highlight":
-      commands.highlight(
-        params as { ids: string[]; style?: "glow" | "spotlight" | "outline" },
-      );
-      return { highlighted: (params as { ids: string[] }).ids };
-    case "flow":
-      await commands.flow(
-        params as { path: string[]; speed?: number; loop?: boolean },
-      );
-      return { pulsed: (params as { path: string[] }).path };
-    case "narrate":
-      commands.narrate(params as { text: string | null });
-      return { narrating: true };
-    case "tour": {
-      const completed = await commands.tour(
-        params as { steps: never[]; stepMs?: number },
-      );
-      return { stepsCompleted: completed };
-    }
-    case "clear_effects":
-      commands.clearEffects();
-      commands.narrate({ text: null });
-      return { cleared: true };
-    default:
-      throw new Error(`Unknown tool: ${tool}`);
-  }
-}
-
 /** Connect to the local MCP bridge, politely. */
-export function connectAgentBridge(commands: CommandAPI): AgentBridge {
+export function connectAgentBridge(
+  commands: CommandAPI,
+  shell: AgentShellHooks,
+): AgentBridge {
   let source: EventSource | null = null;
   let retryTimer = 0;
   let retryMs = INITIAL_RETRY_MS;
@@ -84,7 +49,7 @@ export function connectAgentBridge(commands: CommandAPI): AgentBridge {
     void (async () => {
       let body: Record<string, unknown>;
       try {
-        const result = await execute(commands, command.tool, command.params);
+        const result = await execute(commands, shell, command.tool, command.params);
         body = { id: command.id, ok: true, result };
       } catch (err) {
         body = {

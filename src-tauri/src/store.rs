@@ -53,7 +53,7 @@ const EXT: &str = ".excalidraw";
 /// Origins this store answers CORS for: the webview in a packaged build
 /// (`tauri://` on macOS and Linux, `http(s)://tauri.localhost` on Windows) and
 /// the Vite dev server when the shell runs under `tauri dev`.
-const ALLOWED_ORIGINS: &[&str] = &[
+pub(crate) const ALLOWED_ORIGINS: &[&str] = &[
     "tauri://localhost",
     "http://tauri.localhost",
     "https://tauri.localhost",

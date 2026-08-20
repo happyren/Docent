@@ -12,7 +12,9 @@
  * same-origin, exactly as before.
  */
 export const API_BASE =
-  (window as { __DOCENT_API_BASE__?: string }).__DOCENT_API_BASE__ ?? "";
+  // globalThis, not window: the agent executor imports this module, and its
+  // tests run where no window exists. In the browser they are the same object.
+  (globalThis as { __DOCENT_API_BASE__?: string }).__DOCENT_API_BASE__ ??"";
 
 export interface ProjectInfo {
   id: string;

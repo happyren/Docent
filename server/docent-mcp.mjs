@@ -22,6 +22,7 @@
 import http from "node:http";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
+import { dispatch, handleMcpBody } from "./mcp-core.mjs";
 
 const BRIDGE_PORT = Number(process.env.DOCENT_BRIDGE_PORT ?? "3001");
 const CALL_TIMEOUT_MS = 120_000;
@@ -64,35 +65,16 @@ const bridge = http.createServer((req, res) => {
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         void (async () => {
-          let parsed;
-          try {
-            parsed = JSON.parse(body);
-          } catch {
-            res.writeHead(400, { "content-type": "application/json" });
-            res.end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: null,
-                error: { code: -32700, message: "Parse error" },
-              }),
-            );
-            return;
-          }
-          const messages = Array.isArray(parsed) ? parsed : [parsed];
-          if (messages.some((m) => m?.method === "initialize")) {
+          const answer = await handleMcpBody(body, callCanvas);
+          if (answer.initialized) {
             res.setHeader("mcp-session-id", randomUUID());
           }
-          const responses = (
-            await Promise.all(messages.map((m) => dispatch(m)))
-          ).filter(Boolean);
-          if (responses.length === 0) {
-            res.writeHead(202).end();
+          if (answer.json === null) {
+            res.writeHead(answer.status).end();
             return;
           }
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(
-            JSON.stringify(Array.isArray(parsed) ? responses : responses[0]),
-          );
+          res.writeHead(answer.status, { "content-type": "application/json" });
+          res.end(answer.json);
         })();
       });
       return;
@@ -159,162 +141,9 @@ function callCanvas(tool, params) {
   });
 }
 
-// ------------------------------------------------------------- MCP tools --
-// Q5: every tool carries a docstring with one worked example, and
-// get_scene_graph output is self-describing enough to drive everything else.
-const TOOLS = [
-  {
-    name: "get_scene_graph",
-    description:
-      "Read the diagram as a semantic graph: nodes, edges, frames, groups, and the declared legend. Every entity has a stable `id` — all other tools address the scene through these ids. Nodes carry label/shape/frame/tags/note/detail (detail = the frame drawing that node's inner mechanism); edges carry from/to plus fromProvenance/toProvenance ('explicit' = drawn binding, 'inferred' = proximity guess); frames carry name/order/narrative (the author's own words — prefer them when narrating).\nExample: get_scene_graph() → {nodes:[{id:'n_gateway',label:'API Gateway',...}], edges:[{id:'e_req',from:'n_client',to:'n_gateway'}], frames:[{id:'f_ingress',name:'01 Ingress',narrative:'…'}]}",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "focus",
-    description:
-      "Glide the camera to an element's or frame's bounds with an eased tween. Unknown ids return an error — never a silent no-op.\nExample: focus({id:'f_ingress'}) — the camera flies to the ingress frame; focus({id:'n_db', padding:0.35}) leaves more breathing room.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        id: { type: "string", description: "Graph id of a node, edge, or frame" },
-        padding: {
-          type: "number",
-          description: "Fractional padding around the target (default 0.2)",
-        },
-      },
-      required: ["id"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "highlight",
-    description:
-      "Highlight components on the non-destructive overlay. Styles: 'glow' (default), 'spotlight' (dim everything else), 'outline'. Idempotent; clear with ids: [].\nExample: highlight({ids:['n_gateway','n_auth'], style:'spotlight'}) then later highlight({ids:[]}).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        ids: { type: "array", items: { type: "string" } },
-        style: { type: "string", enum: ["glow", "spotlight", "outline"] },
-      },
-      required: ["ids"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "flow",
-    description:
-      "Animate a light pulse traveling each edge end-to-end, in order — multi-hop request tracing. Resolves when the pulse finishes (loop: first cycle).\nExample: flow({path:['e_req','e_verify','e_query']}) traces client → gateway → auth → database.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: { type: "array", items: { type: "string" }, description: "Ordered edge ids" },
-        speed: { type: "number", description: "1.0 ≈ 500 scene-units/s" },
-        loop: { type: "boolean" },
-      },
-      required: ["path"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "narrate",
-    description:
-      "Show text in the narration panel. Empty/null text hides the panel.\nExample: narrate({text:'Requests land at the gateway first.'})",
-    inputSchema: {
-      type: "object",
-      properties: { text: { type: ["string", "null"] } },
-      required: ["text"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "tour",
-    description:
-      "Run a narrated walkthrough. Each step may focus, highlight, pulse a flow, and narrate; when a step focuses a frame and omits narrate, the frame's author-declared narrative narrates it. Interruptible by the user; resolves with steps completed.\nExample: tour({steps:[{focus:'f_ingress'},{focus:'n_gateway',highlight:['n_gateway'],narrate:'The gateway rate-limits at the edge.'},{flow:['e_verify'],narrate:'Every request is verified.'}]})",
-    inputSchema: {
-      type: "object",
-      properties: {
-        steps: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              focus: { type: "string" },
-              highlight: { type: "array", items: { type: "string" } },
-              highlightStyle: {
-                type: "string",
-                enum: ["glow", "spotlight", "outline"],
-              },
-              flow: { type: "array", items: { type: "string" } },
-              narrate: { type: "string" },
-            },
-            additionalProperties: false,
-          },
-        },
-        stepMs: {
-          type: "number",
-          description: "Fixed per-step dwell in ms (default scales with narration length)",
-        },
-      },
-      required: ["steps"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "clear_effects",
-    description:
-      "Clear every overlay effect and hide the narration panel.\nExample: clear_effects({})",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
-  },
-];
-
-// -------------------------------------------------- shared dispatcher --
-/**
- * One JSON-RPC message in, one response out (null for notifications and
- * malformed traffic). Both transports call this — the transport layers
- * carry zero logic (B4).
- */
-async function dispatch(message) {
-  const { id, method, params } = message ?? {};
-  const reply = (result) =>
-    id !== undefined ? { jsonrpc: "2.0", id, result } : null;
-  const fail = (code, msg) =>
-    id !== undefined ? { jsonrpc: "2.0", id, error: { code, message: msg } } : null;
-
-  switch (method) {
-    case "initialize":
-      return reply({
-        protocolVersion: params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {} },
-        serverInfo: { name: "docent", version: "0.1.0" },
-      });
-    case "notifications/initialized":
-    case "notifications/cancelled":
-      return null;
-    case "ping":
-      return reply({});
-    case "tools/list":
-      return reply({ tools: TOOLS });
-    case "tools/call": {
-      const tool = params?.name;
-      if (!TOOLS.some((t) => t.name === tool)) {
-        return fail(-32602, `Unknown tool: ${tool}`);
-      }
-      try {
-        const result = await callCanvas(tool, params?.arguments ?? {});
-        return reply({
-          content: [{ type: "text", text: JSON.stringify(result, null, 1) }],
-        });
-      } catch (err) {
-        return reply({
-          content: [{ type: "text", text: String(err instanceof Error ? err.message : err) }],
-          isError: true,
-        });
-      }
-    }
-    default:
-      return fail(-32601, `Method not found: ${method}`);
-  }
-}
+// Tool table and JSON-RPC handling live in mcp-core.mjs (D34) — the one
+// dispatcher both this server and the desktop page run. This file is pure
+// transport: bridge relay plus the two MCP framings.
 
 // -------------------------------------------------- MCP stdio transport --
 // Service deployments run HTTP-only: with no client on stdin (docker gives
@@ -333,7 +162,7 @@ if (!process.env.DOCENT_MCP_HTTP_ONLY) {
     } catch {
       return;
     }
-    void dispatch(message).then((response) => response && write(response));
+    void dispatch(message, callCanvas).then((response) => response && write(response));
   });
   rl.on("close", () => process.exit(0));
 }

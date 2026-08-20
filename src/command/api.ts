@@ -87,6 +87,11 @@ export class CommandAPI {
     return buildSceneGraph(this.reader.getSceneSnapshot());
   }
 
+  /** The raw typed snapshot — what the pure exporters consume. Read-only. */
+  getSceneSnapshot(): SceneSnapshot {
+    return this.reader.getSceneSnapshot();
+  }
+
   /**
    * Resolve highlight/effect targets: graph node/edge/frame ids, group ids
    * (expanded to member elements), or raw element ids for anything the

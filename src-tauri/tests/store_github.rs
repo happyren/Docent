@@ -2279,7 +2279,9 @@ fn refuses_when_a_pushed_scene_changed_remotely_since_the_last_pull() {
     fixture.draft_on("stale", "docent/stale");
     // Someone else lands on the branch after the pull; the local author edits
     // the same scene without knowing.
-    fixture.github.write("docs/diagrams/plan.excalidraw", OTHER_SCENE);
+    fixture
+        .github
+        .write("docs/diagrams/plan.excalidraw", OTHER_SCENE);
     let local = SCENE.replace("[]", r#"[{"id":"z"}]"#);
     assert_eq!(fixture.put_scene("stale", "plan", &local).status, 200);
 
@@ -2300,10 +2302,14 @@ fn pushes_scenes_the_remote_never_touched_even_while_another_scene_changed_there
     let fixture = Fixture::new();
     fixture.bound_project("aside");
     fixture.github.write("docs/diagrams/plan.excalidraw", SCENE);
-    fixture.github.write("docs/diagrams/notes.excalidraw", SCENE);
+    fixture
+        .github
+        .write("docs/diagrams/notes.excalidraw", SCENE);
     assert_eq!(fixture.pull("aside").status, 200);
     fixture.draft_on("aside", "docent/aside");
-    fixture.github.write("docs/diagrams/plan.excalidraw", OTHER_SCENE);
+    fixture
+        .github
+        .write("docs/diagrams/plan.excalidraw", OTHER_SCENE);
     let local = SCENE.replace("[]", r#"[{"id":"n"}]"#);
     assert_eq!(fixture.put_scene("aside", "notes", &local).status, 200);
 

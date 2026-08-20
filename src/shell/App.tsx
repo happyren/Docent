@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
 import { connectAgentBridge, type AgentBridge } from "../agent/bridge";
+import { connectDesktopAgentBridge } from "../agent/desktopBridge";
+import type { AgentShellHooks } from "../agent/execute";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
 import { exportFrameSidecar, exportScene } from "../export";
@@ -138,7 +140,7 @@ export function App() {
   const connectAgent = useCallback(() => {
     if (!commands) return;
     if (bridgeRef.current) bridgeRef.current.reconnect();
-    else bridgeRef.current = connectAgentBridge(commands);
+    else bridgeRef.current = connectAgentBridge(commands, agentShell);
   }, [commands]);
   useEffect(() => {
     if (commands && new URLSearchParams(window.location.search).has("agent")) {
@@ -455,6 +457,84 @@ export function App() {
     },
     [markClean, prepareSceneForSave, syncSceneUrl],
   );
+
+  // What the agent surface may borrow from the shell (S15, D35): navigation,
+  // never mutation. Rebuilt every render like the menu handlers; the facade
+  // handed to the bridges is stable and reads through the ref, so a bridge
+  // connected once never acts on a stale closure.
+  const agentShellRef = useRef<AgentShellHooks | null>(null);
+  agentShellRef.current = {
+    presentation: {
+      enter: () => presentation.enter(),
+      exit: () => presentation.exit(),
+      next: () => presentation.next(),
+      prev: () => presentation.prev(),
+      overview: () => presentation.overview(),
+      state: () => ({
+        active: presentation.active,
+        index: !presentation.active
+          ? null
+          : presentation.index === OVERVIEW
+            ? "overview"
+            : presentation.index,
+        waypoints: presentation.waypoints.map((w) => ({
+          id: w.id,
+          name: w.name,
+          narrative: w.narrative,
+        })),
+      }),
+    },
+    drill: {
+      dive: (elementId) => drill.dive(elementId),
+      up: () => drill.up(),
+      trail: () => {
+        const c = canvasRef.current;
+        if (!c) return [];
+        const snapshot = c.getSceneSnapshot();
+        return trailAt(computeTiers(snapshot), snapshot, viewportCenter()).map(
+          (crumb) => ({ id: crumb.frameId, name: crumb.name }),
+        );
+      },
+    },
+    openScene: (project, scene) => openPortfolioScene(project, scene),
+    isDirty: () => dirty,
+    currentScene: () =>
+      portfolioSourceRef.current
+        ? {
+            project: portfolioSourceRef.current.project,
+            scene: portfolioSourceRef.current.scene,
+          }
+        : null,
+  };
+  const agentShell = useMemo<AgentShellHooks>(() => {
+    const current = () => agentShellRef.current!;
+    return {
+      presentation: {
+        enter: () => current().presentation.enter(),
+        exit: () => current().presentation.exit(),
+        next: () => current().presentation.next(),
+        prev: () => current().presentation.prev(),
+        overview: () => current().presentation.overview(),
+        state: () => current().presentation.state(),
+      },
+      drill: {
+        dive: (elementId) => current().drill.dive(elementId),
+        up: () => current().drill.up(),
+        trail: () => current().drill.trail(),
+      },
+      openScene: (project, scene) => current().openScene(project, scene),
+      isDirty: () => current().isDirty(),
+      currentScene: () => current().currentScene(),
+    };
+  }, []);
+
+  // Desktop agent endpoint (S15): the shell's /mcp pipe is this same
+  // process, so the page side connects at launch — nothing to configure.
+  useEffect(() => {
+    if (!isDesktop || !commands) return;
+    const bridge = connectDesktopAgentBridge(commands, agentShell);
+    return () => bridge.dispose();
+  }, [commands, agentShell]);
 
   // Desktop file flows (S13). The system webview has no File System Access API
   // and ignores anchor downloads, so the browser open/save/download paths are

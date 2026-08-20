@@ -65,18 +65,26 @@ describe("mcp streamable http", () => {
     expect(res.status).toBe(202);
   });
 
-  it("lists all seven tools with docstrings (Q5)", async () => {
+  it("lists the full tool surface with docstrings (Q5, D35)", async () => {
     const res = await rpc("tools/list", undefined, 2);
     const body = (await res.json()) as {
       result: { tools: { name: string; description: string }[] };
     };
     expect(body.result.tools.map((t) => t.name).sort()).toEqual([
       "clear_effects",
+      "climb",
+      "dive",
       "flow",
       "focus",
+      "get_mermaid",
       "get_scene_graph",
+      "get_view",
       "highlight",
+      "list_projects",
       "narrate",
+      "open_scene",
+      "present",
+      "read_frame",
       "tour",
     ]);
     for (const tool of body.result.tools) {
@@ -172,7 +180,7 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(7);
+    expect(tools.result.tools).toHaveLength(15);
   });
 
   it("relays tool calls, including their errors", async () => {

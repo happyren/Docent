@@ -9,11 +9,12 @@
 //! its own copies of them; on the web nothing is injected and the in-canvas
 //! menu is the only menu.
 //!
-//! The MCP agent endpoint is deliberately absent — S13 puts agent control on
-//! the self-hosted deployment; the desktop serves the watching and reading
-//! audiences.
+//! The MCP agent endpoint (S15, A7) is a loopback pipe: `mcp.rs` accepts
+//! JSON-RPC and relays raw bodies to the page, which runs the one shared
+//! dispatcher — the shell never grows an agent brain of its own (D34).
 
 pub mod github;
+pub mod mcp;
 pub mod store;
 pub mod sync;
 pub mod updates;
@@ -53,11 +54,12 @@ enum MenuAction {
     ExportMermaid,
     ExportSidecar,
     CheckUpdates,
+    AgentEndpoint,
 }
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 14] = [
+    const ALL: [Self; 15] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -72,6 +74,7 @@ impl MenuAction {
         Self::ExportMermaid,
         Self::ExportSidecar,
         Self::CheckUpdates,
+        Self::AgentEndpoint,
     ];
 
     /// Exhaustive by construction: an action cannot reach the menu without an
@@ -92,6 +95,7 @@ impl MenuAction {
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
             Self::CheckUpdates => "check-updates",
+            Self::AgentEndpoint => "agent-endpoint",
         }
     }
 
@@ -111,6 +115,7 @@ impl MenuAction {
             Self::ExportMermaid => "Mermaid…",
             Self::ExportSidecar => "Semantic JSON…",
             Self::CheckUpdates => "Check for Updates…",
+            Self::AgentEndpoint => "Agent Endpoint…",
         }
     }
 
@@ -132,7 +137,8 @@ impl MenuAction {
             | Self::DetailMarkers
             | Self::ExportMermaid
             | Self::ExportSidecar
-            | Self::CheckUpdates => None,
+            | Self::CheckUpdates
+            | Self::AgentEndpoint => None,
         }
     }
 }
@@ -274,7 +280,10 @@ const MENU_IDS: [&str; MenuAction::ALL.len()] = {
 /// The ids the shell answers by itself. The update check is entirely Rust —
 /// there is no page-side handler to dispatch to and none should be invented,
 /// so this id is kept out of `window.__docentMenu`'s union on purpose.
-const RUST_ONLY_IDS: [&str; 1] = [MenuAction::CheckUpdates.id()];
+const RUST_ONLY_IDS: [&str; 2] = [
+    MenuAction::CheckUpdates.id(),
+    MenuAction::AgentEndpoint.id(),
+];
 
 /// Whether a menu click is Docent's at all. Predefined items (clipboard,
 /// window, quit) carry ids of their own and are the system's business.
@@ -294,6 +303,28 @@ fn is_frontend_menu_id(id: &str) -> bool {
 
 fn item(app: &AppHandle, action: MenuAction) -> tauri::Result<MenuItem<Wry>> {
     MenuItem::with_id(app, action.id(), action.label(), true, action.accelerator())
+}
+
+/// Help → Agent Endpoint… — the one place the shell states its MCP URL (S15),
+/// with a line any client's user can paste.
+fn show_agent_endpoint(app: AppHandle) {
+    let message = match app.try_state::<mcp::McpHandle>() {
+        Some(endpoint) => format!(
+            "Any MCP client can drive this Docent — read-only: it can look, \
+             move the camera, and present, never edit.\n\n\
+             Endpoint (streamable HTTP, this machine only):\n{base}/mcp\n\n\
+             Claude Code:\nclaude mcp add --transport http docent {base}/mcp",
+            base = endpoint.base_url(),
+        ),
+        None => "The agent endpoint could not start — see the app's log output.".to_string(),
+    };
+    let _ = app.run_on_main_thread(move || {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("Docent")
+            .set_description(message)
+            .show();
+    });
 }
 
 /// The one stateful item: a checkbox mirroring whether the page draws
@@ -424,6 +455,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::CheckUpdates)?,
+            &item(app, MenuAction::AgentEndpoint)?,
         ],
     )?;
 
@@ -489,10 +521,14 @@ pub fn run() {
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
             if is_rust_only_menu_id(id) {
-                // Answered here and nowhere else: the update check has no
-                // frontend half, so this click never becomes a `__docentMenu`
-                // call. A menu-initiated check always shows its result.
-                spawn_update_check(app.clone(), updates::Trigger::Menu);
+                // Answered here and nowhere else: these have no frontend
+                // half, so the click never becomes a `__docentMenu` call.
+                if id == MenuAction::CheckUpdates.id() {
+                    // A menu-initiated check always shows its result.
+                    spawn_update_check(app.clone(), updates::Trigger::Menu);
+                } else if id == MenuAction::AgentEndpoint.id() {
+                    show_agent_endpoint(app.clone());
+                }
                 return;
             }
             if !is_frontend_menu_id(id) {
@@ -549,14 +585,36 @@ pub fn run() {
                 }
             };
 
-            // Both facts have to be in place before the SPA's first script
+            // The agent endpoint (S15): a loopback pipe any MCP client can
+            // POST JSON-RPC to; the page runs the dispatcher. Failing to bind
+            // degrades exactly like the store — the canvas is unaffected.
+            let mcp_base = match mcp::spawn() {
+                Ok(endpoint) => {
+                    let base = endpoint.base_url();
+                    // Held for the process lifetime; dropping it stops it.
+                    handle.manage(endpoint);
+                    Some(base)
+                }
+                Err(err) => {
+                    eprintln!("docent: agent endpoint unavailable — {err}");
+                    None
+                }
+            };
+
+            // These facts have to be in place before the SPA's first script
             // runs: the flag decides what chrome the app renders, and the base
-            // URL is read at module load. Absent — i.e. on the web — the app
+            // URLs are read at module load. Absent — i.e. on the web — the app
             // is the web app, unchanged.
             let mut script = String::from("window.__DOCENT_DESKTOP__ = true;");
             if let Some(base) = api_base {
                 script.push_str(&format!(
                     "window.__DOCENT_API_BASE__ = {};",
+                    serde_json::to_string(&base)?
+                ));
+            }
+            if let Some(base) = mcp_base {
+                script.push_str(&format!(
+                    "window.__DOCENT_MCP_BASE__ = {};",
                     serde_json::to_string(&base)?
                 ));
             }
@@ -641,15 +699,20 @@ mod tests {
 
     #[test]
     fn the_update_check_never_reaches_the_page() {
-        let id = MenuAction::CheckUpdates.id();
-        assert_eq!(RUST_ONLY_IDS, [id]);
-        assert!(is_docent_menu_id(id), "it is still Docent's own item");
-        assert!(is_rust_only_menu_id(id));
-        assert!(!is_frontend_menu_id(id), "it has no `__docentMenu` handler");
-        assert!(
-            !FRONTEND_IDS.contains(&id),
-            "adding it to the page's union would invent a handler that should not exist"
-        );
+        let ids = [
+            MenuAction::CheckUpdates.id(),
+            MenuAction::AgentEndpoint.id(),
+        ];
+        assert_eq!(RUST_ONLY_IDS, ids);
+        for id in ids {
+            assert!(is_docent_menu_id(id), "it is still Docent's own item");
+            assert!(is_rust_only_menu_id(id));
+            assert!(!is_frontend_menu_id(id), "it has no `__docentMenu` handler");
+            assert!(
+                !FRONTEND_IDS.contains(&id),
+                "adding it to the page's union would invent a handler that should not exist"
+            );
+        }
     }
 
     #[test]
