@@ -5,17 +5,23 @@
 //! two things only the desktop has: an atomic write that leaves no `.tmp`
 //! behind and a CORS allowlist, because here the store is cross-origin.
 //!
-//! Each test gets its own data directory and its own ephemeral port, so they
-//! run in parallel without sharing state.
+//! The desktop also owns two endpoints with no self-host counterpart —
+//! `/desktop/import` and `/desktop/export`, which raise a native dialog — so
+//! those are exercised here too, with the dialog stubbed: CI has no display,
+//! and the plumbing under test is the HTTP and file half either way.
+//!
+//! Each test gets its own data directory, its own ephemeral port, and its own
+//! stubbed dialog answer, so they run in parallel without sharing state.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use docent_lib::store::{self, StoreHandle};
+use docent_lib::store::{self, StoreHandle, StubDialog};
 
 const SCENE: &str = r#"{"type":"excalidraw","version":2,"elements":[]}"#;
 const WEBVIEW_ORIGIN: &str = "tauri://localhost";
@@ -30,19 +36,18 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// A store whose dialogs always cancel — the answer no test that never
+    /// opens one can be surprised by.
     fn new() -> Self {
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = format!(
-            "docent-store-{}-{}-{}",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::SeqCst),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let data_dir = std::env::temp_dir().join(unique);
-        let store = store::spawn(data_dir.clone()).expect("store binds loopback");
+        Self::with_dialog("cancel")
+    }
+
+    /// `answer` is what the stubbed dialog returns: `cancel`, or the path the
+    /// user would have picked.
+    fn with_dialog(answer: &str) -> Self {
+        let data_dir = std::env::temp_dir().join(unique_name("docent-store"));
+        let store = store::spawn(data_dir.clone(), Arc::new(StubDialog::new(answer)))
+            .expect("store binds loopback");
         Self {
             store: Some(store),
             data_dir,
@@ -58,10 +63,55 @@ impl Fixture {
     }
 }
 
+/// A name no other test in this process (or a leftover from a previous run)
+/// can collide with.
+fn unique_name(prefix: &str) -> String {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    format!(
+        "{prefix}-{}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    )
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         drop(self.store.take());
         let _ = fs::remove_dir_all(&self.data_dir);
+    }
+}
+
+/// A path outside the portfolio, for the dialog endpoints to read from or
+/// write to. Removed with the test that made it, whether or not it existed.
+struct Scratch {
+    path: PathBuf,
+}
+
+impl Scratch {
+    fn new(name: &str) -> Self {
+        Self {
+            path: std::env::temp_dir().join(unique_name(name)),
+        }
+    }
+
+    fn with_contents(name: &str, contents: &str) -> Self {
+        let scratch = Self::new(name);
+        fs::write(&scratch.path, contents).expect("scratch file is writable");
+        scratch
+    }
+
+    fn as_str(&self) -> &str {
+        self.path.to_str().expect("temp paths are UTF-8 here")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -142,6 +192,10 @@ fn put(port: u16, path: &str, body: Option<&str>) -> Res {
 
 fn delete(port: u16, path: &str) -> Res {
     send(port, "DELETE", path, None, Some(WEBVIEW_ORIGIN))
+}
+
+fn post(port: u16, path: &str, body: Option<&str>) -> Res {
+    send(port, "POST", path, body, Some(WEBVIEW_ORIGIN))
 }
 
 fn encode(name: &str) -> String {
@@ -394,7 +448,7 @@ fn answers_cors_for_the_webview_origin_only() {
         );
         assert_eq!(
             preflight.header("access-control-allow-methods"),
-            Some("GET, PUT, DELETE, OPTIONS")
+            Some("GET, POST, PUT, DELETE, OPTIONS")
         );
 
         let res = send(port, "GET", "/api/health", None, Some(origin));
@@ -497,6 +551,125 @@ fn scene_names_may_carry_spaces_and_round_trip() {
         get(port, "/api/projects/My%20Work/scenes/check%20out").body,
         SCENE
     );
+}
+
+// ---------------------------------------------------------------------------
+// native dialogs — the desktop-only half
+// ---------------------------------------------------------------------------
+
+#[test]
+fn imports_the_file_the_dialog_returned() {
+    let source = Scratch::with_contents("docent-import", SCENE);
+    let fixture = Fixture::with_dialog(source.as_str());
+
+    let res = post(fixture.port(), "/desktop/import", None);
+    assert_eq!(res.status, 200);
+    let body = res.json();
+    assert_eq!(body["content"], SCENE);
+    // The name is the file's own, so the page can title the canvas with it.
+    assert_eq!(
+        body["name"],
+        source.path.file_name().unwrap().to_str().unwrap()
+    );
+    assert!(body.get("canceled").is_none());
+}
+
+#[test]
+fn import_reports_a_cancelled_dialog_rather_than_an_error() {
+    let fixture = Fixture::new();
+    let res = post(fixture.port(), "/desktop/import", None);
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "canceled": true }));
+}
+
+#[test]
+fn import_refuses_a_file_past_the_read_ceiling() {
+    let source = Scratch::with_contents("docent-import-huge", &"a".repeat(20 * 1024 * 1024 + 1));
+    let fixture = Fixture::with_dialog(source.as_str());
+
+    let res = post(fixture.port(), "/desktop/import", None);
+    assert_eq!(res.status, 413);
+    assert_eq!(res.json()["error"], "file too large");
+}
+
+#[test]
+fn exports_exactly_the_text_the_page_generated() {
+    let target = Scratch::new("docent-export");
+    let fixture = Fixture::with_dialog(target.as_str());
+
+    let content = "graph TD;\n  a-->b;\n";
+    let body = serde_json::json!({ "name": "diagram.mmd", "content": content }).to_string();
+    let res = post(fixture.port(), "/desktop/export", Some(&body));
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "saved": target.as_str() }));
+
+    // Byte for byte: the export is the page's text, not a re-serialization.
+    assert_eq!(
+        fs::read_to_string(&target.path).expect("export landed"),
+        content
+    );
+}
+
+#[test]
+fn export_reports_a_cancelled_dialog_and_writes_nothing() {
+    let fixture = Fixture::new();
+
+    let body = serde_json::json!({ "name": "scene.excalidraw", "content": SCENE }).to_string();
+    let res = post(fixture.port(), "/desktop/export", Some(&body));
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "canceled": true }));
+    // Not into the portfolio either: a cancelled export writes nowhere.
+    assert!(entries(fixture.data_dir()).is_empty());
+}
+
+#[test]
+fn export_refuses_bodies_past_the_scene_ceiling() {
+    let target = Scratch::new("docent-export-huge");
+    let fixture = Fixture::with_dialog(target.as_str());
+
+    // Declared over the ceiling: refused on the header, before the dialog
+    // could ever be raised.
+    let mut stream = TcpStream::connect(("127.0.0.1", fixture.port())).unwrap();
+    let head = format!(
+        "POST /desktop/export HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: {WEBVIEW_ORIGIN}\r\n\
+         Connection: close\r\nContent-Length: {}\r\n\r\n",
+        50 * 1024 * 1024 + 1
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut raw = String::new();
+    let _ = stream.read_to_string(&mut raw);
+    assert!(
+        raw.starts_with("HTTP/1.1 413"),
+        "expected 413, got {:?}",
+        raw.lines().next()
+    );
+    assert!(!target.path.exists());
+}
+
+#[test]
+fn dialog_endpoints_answer_the_app_only() {
+    let target = Scratch::new("docent-export-foreign");
+    let fixture = Fixture::with_dialog(target.as_str());
+    let port = fixture.port();
+    let body = serde_json::json!({ "name": "scene.excalidraw", "content": SCENE }).to_string();
+
+    // A simple POST needs no preflight, so the origin has to be checked on the
+    // request itself — otherwise any page could raise a dialog on the user's
+    // screen, or write a file wherever they clicked.
+    for origin in [Some("https://example.com"), None] {
+        for (path, body) in [("/desktop/import", None), ("/desktop/export", Some(&body))] {
+            let res = send(port, "POST", path, body.map(String::as_str), origin);
+            assert_eq!(res.status, 403, "{path} from {origin:?}");
+            assert_eq!(res.json()["error"], "forbidden");
+        }
+    }
+    assert!(!target.path.exists());
+
+    // Only POST: a GET must not be able to raise a dialog from a plain link.
+    assert_eq!(get(port, "/desktop/import").status, 404);
+    assert_eq!(post(port, "/desktop/nonsense", None).status, 404);
 }
 
 fn entries(dir: &Path) -> Vec<String> {

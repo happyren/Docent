@@ -12,6 +12,11 @@
 //! decorative: PUT and DELETE are preflighted, and a preflight from any origin
 //! that is not this app's is refused. A hostile page in the user's browser
 //! therefore cannot write the portfolio even if it guesses the port.
+//!
+//! `/desktop/import` and `/desktop/export` are the one part with no self-host
+//! counterpart: the system webview has no File System Access API and ignores
+//! anchor downloads, so reading or writing a file outside the portfolio has to
+//! happen here, behind a native dialog.
 
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -24,6 +29,9 @@ use std::time::UNIX_EPOCH;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 const MAX_SCENE_BYTES: usize = 50 * 1024 * 1024;
+/// Import reads whatever file the user pointed at. The scene ceiling would let
+/// one mis-click pull a video into memory, so this direction stops earlier.
+const MAX_IMPORT_BYTES: u64 = 20 * 1024 * 1024;
 const EXT: &str = ".excalidraw";
 
 /// Origins this store answers CORS for: the webview in a packaged build
@@ -36,6 +44,56 @@ const ALLOWED_ORIGINS: &[&str] = &[
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ];
+
+/// How the store asks the user for a path. The native implementation lives in
+/// the shell (`src/lib.rs`) rather than here, because a macOS dialog may only
+/// be raised on the main thread and only the shell holds the handle that can
+/// hop onto it. Behind a trait, the HTTP plumbing is also testable where there
+/// is no display at all.
+pub trait FileDialog: Send + Sync + 'static {
+    /// The open dialog. `None` is a cancelled dialog, not a failure.
+    fn pick_open(&self) -> Option<PathBuf>;
+    /// The save dialog, seeded with `suggested_name`.
+    fn pick_save(&self, suggested_name: &str) -> Option<PathBuf>;
+}
+
+/// A dialog stand-in for environments that have no display: `cancel` answers
+/// as a cancelled dialog, any other value is the path the user "picked".
+/// `DOCENT_DIALOG_STUB` selects it in a running app; tests construct it
+/// directly, so parallel cases never contend over one process-wide variable.
+pub struct StubDialog {
+    answer: String,
+}
+
+impl StubDialog {
+    pub fn new(answer: impl Into<String>) -> Self {
+        Self {
+            answer: answer.into(),
+        }
+    }
+
+    pub fn from_env() -> Option<Self> {
+        std::env::var("DOCENT_DIALOG_STUB").ok().map(Self::new)
+    }
+
+    fn answer(&self) -> Option<PathBuf> {
+        if self.answer == "cancel" {
+            None
+        } else {
+            Some(PathBuf::from(&self.answer))
+        }
+    }
+}
+
+impl FileDialog for StubDialog {
+    fn pick_open(&self) -> Option<PathBuf> {
+        self.answer()
+    }
+
+    fn pick_save(&self, _suggested_name: &str) -> Option<PathBuf> {
+        self.answer()
+    }
+}
 
 /// The running store. Dropping it stops the listener and joins its thread.
 pub struct StoreHandle {
@@ -65,7 +123,7 @@ impl Drop for StoreHandle {
 }
 
 /// Bind loopback on an ephemeral port and serve `data_dir` until dropped.
-pub fn spawn(data_dir: PathBuf) -> std::io::Result<StoreHandle> {
+pub fn spawn(data_dir: PathBuf, dialogs: Arc<dyn FileDialog>) -> std::io::Result<StoreHandle> {
     fs::create_dir_all(&data_dir)?;
     let server = Server::http((Ipv4Addr::LOCALHOST, 0))
         .map_err(|err| std::io::Error::other(err.to_string()))?;
@@ -80,9 +138,11 @@ pub fn spawn(data_dir: PathBuf) -> std::io::Result<StoreHandle> {
         thread::spawn(move || {
             // One request at a time: every handler is a stat, a read, or a
             // rename against the local disk, and a single user's canvas never
-            // queues deep enough for a pool to pay for itself.
+            // queues deep enough for a pool to pay for itself. A dialog holds
+            // the thread for as long as it is open, which is the point — the
+            // user is answering it, and nothing else should proceed meanwhile.
             for request in server.incoming_requests() {
-                serve(&data_dir, request);
+                serve(&data_dir, dialogs.as_ref(), request);
             }
         })
     };
@@ -128,7 +188,7 @@ impl Reply {
     }
 }
 
-fn serve(data_dir: &Path, mut request: Request) {
+fn serve(data_dir: &Path, dialogs: &dyn FileDialog, mut request: Request) {
     let origin = request
         .headers()
         .iter()
@@ -142,7 +202,7 @@ fn serve(data_dir: &Path, mut request: Request) {
             .with_status_code(204)
             .with_header(header(
                 "Access-Control-Allow-Methods",
-                "GET, PUT, DELETE, OPTIONS",
+                "GET, POST, PUT, DELETE, OPTIONS",
             ))
             .with_header(header("Access-Control-Allow-Headers", "content-type"))
             .with_header(header("Access-Control-Max-Age", "86400"));
@@ -153,7 +213,7 @@ fn serve(data_dir: &Path, mut request: Request) {
         return;
     }
 
-    let (status, body) = match dispatch(data_dir, &mut request) {
+    let (status, body) = match dispatch(data_dir, dialogs, origin.as_deref(), &mut request) {
         Ok(reply) => (reply.status, reply.json),
         Err(err) => (
             err.status,
@@ -185,10 +245,33 @@ fn header(name: &str, value: &str) -> Header {
         .expect("static header name and value are valid")
 }
 
-fn dispatch(data_dir: &Path, request: &mut Request) -> Result<Reply> {
+fn dispatch(
+    data_dir: &Path,
+    dialogs: &dyn FileDialog,
+    origin: Option<&str>,
+    request: &mut Request,
+) -> Result<Reply> {
     let method = request.method().clone();
     let segments = path_segments(request.url());
     let part = |i: usize| segments.get(i).map(String::as_str);
+
+    // The two endpoints that reach outside the portfolio, into whatever file
+    // the user points the dialog at. They are POSTs a page can send without a
+    // preflight, so CORS alone would not stop one — the app's own origin is
+    // required outright, and an unknown or absent one never raises a dialog.
+    if part(0) == Some("desktop") {
+        if method != Method::Post {
+            return Err(HttpError::new(404, "not found"));
+        }
+        if !origin.is_some_and(|origin| ALLOWED_ORIGINS.contains(&origin)) {
+            return Err(HttpError::new(403, "forbidden"));
+        }
+        return match part(1) {
+            Some("import") if segments.len() == 2 => import_file(dialogs),
+            Some("export") if segments.len() == 2 => export_file(dialogs, request),
+            _ => Err(HttpError::new(404, "not found")),
+        };
+    }
 
     if part(0) != Some("api") {
         return Err(HttpError::new(404, "not found"));
@@ -284,6 +367,66 @@ fn dispatch(data_dir: &Path, request: &mut Request) -> Result<Reply> {
 
 fn internal(err: std::io::Error) -> HttpError {
     HttpError::new(500, err.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// native dialogs
+// ---------------------------------------------------------------------------
+
+/// Raise the open dialog and hand the page the file's text. The page decides
+/// whether the text is a scene — the same check it applies to `?scene=<url>`.
+fn import_file(dialogs: &dyn FileDialog) -> Result<Reply> {
+    let Some(path) = dialogs.pick_open() else {
+        return Ok(Reply::ok(r#"{"canceled":true}"#));
+    };
+    let file = fs::File::open(&path).map_err(internal)?;
+    let mut buffer = Vec::new();
+    // One byte past the ceiling is enough to know it was exceeded, and the
+    // rest of the file is never read.
+    file.take(MAX_IMPORT_BYTES + 1)
+        .read_to_end(&mut buffer)
+        .map_err(internal)?;
+    if buffer.len() as u64 > MAX_IMPORT_BYTES {
+        return Err(HttpError::new(413, "file too large"));
+    }
+    let content =
+        String::from_utf8(buffer).map_err(|_| HttpError::new(400, "file is not UTF-8 text"))?;
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(Reply::ok(
+        serde_json::json!({ "name": name, "content": content }).to_string(),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+struct ExportRequest {
+    name: String,
+    content: String,
+}
+
+/// Raise the save dialog and write the text the page generated — a scene, a
+/// Mermaid diagram, or a semantic sidecar. Only the dialog is the shell's
+/// business; the write happens here, off the main thread.
+fn export_file(dialogs: &dyn FileDialog, request: &mut Request) -> Result<Reply> {
+    let body = read_body(request)?;
+    let payload: ExportRequest =
+        serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not an export"))?;
+    // Only the leaf is a suggestion the dialog can use; a name carrying
+    // separators would otherwise steer where it opens.
+    let suggested = Path::new(&payload.name)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("scene{EXT}"));
+    let Some(path) = dialogs.pick_save(&suggested) else {
+        return Ok(Reply::ok(r#"{"canceled":true}"#));
+    };
+    fs::write(&path, payload.content).map_err(internal)?;
+    Ok(Reply::ok(
+        serde_json::json!({ "saved": path.to_string_lossy() }).to_string(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +705,19 @@ mod tests {
             path_segments("/api/projects/work/scenes/check%20out?x=1"),
             ["api", "projects", "work", "scenes", "check out"]
         );
+    }
+
+    #[test]
+    fn the_stub_dialog_answers_cancel_or_a_path() {
+        let cancelled = StubDialog::new("cancel");
+        assert_eq!(cancelled.pick_open(), None);
+        assert_eq!(cancelled.pick_save("scene.excalidraw"), None);
+
+        let picked = StubDialog::new("/tmp/docent/scene.excalidraw");
+        let expected = Some(PathBuf::from("/tmp/docent/scene.excalidraw"));
+        assert_eq!(picked.pick_open(), expected);
+        // The suggested name is the dialog's business, not the answer's.
+        assert_eq!(picked.pick_save("other.excalidraw"), expected);
     }
 
     #[test]

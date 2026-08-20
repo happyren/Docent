@@ -29,6 +29,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
 
+# Native open/save dialogs. macOS and Windows use their platform APIs
+# unconditionally; on Linux the GTK3 backend is chosen over the default
+# XDG-portal one because Tauri already requires GTK3 there, so the app gains
+# no new runtime service to depend on.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+rfd = { version = "0.17", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "0.17", default-features = false, features = ["gtk3"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

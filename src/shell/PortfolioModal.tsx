@@ -5,7 +5,7 @@
  * files (D17) behind the same-origin store (D18); when the store isn't
  * deployed the modal says so and the file workflows stay untouched.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createProject,
   deleteProject,
@@ -53,6 +53,13 @@ function SceneThumb({ project, scene }: { project: string; scene: SceneInfo }) {
   );
 }
 
+/**
+ * Why the modal was opened. "save" is the desktop's Save with nowhere to save
+ * to yet: the portfolio is that app's file system, so the modal stands in for
+ * a save dialog and opens on the name field with its text selected.
+ */
+export type PortfolioIntent = "browse" | "save";
+
 export interface PortfolioModalProps {
   /** Load a portfolio scene into the canvas. Resolves when loaded. */
   onOpenScene: (project: string, scene: string) => Promise<void>;
@@ -60,6 +67,7 @@ export interface PortfolioModalProps {
   onSaveScene: (project: string, scene: string) => Promise<void>;
   /** Suggested name for "save current scene" (current file name). */
   suggestedName: string;
+  intent?: PortfolioIntent;
   onClose: () => void;
 }
 
@@ -70,6 +78,7 @@ export function PortfolioModal({
   onOpenScene,
   onSaveScene,
   suggestedName,
+  intent = "browse",
   onClose,
 }: PortfolioModalProps) {
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -79,6 +88,7 @@ export function PortfolioModal({
   const [newProject, setNewProject] = useState("");
   const [saveName, setSaveName] = useState(suggestedName);
   const [busy, setBusy] = useState(false);
+  const saveNameRef = useRef<HTMLInputElement | null>(null);
 
   const fail = (err: unknown) =>
     window.alert(err instanceof Error ? err.message : String(err));
@@ -106,6 +116,17 @@ export function PortfolioModal({
     }
     listScenes(selected).then(setScenes).catch(fail);
   }, [selected]);
+
+  // Opened to save: put the caret in the name field with the suggestion
+  // selected, so typing replaces it. The field only exists once a project is
+  // selected, so this waits for the listing rather than firing only on mount.
+  useEffect(() => {
+    if (intent !== "save") return;
+    const input = saveNameRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [intent, available, selected]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -302,9 +323,11 @@ export function PortfolioModal({
                   </div>
                   <div className="docent-portfolio-new">
                     <input
+                      ref={saveNameRef}
                       placeholder="Scene name…"
                       value={saveName}
                       disabled={busy}
+                      autoFocus={intent === "save"}
                       onChange={(e) => setSaveName(e.target.value)}
                       onKeyDown={(e) => e.key === "Enter" && newScene()}
                     />

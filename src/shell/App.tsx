@@ -14,10 +14,11 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
+import { exportSceneFile, importSceneFile } from "./desktop-files";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
 import { IntentPanel } from "./IntentPanel";
-import { PortfolioModal } from "./PortfolioModal";
+import { PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
 import { LegendEditor } from "./LegendEditor";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
@@ -37,18 +38,21 @@ const isDesktop = Boolean(
 );
 
 /**
- * Actions the native menu bar can invoke. The ids are the contract with the
- * Rust menu (src-tauri/src/lib.rs) — change one side and the other must follow.
+ * Actions the native menu bar can invoke, in menu-bar order. The ids are the
+ * contract with the Rust menu (src-tauri/src/lib.rs) — change one side and the
+ * other must follow.
  */
 type DocentMenuId =
+  | "new"
   | "open"
+  | "import"
   | "save"
   | "save-as"
-  | "portfolio"
+  | "export-file"
   | "present"
+  | "library"
   | "legend"
   | "arrange"
-  | "library"
   | "export-mermaid"
   | "export-sidecar";
 
@@ -64,6 +68,7 @@ export function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [portfolioOpen, setPortfolioOpen] = useState(false);
+  const [portfolioIntent, setPortfolioIntent] = useState<PortfolioIntent>("browse");
   // When the current scene came from the portfolio, Save writes back to it
   // (S12). Any local open/save-as clears this and returns Save to file mode.
   const portfolioSourceRef = useRef<{ project: string; scene: string } | null>(null);
@@ -328,6 +333,9 @@ export function App() {
   }, []);
 
   const exportBaseName = (fileName ?? UNTITLED).replace(/\.excalidraw$/, "");
+  // A portfolio scene is named "<project>/<scene>" on screen; a file dialog
+  // wants the leaf of that, and nothing that looks like a path.
+  const exportLeafName = exportBaseName.replace(/^.*\//, "");
 
   const exportMermaidFile = useCallback(() => {
     const canvasHandle = canvasRef.current;
@@ -378,6 +386,10 @@ export function App() {
   }, [canvas, camera, commands, prepareSceneForSave]);
 
   // Portfolio flows (S12). Opening tracks the source so Save writes back.
+  const openPortfolio = useCallback((intent: PortfolioIntent) => {
+    setPortfolioIntent(intent);
+    setPortfolioOpen(true);
+  }, []);
   const openPortfolioScene = useCallback(
     async (project: string, scene: string) => {
       const handle = canvasRef.current;
@@ -402,6 +414,57 @@ export function App() {
     },
     [markClean, prepareSceneForSave, syncSceneUrl],
   );
+
+  // Desktop file flows (S13). The system webview has no File System Access API
+  // and ignores anchor downloads, so the browser open/save/download paths are
+  // dead ends there: the portfolio is the desktop's file system, and the two
+  // directions that must cross to a loose file on disk go through the shell's
+  // native dialogs. Only the native menu reaches these — the handler map below
+  // is installed in the desktop shell alone.
+  const importSceneIntoCanvas = useCallback(async () => {
+    const handle = canvasRef.current;
+    if (!handle) return;
+    try {
+      const picked = await importSceneFile();
+      if (!picked) return;
+      // The same gate the ?scene= loader applies: a file that isn't a scene
+      // must fail loudly rather than blank the canvas.
+      let parsed: { type?: string };
+      try {
+        parsed = JSON.parse(picked.content) as { type?: string };
+      } catch {
+        throw new Error("not an .excalidraw file");
+      }
+      if (parsed.type !== "excalidraw") {
+        throw new Error("not an .excalidraw file");
+      }
+      await handle.loadSceneBlob(
+        new Blob([picked.content], { type: "application/json" }),
+      );
+      // An imported file has no portfolio home until the user gives it one.
+      fsHandleRef.current = null;
+      portfolioSourceRef.current = null;
+      syncSceneUrl(null);
+      markClean(picked.name);
+      fitLayerOne();
+    } catch (err) {
+      console.error(err);
+      window.alert(
+        `Could not import scene: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }, [markClean, fitLayerOne, syncSceneUrl]);
+
+  const exportToFile = useCallback(async (name: string, contents: string) => {
+    try {
+      await exportSceneFile(name, contents);
+    } catch (err) {
+      console.error(err);
+      window.alert(
+        `Could not export "${name}": ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }, []);
 
   // Startup scene load (?scene=<url>) runs in an effect so it acts only after
   // the canvas is mounted — the excalidrawAPI callback fires mid-mount, and
@@ -461,6 +524,9 @@ export function App() {
 
   // File shortcuts (always active).
   useEffect(() => {
+    // Except in the desktop shell, where the native accelerators own these
+    // chords: a second in-page handler would fire alongside them.
+    if (isDesktop) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
@@ -486,17 +552,47 @@ export function App() {
   const menuHandlersRef = useRef<Record<DocentMenuId, () => void>>(
     {} as Record<DocentMenuId, () => void>,
   );
+  // Desktop semantics throughout: the portfolio is this app's file system, so
+  // New, Open and Save address it, and only Import/Export cross to a loose
+  // file. The web app never reaches this map — it keeps the in-canvas menu and
+  // the browser file paths, both untouched.
   menuHandlersRef.current = {
-    open: () => void openScene(),
-    save: () => void saveScene(),
-    "save-as": () => void saveSceneAs(),
-    portfolio: () => setPortfolioOpen(true),
+    new: () => openPortfolio("save"),
+    open: () => openPortfolio("browse"),
+    import: () => void importSceneIntoCanvas(),
+    save: () => {
+      // Nowhere to save to yet: the modal stands in for the save dialog,
+      // opened on its name field.
+      if (!portfolioSourceRef.current) openPortfolio("save");
+      else void saveScene();
+    },
+    "save-as": () => {
+      // A copy under a new name — detach first, so a cancelled Save As cannot
+      // silently overwrite the scene it started from.
+      portfolioSourceRef.current = null;
+      syncSceneUrl(null);
+      openPortfolio("save");
+    },
+    "export-file": () => {
+      if (!canvasRef.current) return;
+      void exportToFile(ensureExtension(exportLeafName), prepareSceneForSave());
+    },
     present: () => presentation.enter(),
+    library: () => canvasRef.current?.toggleLibrarySidebar(),
     legend: () => setLegendOpen(true),
     arrange: arrangeTiers,
-    library: () => canvasRef.current?.toggleLibrarySidebar(),
-    "export-mermaid": exportMermaidFile,
-    "export-sidecar": exportSidecarFile,
+    "export-mermaid": () => {
+      const handle = canvasRef.current;
+      if (!handle) return;
+      const { mermaid } = exportScene(handle.getSceneSnapshot());
+      void exportToFile(`${exportLeafName}.mmd`, mermaid);
+    },
+    "export-sidecar": () => {
+      const handle = canvasRef.current;
+      if (!handle) return;
+      const { sidecar } = exportScene(handle.getSceneSnapshot());
+      void exportToFile(`${exportLeafName}.docent.json`, sidecar);
+    },
   };
   useEffect(() => {
     if (!isDesktop) return;
@@ -638,7 +734,7 @@ export function App() {
             onSaveAs: () => void saveSceneAs(),
             onPresent: () => presentation.enter(),
             onOpenLegend: () => setLegendOpen(true),
-            onOpenPortfolio: () => setPortfolioOpen(true),
+            onOpenPortfolio: () => openPortfolio("browse"),
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
@@ -719,6 +815,7 @@ export function App() {
           onOpenScene={openPortfolioScene}
           onSaveScene={savePortfolioSceneAs}
           suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^.*\//, "")}
+          intent={portfolioIntent}
           onClose={() => setPortfolioOpen(false)}
         />
       )}

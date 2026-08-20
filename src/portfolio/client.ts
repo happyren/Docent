@@ -11,7 +11,7 @@
  * can answer on. Everywhere else the global is absent and requests stay
  * same-origin, exactly as before.
  */
-const API_BASE =
+export const API_BASE =
   (window as { __DOCENT_API_BASE__?: string }).__DOCENT_API_BASE__ ?? "";
 
 export interface ProjectInfo {

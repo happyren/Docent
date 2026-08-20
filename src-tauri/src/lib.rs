@@ -15,6 +15,10 @@
 
 pub mod store;
 
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::Arc;
+
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
@@ -22,12 +26,18 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 /// id the page dispatches on, so this list is one half of a contract with
 /// `window.__docentMenu` (src/shell/App.tsx) — the ids are matched literally
 /// by the test at the bottom of this file.
+///
+/// File reads as it does in a document app, but the document store is the
+/// portfolio: Open browses it, Save writes back into it, and the two items
+/// that cross to a loose file on disk say so — Import and Export.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
+    New,
     Open,
+    Import,
     Save,
     SaveAs,
-    Portfolio,
+    ExportFile,
     Present,
     Library,
     Legend,
@@ -38,11 +48,13 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 10] = [
+    const ALL: [Self; 12] = [
+        Self::New,
         Self::Open,
+        Self::Import,
         Self::Save,
         Self::SaveAs,
-        Self::Portfolio,
+        Self::ExportFile,
         Self::Present,
         Self::Library,
         Self::Legend,
@@ -55,10 +67,12 @@ impl MenuAction {
     /// id, and an id the page does not know fails the contract test.
     const fn id(self) -> &'static str {
         match self {
+            Self::New => "new",
             Self::Open => "open",
+            Self::Import => "import",
             Self::Save => "save",
             Self::SaveAs => "save-as",
-            Self::Portfolio => "portfolio",
+            Self::ExportFile => "export-file",
             Self::Present => "present",
             Self::Library => "library",
             Self::Legend => "legend",
@@ -70,10 +84,12 @@ impl MenuAction {
 
     const fn label(self) -> &'static str {
         match self {
-            Self::Open => "Open Scene…",
+            Self::New => "New Scene…",
+            Self::Open => "Open…",
+            Self::Import => "Import Scene File…",
             Self::Save => "Save",
             Self::SaveAs => "Save As…",
-            Self::Portfolio => "Portfolio…",
+            Self::ExportFile => "Export Scene File…",
             Self::Present => "Present",
             Self::Library => "Library",
             Self::Legend => "Legend…",
@@ -86,14 +102,62 @@ impl MenuAction {
     /// `CmdOrCtrl` resolves to the platform's own modifier.
     const fn accelerator(self) -> Option<&'static str> {
         match self {
+            Self::New => Some("CmdOrCtrl+N"),
             Self::Open => Some("CmdOrCtrl+O"),
+            Self::Import => Some("CmdOrCtrl+Shift+O"),
             Self::Save => Some("CmdOrCtrl+S"),
             Self::SaveAs => Some("CmdOrCtrl+Shift+S"),
-            Self::Portfolio => Some("CmdOrCtrl+Shift+P"),
             Self::Present => Some("CmdOrCtrl+P"),
             Self::Library => Some("CmdOrCtrl+L"),
-            Self::Legend | Self::Arrange | Self::ExportMermaid | Self::ExportSidecar => None,
+            Self::ExportFile
+            | Self::Legend
+            | Self::Arrange
+            | Self::ExportMermaid
+            | Self::ExportSidecar => None,
         }
+    }
+}
+
+/// The native dialogs, hopped to the main thread: macOS refuses to raise one
+/// anywhere else, and the store answers on its own thread. Only the dialog
+/// crosses over — reading and writing the file stays on the store's thread, so
+/// the runloop is never held by disk I/O.
+struct NativeDialog {
+    app: AppHandle,
+}
+
+impl NativeDialog {
+    fn on_main<T: Send + 'static>(&self, work: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+        let (answer, wait) = mpsc::channel();
+        self.app
+            .run_on_main_thread(move || {
+                let _ = answer.send(work());
+            })
+            .ok()?;
+        // The send happens after the dialog closes, so this blocks for exactly
+        // as long as the user takes to answer it.
+        wait.recv().ok()
+    }
+}
+
+impl store::FileDialog for NativeDialog {
+    fn pick_open(&self) -> Option<PathBuf> {
+        self.on_main(|| {
+            rfd::FileDialog::new()
+                .set_title("Import Scene File")
+                .add_filter("Excalidraw scene", &["excalidraw", "json"])
+                .pick_file()
+        })
+        .flatten()
+    }
+
+    fn pick_save(&self, suggested_name: &str) -> Option<PathBuf> {
+        let suggested = suggested_name.to_string();
+        // Deliberately unfiltered: this dialog also saves .mmd and
+        // .semantic.json, and a scene filter would fight their extensions —
+        // the suggested name already carries the right one.
+        self.on_main(move || rfd::FileDialog::new().set_file_name(suggested).save_file())
+            .flatten()
     }
 }
 
@@ -142,11 +206,14 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         "File",
         true,
         &[
+            &item(app, MenuAction::New)?,
             &item(app, MenuAction::Open)?,
+            &item(app, MenuAction::Import)?,
+            &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Save)?,
             &item(app, MenuAction::SaveAs)?,
             &PredefinedMenuItem::separator(app)?,
-            &item(app, MenuAction::Portfolio)?,
+            &item(app, MenuAction::ExportFile)?,
             // macOS keeps Quit in the application menu; the others have none.
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
@@ -269,7 +336,16 @@ pub fn run() {
             // manager can open.
             let data_dir = handle.path().app_data_dir()?.join("portfolio");
 
-            let api_base = match store::spawn(data_dir) {
+            // The stub exists for environments with no display at all; a real
+            // run always gets the platform dialogs.
+            let dialogs: Arc<dyn store::FileDialog> = match store::StubDialog::from_env() {
+                Some(stub) => Arc::new(stub),
+                None => Arc::new(NativeDialog {
+                    app: handle.clone(),
+                }),
+            };
+
+            let api_base = match store::spawn(data_dir, dialogs) {
                 Ok(store) => {
                     let base = store.base_url();
                     // Held for the process lifetime; dropping it stops the
@@ -315,13 +391,16 @@ mod tests {
     use super::{is_docent_menu_id, MenuAction, MENU_IDS};
 
     /// The ids `window.__docentMenu` dispatches on (src/shell/App.tsx),
-    /// written out literally. A rename on either side should fail here rather
-    /// than silently turn a menu item into a no-op.
-    const FRONTEND_IDS: [&str; 10] = [
+    /// written out literally in the same order as the union there. A rename on
+    /// either side should fail here rather than silently turn a menu item into
+    /// a no-op.
+    const FRONTEND_IDS: [&str; 12] = [
+        "new",
         "open",
+        "import",
         "save",
         "save-as",
-        "portfolio",
+        "export-file",
         "present",
         "library",
         "legend",
@@ -356,6 +435,19 @@ mod tests {
     fn menu_ids_are_unique() {
         for (i, id) in MENU_IDS.iter().enumerate() {
             assert!(!MENU_IDS[..i].contains(id), "duplicate menu id: {id}");
+        }
+    }
+
+    #[test]
+    fn accelerators_are_unique() {
+        // Two items on one chord is the failure this whole rework is about:
+        // the key would reach whichever the menu backend resolved first.
+        let keys: Vec<&str> = MenuAction::ALL
+            .iter()
+            .filter_map(|action| action.accelerator())
+            .collect();
+        for (i, key) in keys.iter().enumerate() {
+            assert!(!keys[..i].contains(key), "two menu items claim {key}");
         }
     }
 }

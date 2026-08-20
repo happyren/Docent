@@ -303,6 +303,21 @@ There, Docent's own actions live in the native menus (File, View, Export) and
 the in-canvas Library button is hidden, since View → Library opens it; the
 canvas hamburger keeps Excalidraw's own tools.
 
+| Shortcut | Action |
+|---|---|
+| `⌘N` / `Ctrl+N` | New Scene… |
+| `⌘O` / `Ctrl+O` | Open… — browse the portfolio |
+| `⇧⌘O` / `Ctrl+Shift+O` | Import Scene File… |
+| `⌘S` / `Ctrl+S` | Save |
+| `⇧⌘S` / `Ctrl+Shift+S` | Save As… |
+| `⌘P` / `Ctrl+P` | Present |
+| `⌘L` / `Ctrl+L` | Library |
+
+Saving is portfolio-first: the portfolio **is** the desktop's file system, so
+Save writes back to the project scene it came from, and a scene without a home
+yet asks for one. Import and Export are the two that cross to a loose file on
+disk, and they raise the platform's own file dialogs.
+
 **Download** the build for your platform from the
 [Desktop workflow](https://github.com/happyren/Docent/actions/workflows/desktop.yml)
 — each run uploads `.dmg`/`.app` (macOS, universal), `.msi`/`.exe` (Windows), and
