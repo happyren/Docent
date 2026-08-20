@@ -303,7 +303,10 @@ touring.
 - **Linux** — the AppImage from the same release (`chmod +x`, run).
 
 Installers (dmg / msi / nsis / deb) are attached alongside for those who
-prefer them. A release is cut by pushing a `v*` tag.
+prefer them. Releases cut themselves: every evening that `master` carries
+something the latest release does not, the version bumps (patch, unless a
+commit message includes a line starting `[minor]` or `[major]`), the tag
+lands, and every platform builds and publishes automatically (D30).
 
 The installed app checks GitHub for a newer release once a day, and on demand
 from **Help → Check for Updates…**, then points you at the
@@ -334,9 +337,9 @@ yet asks for one. Import and Export are the two that cross to a loose file on
 disk, and they raise the platform's own file dialogs.
 
 **Download** the build for your platform from the
-[Desktop workflow](https://github.com/happyren/Docent/actions/workflows/desktop.yml)
-— each run uploads `.dmg`/`.app` (macOS, universal), `.msi`/`.exe` (Windows), and
-`.deb`/`.rpm`/`.AppImage` (Linux) as artifacts.
+[latest release](https://github.com/happyren/Docent/releases/latest)
+— every release carries `.dmg`/`.app` (macOS, universal), `.msi`/`.exe`
+(Windows), and `.deb`/`.rpm`/`.AppImage` (Linux).
 
 **Or build it yourself** — needs a [Rust toolchain](https://rustup.rs) plus your
 platform's webview packages ([Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)):
