@@ -548,6 +548,48 @@ body {
   white-space: nowrap;
 }
 
+/* What one scene did since the last sync (D29), in the same small-tag idiom as
+   the read-only mark above: a standing word, never a control. */
+.docent-scene-tag {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: #7fd1ff;
+  border: 1px solid rgba(127, 209, 255, 0.4);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
+/* A conflict is the one state that blocks a push, so it wears the warning
+   colour the read-only tag uses rather than the informational one. */
+.docent-scene-tag.is-conflicted {
+  color: #ffb86b;
+  border-color: rgba(255, 184, 107, 0.5);
+}
+
+/* The sync line: where this copy stands, beside the verbs that move it. */
+.docent-portfolio-sync-summary {
+  color: var(--docent-fg);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the last verb — or the background checkpoint — just did. */
+.docent-portfolio-sync-note {
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.docent-portfolio-conflict {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #ffb86b;
+}
+
 .docent-portfolio-github {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 10px;

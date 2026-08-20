@@ -6,6 +6,10 @@
 //! of them is the bug; `tests/store_github.rs` mirrors the Node suite so the
 //! disagreement surfaces here rather than in someone's portfolio.
 //!
+//! This module is the *network* half alone (D29): the calls a sync verb makes,
+//! and nothing a scene read or write ever reaches. Reconciling those calls with
+//! the working copy on disk is `sync.rs`'s job.
+//!
 //! Everything speaks GitHub's HTTP API — Contents and Git-Data — and nothing
 //! shells out to `git` (D27). The one HTTP client is `ureq`, already carried
 //! for the update check, so the desktop gains no dependency for this.
@@ -30,9 +34,24 @@ pub const DEFAULT_BRANCH: &str = "main";
 /// Every GitHub answer that means "your credential is the problem".
 pub const TOKEN_ERROR: &str =
     "GitHub token missing or rejected for this project — set it in the binding";
-/// The one message a losing write gets, on both stores, word for word.
-pub const CONFLICT_ERROR: &str =
-    "scene changed on GitHub since it was loaded — reload it to get the latest";
+/// What a push gets when someone else committed first — the one fix is a pull.
+pub const MOVED_ERROR: &str = "the remote branch moved — pull first";
+/// …and what it gets on the protected trunk (D33), where only a merge lands.
+pub const BASE_BRANCH_ERROR: &str =
+    "pushing to the base branch is disabled — create a branch and open a pull request";
+
+/// …and what it gets when the last pull left questions the author must answer.
+pub fn unresolved_error(names: &[String]) -> String {
+    format!("resolve the conflicted scenes first: {}", names.join(", "))
+}
+
+/// …and what a branch switch gets while the working copy is not clean.
+pub fn dirty_switch_error(names: &[String]) -> String {
+    format!(
+        "push or resolve local changes before switching branches: {}",
+        names.join(", ")
+    )
+}
 
 /// The other half of a 403: GitHub authenticated the token and refused the
 /// write anyway. A fine-grained PAT defaults to Contents: Read, and an
@@ -150,17 +169,6 @@ pub struct BranchInfo {
     is_base: bool,
     #[serde(rename = "isActive")]
     is_active: bool,
-}
-
-/// One scene as GitHub lists it. `sha` is the conflict token a later write
-/// carries back; local scenes have no such field, which is why it is additive.
-#[derive(Clone, serde::Serialize)]
-pub struct RemoteScene {
-    pub name: String,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: Option<String>,
-    pub size: u64,
-    pub sha: String,
 }
 
 /// A refusal, as the status and message the store answers with.
@@ -341,9 +349,14 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
     }
     let path =
         normalize_repo_path(&text_or(input, "path", "").ok_or_else(|| Failure::bad(PATH_ERROR))?)?;
-    let branch =
-        text_or(input, "branch", DEFAULT_BRANCH).ok_or_else(|| Failure::bad(BRANCH_ERROR))?;
-    check_branch(&branch)?;
+    // Absent stays absent (empty): the active branch resolves at bind time —
+    // stored binding first, else the repository's own default branch as the
+    // probe reads it. Defaulting to a *name* here would bind projects to a
+    // branch the repository may simply not have.
+    let branch = text_or(input, "branch", "").ok_or_else(|| Failure::bad(BRANCH_ERROR))?;
+    if !branch.is_empty() {
+        check_branch(&branch)?;
+    }
     // Stating the base is allowed but never required: the caller resolves it
     // from the repository when the client leaves it out (D28).
     let stated_base = text_or(input, "baseBranch", "").ok_or_else(|| Failure::bad(BRANCH_ERROR))?;
@@ -459,18 +472,16 @@ pub fn token_for(secrets_file: &Path, project: &str) -> Option<String> {
 
 struct CachedListing {
     etag: Option<String>,
-    scenes: Vec<RemoteScene>,
+    entries: BTreeMap<String, String>,
 }
 
-/// Deliberately not persisted. `listings` is the If-None-Match cache for the
-/// one listing call (loads always fetch fresh); `counts` is what lets
-/// `GET /api/projects` name a bound project's scene count without blocking the
-/// whole listing on the network — before anything has been listed a bound
-/// project simply reports zero.
+/// The If-None-Match cache for the one listing call every sync verb starts
+/// with. Deliberately per-process and not persisted: it is an optimization
+/// against GitHub's rate limit, never a source of truth — the working copy on
+/// disk is that (D29).
 #[derive(Default)]
 pub struct Cache {
     listings: Mutex<HashMap<String, CachedListing>>,
-    counts: Mutex<HashMap<String, usize>>,
 }
 
 impl Cache {
@@ -478,25 +489,9 @@ impl Cache {
         Self::default()
     }
 
-    /// What the last listing of this project saw, or zero.
-    pub fn count(&self, project: &str) -> usize {
-        self.counts
-            .lock()
-            .map(|counts| counts.get(project).copied().unwrap_or(0))
-            .unwrap_or(0)
-    }
-
     pub fn forget(&self, project: &str) {
         if let Ok(mut listings) = self.listings.lock() {
             listings.remove(project);
-        }
-    }
-
-    /// Forget the count too — what binding and unbinding do.
-    pub fn forget_all(&self, project: &str) {
-        self.forget(project);
-        if let Ok(mut counts) = self.counts.lock() {
-            counts.remove(project);
         }
     }
 
@@ -508,30 +503,23 @@ impl Cache {
             .and_then(|cached| cached.etag.clone())
     }
 
-    fn cached(&self, project: &str) -> Option<Vec<RemoteScene>> {
+    fn cached(&self, project: &str) -> Option<BTreeMap<String, String>> {
         self.listings
             .lock()
             .ok()?
             .get(project)
-            .map(|cached| cached.scenes.clone())
+            .map(|cached| cached.entries.clone())
     }
 
-    fn store(&self, project: &str, etag: Option<String>, scenes: &[RemoteScene]) {
+    fn store(&self, project: &str, etag: Option<String>, entries: &BTreeMap<String, String>) {
         if let Ok(mut listings) = self.listings.lock() {
             listings.insert(
                 project.to_string(),
                 CachedListing {
                     etag,
-                    scenes: scenes.to_vec(),
+                    entries: entries.clone(),
                 },
             );
-        }
-        self.set_count(project, scenes.len());
-    }
-
-    fn set_count(&self, project: &str, count: usize) {
-        if let Ok(mut counts) = self.counts.lock() {
-            counts.insert(project.to_string(), count);
         }
     }
 }
@@ -829,12 +817,16 @@ fn is_too_large(status: u16, text: &str) -> bool {
     status == 403 && text.to_lowercase().contains("too large")
 }
 
+/// What the bound directory holds on the active branch: scene name → blob sha,
+/// in one request. Revalidated with If-None-Match, because every sync verb
+/// starts here and a project that has not moved should cost the rate limit
+/// nothing.
 pub fn list(
     project: &str,
     binding: &Binding,
     token: &str,
     cache: &Cache,
-) -> Result<Vec<RemoteScene>> {
+) -> Result<BTreeMap<String, String>> {
     let url = format!(
         "{}?ref={}",
         contents_url(binding, None),
@@ -842,17 +834,16 @@ pub fn list(
     );
     let reply = request(token, "GET", &url, None, cache.etag(project))?;
     if reply.status == 304 {
-        if let Some(scenes) = cache.cached(project) {
-            cache.set_count(project, scenes.len());
-            return Ok(scenes);
+        if let Some(entries) = cache.cached(project) {
+            return Ok(entries);
         }
     }
     // A bound path that does not exist yet is the normal state right after
-    // binding — the first save creates it. Listing it as empty is honest; a
-    // wrong owner/repo shows the same, and then fails loudly on the first write.
+    // binding — the first push creates it. Listing it as empty is honest; a
+    // wrong owner/repo shows the same, and then fails loudly on the first push.
     if reply.status == 404 {
-        cache.set_count(project, 0);
-        return Ok(Vec::new());
+        cache.forget(project);
+        return Ok(BTreeMap::new());
     }
     if !reply.is_success() {
         return Err(failure(reply.status, &reply.text));
@@ -861,7 +852,7 @@ pub fn list(
     let entries = entries
         .as_array()
         .ok_or_else(|| Failure::new(502, "the bound path is a file, not a directory"))?;
-    let mut scenes: Vec<RemoteScene> = entries
+    let listed: BTreeMap<String, String> = entries
         .iter()
         .filter_map(|entry| {
             if entry.get("type").and_then(|t| t.as_str()) != Some("file") {
@@ -874,238 +865,173 @@ pub fn list(
             if !valid_name(name) {
                 return None;
             }
-            Some(RemoteScene {
-                name: name.to_string(),
-                updated_at: None,
-                size: entry.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
-                sha: entry
+            Some((
+                name.to_string(),
+                entry
                     .get("sha")
                     .and_then(|s| s.as_str())
                     .unwrap_or_default()
                     .to_string(),
-            })
+            ))
         })
         .collect();
-    crate::store::sort_by(&mut scenes, |scene| &scene.name);
-
-    // One extra request for the whole listing rather than one per scene: the
-    // branch's last commit touching the bound path stamps every scene. Coarse
-    // but honest — and it is exactly what the thumbnail cache keys on, so any
-    // change to any scene re-renders them.
-    if !scenes.is_empty() {
-        let stamp = last_commit_date(binding, token);
-        for scene in &mut scenes {
-            scene.updated_at = stamp.clone();
-        }
-    }
-    cache.store(project, reply.etag, &scenes);
-    Ok(scenes)
+    cache.store(project, reply.etag, &listed);
+    Ok(listed)
 }
 
-fn last_commit_date(binding: &Binding, token: &str) -> Option<String> {
-    let mut query = format!("per_page=1&sha={}", encode_segment(&binding.branch));
-    if !binding.path.is_empty() {
-        query = format!("path={}&{query}", encode_segment(&binding.path));
-    }
+/// One blob, by sha. Every read goes through the Git Data API rather than the
+/// contents API: blobs carry no 1 MB inline ceiling, so a large scene needs no
+/// fallback path at all.
+pub fn blob(binding: &Binding, token: &str, sha: &str) -> Result<String> {
     let reply = request(
         token,
         "GET",
-        &repo_url(binding, &format!("/commits?{query}")),
-        None,
-        None,
-    )
-    .ok()?;
-    if !reply.is_success() {
-        return None;
-    }
-    // A listing is still a listing without timestamps.
-    let commits: serde_json::Value = serde_json::from_str(&reply.text).ok()?;
-    let commit = commits.get(0)?.get("commit")?;
-    commit
-        .get("committer")
-        .and_then(|c| c.get("date"))
-        .or_else(|| commit.get("author").and_then(|a| a.get("date")))
-        .and_then(|date| date.as_str())
-        .map(str::to_string)
-}
-
-/// The file's metadata, or `None` when GitHub says it isn't there.
-fn file_meta(binding: &Binding, token: &str, scene: &str) -> Result<Option<serde_json::Value>> {
-    let url = format!(
-        "{}?ref={}",
-        contents_url(binding, Some(&format!("{scene}{EXT}"))),
-        encode_segment(&binding.branch)
-    );
-    let reply = request(token, "GET", &url, None, None)?;
-    if reply.status == 404 {
-        return Ok(None);
-    }
-    // Oversize: the metadata is unreachable this way, but the file exists.
-    if is_too_large(reply.status, &reply.text) {
-        return Ok(Some(serde_json::Value::Null));
-    }
-    if !reply.is_success() {
-        return Err(failure(reply.status, &reply.text));
-    }
-    Ok(Some(parse_json(&reply.text)?))
-}
-
-fn sha_of(meta: &serde_json::Value) -> Option<String> {
-    meta.get("sha")
-        .and_then(|sha| sha.as_str())
-        .filter(|sha| !sha.is_empty())
-        .map(str::to_string)
-}
-
-/// The blob sha the file currently has on the branch, or `None` when there is
-/// no such file. A file past the contents API's size limit answers without one,
-/// so the listing — which always carries shas — is the fallback.
-fn current_sha(
-    project: &str,
-    binding: &Binding,
-    token: &str,
-    cache: &Cache,
-    scene: &str,
-) -> Result<Option<String>> {
-    let Some(meta) = file_meta(binding, token, scene)? else {
-        return Ok(None);
-    };
-    if let Some(sha) = sha_of(&meta) {
-        return Ok(Some(sha));
-    }
-    Ok(list(project, binding, token, cache)?
-        .into_iter()
-        .find(|entry| entry.name == scene)
-        .map(|entry| entry.sha))
-}
-
-/// The scene's text and the sha that guards the next write of it.
-pub fn load(
-    project: &str,
-    binding: &Binding,
-    token: &str,
-    cache: &Cache,
-    scene: &str,
-) -> Result<(String, String)> {
-    let missing = || Failure::new(404, format!("no such scene: {project}/{scene}"));
-    let meta = file_meta(binding, token, scene)?.ok_or_else(missing)?;
-    let inline = meta
-        .get("encoding")
-        .and_then(|encoding| encoding.as_str())
-        .filter(|encoding| *encoding == "base64")
-        .and_then(|_| meta.get("content"))
-        .and_then(|content| content.as_str())
-        .filter(|content| !content.trim().is_empty());
-    if let Some(content) = inline {
-        let bytes = base64_decode(content)
-            .ok_or_else(|| Failure::new(502, "GitHub API error (undecodable content)"))?;
-        let text = String::from_utf8(bytes)
-            .map_err(|_| Failure::new(502, "GitHub API error (scene is not UTF-8)"))?;
-        return Ok((text, sha_of(&meta).unwrap_or_default()));
-    }
-    // Oversize, or content withheld: read the blob itself, addressed by the sha
-    // the listing knows.
-    let sha = match sha_of(&meta) {
-        Some(sha) => sha,
-        None => current_sha(project, binding, token, cache, scene)?.ok_or_else(missing)?,
-    };
-    let reply = request(
-        token,
-        "GET",
-        &repo_url(binding, &format!("/git/blobs/{}", encode_segment(&sha))),
+        &repo_url(binding, &format!("/git/blobs/{}", encode_segment(sha))),
         None,
         None,
     )?;
     if !reply.is_success() {
         return Err(failure(reply.status, &reply.text));
     }
-    let blob = parse_json(&reply.text)?;
-    let content = blob
+    let body = parse_json(&reply.text)?;
+    let content = body
         .get("content")
         .and_then(|content| content.as_str())
         .ok_or_else(|| Failure::new(502, "GitHub API error (blob carried no content)"))?;
     let bytes = base64_decode(content)
         .ok_or_else(|| Failure::new(502, "GitHub API error (undecodable content)"))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| Failure::new(502, "GitHub API error (scene is not UTF-8)"))?;
-    Ok((text, sha))
+    String::from_utf8(bytes).map_err(|_| Failure::new(502, "GitHub API error (scene is not UTF-8)"))
 }
 
-/// Commit the scene. `header_sha` is the conflict token the client kept from
-/// its load; without one this is the last-write-wins path.
-pub fn save(
-    project: &str,
-    binding: &Binding,
-    token: &str,
-    cache: &Cache,
-    scene: &str,
-    body: &str,
-    header_sha: Option<&str>,
-) -> Result<Option<String>> {
-    let sha = match header_sha {
-        Some(sha) if !sha.is_empty() => Some(sha.to_string()),
-        // No conflict token: the current sha is fetched purely to satisfy
-        // GitHub's own update requirement.
-        _ => current_sha(project, binding, token, cache, scene)?,
-    };
-    let verb = if sha.is_some() { "update" } else { "create" };
-    let mut payload = serde_json::json!({
-        "message": format!("docent: {verb} {project}/{scene}"),
-        "content": base64_encode(body.as_bytes()),
-        "branch": binding.branch,
-    });
-    if let Some(sha) = &sha {
-        payload["sha"] = serde_json::Value::String(sha.clone());
-    }
+/// The branch's head commit and the tree that commit points at.
+pub struct Head {
+    pub commit: String,
+    pub tree: String,
+}
+
+pub fn head(binding: &Binding, token: &str) -> Result<Head> {
+    let commit = branch_head(binding, token, &binding.branch)?;
     let reply = request(
         token,
-        "PUT",
-        &contents_url(binding, Some(&format!("{scene}{EXT}"))),
+        "GET",
+        &repo_url(
+            binding,
+            &format!("/git/commits/{}", encode_segment(&commit)),
+        ),
+        None,
+        None,
+    )?;
+    if !reply.is_success() {
+        return Err(failure(reply.status, &reply.text));
+    }
+    let tree = parse_json(&reply.text)?
+        .get("tree")
+        .and_then(|tree| tree.get("sha"))
+        .and_then(|sha| sha.as_str())
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| Failure::new(502, "GitHub API error (commit carried no tree)"))?
+        .to_string();
+    Ok(Head { commit, tree })
+}
+
+/// The sha a branch currently points at, or a 404 naming the branch.
+fn branch_head(binding: &Binding, token: &str, branch: &str) -> Result<String> {
+    let heads = branch
+        .split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let reply = request(
+        token,
+        "GET",
+        &repo_url(binding, &format!("/git/ref/heads/{heads}")),
+        None,
+        None,
+    )?;
+    if reply.status == 404 {
+        return Err(Failure::new(
+            404,
+            format!(
+                "no branch named {branch} on {}/{}",
+                binding.owner, binding.repo
+            ),
+        ));
+    }
+    if !reply.is_success() {
+        return Err(failure(reply.status, &reply.text));
+    }
+    Ok(parse_json(&reply.text)?
+        .get("object")
+        .and_then(|object| object.get("sha"))
+        .and_then(|sha| sha.as_str())
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| Failure::new(502, "GitHub API error (ref carried no sha)"))?
+        .to_string())
+}
+
+/// POST one of the Git Data objects and read the sha back out of the answer.
+pub fn create_object(
+    binding: &Binding,
+    token: &str,
+    endpoint: &str,
+    payload: &serde_json::Value,
+) -> Result<String> {
+    let reply = request(
+        token,
+        "POST",
+        &repo_url(binding, endpoint),
         Some(payload.to_string()),
         None,
     )?;
-    // 409 is GitHub's own conflict; 422 is what it answers when the sha is
-    // stale or names a file that is no longer there. Both mean the same thing
-    // to a user: someone else moved first.
-    if reply.status == 409 || reply.status == 422 {
-        return Err(Failure::new(409, CONFLICT_ERROR));
+    if !reply.is_success() {
+        return Err(write_failure(binding, reply.status, &reply.text));
+    }
+    Ok(parse_json(&reply.text)?
+        .get("sha")
+        .and_then(|sha| sha.as_str())
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| Failure::new(502, format!("GitHub API error ({endpoint} carried no sha)")))?
+        .to_string())
+}
+
+/// A blob holding the scene's bytes, base64 as the API wants them.
+pub fn create_blob(binding: &Binding, token: &str, content: &str) -> Result<String> {
+    create_object(
+        binding,
+        token,
+        "/git/blobs",
+        &serde_json::json!({
+            "content": base64_encode(content.as_bytes()),
+            "encoding": "base64",
+        }),
+    )
+}
+
+/// Move the branch to the new commit, without force. GitHub answers a
+/// non-fast-forward with a 422, which is the whole point: it is what makes
+/// "someone else pushed while you were drawing" a refusal instead of a lost
+/// commit. Nothing is left behind by the refusal — the blobs, tree and commit
+/// exist unreferenced and GitHub collects them.
+pub fn update_ref(binding: &Binding, token: &str, commit: &str) -> Result<()> {
+    let heads = binding
+        .branch
+        .split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/");
+    let reply = request(
+        token,
+        "PATCH",
+        &repo_url(binding, &format!("/git/refs/heads/{heads}")),
+        Some(serde_json::json!({ "sha": commit, "force": false }).to_string()),
+        None,
+    )?;
+    if reply.status == 422 {
+        return Err(Failure::new(409, MOVED_ERROR));
     }
     if !reply.is_success() {
         return Err(write_failure(binding, reply.status, &reply.text));
     }
-    cache.forget(project);
-    let created = parse_json(&reply.text)?;
-    Ok(created.get("content").and_then(sha_of))
-}
-
-pub fn delete(
-    project: &str,
-    binding: &Binding,
-    token: &str,
-    cache: &Cache,
-    scene: &str,
-) -> Result<()> {
-    let sha = current_sha(project, binding, token, cache, scene)?
-        .ok_or_else(|| Failure::new(404, format!("no such scene: {project}/{scene}")))?;
-    let payload = serde_json::json!({
-        "message": format!("docent: delete {project}/{scene}"),
-        "sha": sha,
-        "branch": binding.branch,
-    });
-    let reply = request(
-        token,
-        "DELETE",
-        &contents_url(binding, Some(&format!("{scene}{EXT}"))),
-        Some(payload.to_string()),
-        None,
-    )?;
-    if reply.status == 409 || reply.status == 422 {
-        return Err(Failure::new(409, CONFLICT_ERROR));
-    }
-    if !reply.is_success() {
-        return Err(write_failure(binding, reply.status, &reply.text));
-    }
-    cache.forget(project);
     Ok(())
 }
 
@@ -1154,37 +1080,7 @@ pub fn list_branches(binding: &Binding, token: &str) -> Result<Vec<BranchInfo>> 
 /// Create `name` off `from`, and answer nothing — the caller switches the
 /// binding to it, because only the caller owns the dotfile.
 pub fn create_branch(binding: &Binding, token: &str, name: &str, from: &str) -> Result<()> {
-    let heads = from
-        .split('/')
-        .map(encode_segment)
-        .collect::<Vec<_>>()
-        .join("/");
-    let reply = request(
-        token,
-        "GET",
-        &repo_url(binding, &format!("/git/ref/heads/{heads}")),
-        None,
-        None,
-    )?;
-    if reply.status == 404 {
-        return Err(Failure::new(
-            404,
-            format!(
-                "no branch named {from} on {}/{}",
-                binding.owner, binding.repo
-            ),
-        ));
-    }
-    if !reply.is_success() {
-        return Err(failure(reply.status, &reply.text));
-    }
-    let sha = parse_json(&reply.text)?
-        .get("object")
-        .and_then(|object| object.get("sha"))
-        .and_then(|sha| sha.as_str())
-        .filter(|sha| !sha.is_empty())
-        .ok_or_else(|| Failure::new(502, "GitHub API error (ref carried no sha)"))?
-        .to_string();
+    let sha = branch_head(binding, token, from)?;
     let payload = serde_json::json!({ "ref": format!("refs/heads/{name}"), "sha": sha });
     let created = request(
         token,
@@ -1369,7 +1265,10 @@ mod tests {
         let ok = normalize_binding(&serde_json::json!({ "owner": "acme", "repo": "diagrams" }))
             .expect("minimal binding");
         assert_eq!(ok.path, "");
-        assert_eq!(ok.branch, DEFAULT_BRANCH);
+        // An absent branch stays absent — put_binding resolves it from the
+        // stored binding or the repository's own default, never from a name
+        // the repository may not have.
+        assert_eq!(ok.branch, "");
         assert_eq!(ok.api_base, DEFAULT_API_BASE);
 
         let trimmed = normalize_binding(&serde_json::json!({

@@ -30,14 +30,9 @@ export interface ProjectInfo {
 
 export interface SceneInfo {
   name: string;
-  /**
-   * Null only on a bound project whose branch has no readable commit date —
-   * a local scene always has its mtime.
-   */
+  /** The file's mtime — a bound project's scenes are files too (D29). */
   updatedAt: string | null;
   size: number;
-  /** The blob sha, on bound projects only — the conflict token for a save. */
-  sha?: string;
 }
 
 /** A project's GitHub binding as the store states it — never with the token. */
@@ -74,6 +69,11 @@ export interface BindingResult {
   /** The base the store recorded — the repository's default branch, usually. */
   baseBranch: string;
   warning?: string;
+  /**
+   * How many scenes the working copy gained or lost, when this PUT moved the
+   * project to another branch (D29). Absent on every other binding write.
+   */
+  pulled?: number;
 }
 
 /**
@@ -101,10 +101,49 @@ export interface BranchInfo {
 }
 
 /**
- * The header the store answers a bound scene with, and the one a save sends
- * back to prove it is writing over what it read (S14).
+ * What one scene of a bound project did since the last synchronization (D29).
+ * `conflicted` outranks the rest: it is the one state the author has to answer
+ * before a push can happen at all.
  */
-const SCENE_SHA_HEADER = "X-Docent-Scene-Sha";
+export type SceneSyncState =
+  | "clean"
+  | "new"
+  | "modified"
+  | "deleted"
+  | "conflicted";
+
+/** Where a bound project stands: what the copy did, and what the branch did. */
+export interface SyncStatus {
+  branch: string;
+  baseBranch: string;
+  local: { name: string; state: SceneSyncState }[];
+  remote: {
+    /** False when GitHub could not be asked at all — offline, or no token. */
+    reachable: boolean;
+    changed: string[];
+    removed: string[];
+  };
+}
+
+/** What a pull did, per scene, in the store's own words. */
+export interface PullResult {
+  ok: boolean;
+  updated: string[];
+  removed: string[];
+  kept: string[];
+  conflicts: string[];
+}
+
+/** What a push landed: one commit, and the scenes that went into it. */
+export interface PushResult {
+  ok: boolean;
+  commit: string;
+  pushed: string[];
+  removedRemotely: string[];
+}
+
+/** How the author answers a conflicted scene. There is no third option. */
+export type Resolution = "keep-local" | "take-remote";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, init);
@@ -252,38 +291,27 @@ function errorFrom(text: string, status: number): string {
 }
 
 /**
- * Raw scene JSON text (already validated as .excalidraw by the store), plus the
- * conflict token when the project is bound to GitHub. Keep the sha with the
- * scene: the next save sends it back, and that is what turns a remote change
- * into a loud 409 instead of a silent overwrite.
+ * Raw scene JSON text (already validated as .excalidraw by the store). A bound
+ * project's scenes are files in its working copy, so this is a disk read there
+ * too — offline included, and never a rate-limited round-trip (D29).
  */
 export async function loadScene(
   project: string,
   scene: string,
-): Promise<{ text: string; sha?: string }> {
+): Promise<string> {
   const res = await fetch(API_BASE + sceneUrl(project, scene));
   const text = await res.text();
   if (!res.ok) throw new Error(errorFrom(text, res.status));
-  return { text, sha: res.headers.get(SCENE_SHA_HEADER) ?? undefined };
+  return text;
 }
 
-/**
- * Write the scene back. `sha` is the token `loadScene` returned; without one a
- * bound save is last-write-wins, with one a remote change answers 409 and the
- * message says to reload. The answer carries the scene's new sha, so the caller
- * can keep saving without reloading.
- */
+/** Write the scene back — a local write, bound or not. */
 export function saveScene(
   project: string,
   scene: string,
   json: string,
-  sha?: string,
-): Promise<{ ok: boolean; sha?: string | null }> {
-  return request(sceneUrl(project, scene), {
-    method: "PUT",
-    body: json,
-    headers: sha ? { [SCENE_SHA_HEADER]: sha } : undefined,
-  });
+): Promise<{ ok: boolean }> {
+  return request(sceneUrl(project, scene), { method: "PUT", body: json });
 }
 
 export function deleteScene(
@@ -292,3 +320,48 @@ export function deleteScene(
 ): Promise<{ ok: boolean }> {
   return request(sceneUrl(project, scene), { method: "DELETE" });
 }
+
+// ---------------------------------------------------------------------------
+// the sync verbs (S14, D29, D33) — the only calls that reach GitHub
+// ---------------------------------------------------------------------------
+
+const syncUrl = (project: string, verb: string) =>
+  `/api/projects/${encodeURIComponent(project)}/${verb}`;
+
+/**
+ * Where the project stands. Cheap and safe to call after every verb: the local
+ * half is file hashes, and the remote half is one listing the store
+ * revalidates with an ETag.
+ */
+export function syncStatus(project: string): Promise<SyncStatus> {
+  return request(syncUrl(project, "sync-status"));
+}
+
+/** Fast-forward the working copy from the branch, flagging what clashed. */
+export function pull(project: string): Promise<PullResult> {
+  return request(syncUrl(project, "pull"), { method: "POST" });
+}
+
+/** Answer one conflicted scene: keep what is here, or take what is there. */
+export function resolveConflict(
+  project: string,
+  scene: string,
+  resolution: Resolution,
+): Promise<{ ok: boolean; scene: string; resolution: Resolution }> {
+  return request(syncUrl(project, "pull/resolve"), {
+    method: "POST",
+    body: JSON.stringify({ scene, resolution }),
+  });
+}
+
+/**
+ * Land every local change as one commit on the active branch. Refused on the
+ * base branch (D33), while a conflict is unresolved, and when the remote
+ * branch has moved — each with a message that says what to do about it.
+ */
+export function push(project: string): Promise<PushResult> {
+  return request(syncUrl(project, "push"), { method: "POST" });
+}
+
+/** The store's word for "someone else committed first", matched exactly. */
+export const REMOTE_MOVED = "the remote branch moved — pull first";

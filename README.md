@@ -103,9 +103,9 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 
 ### ⛓ GitHub-backed projects
 - Any project can **bind to a GitHub repository** — the diagrams then live next to the code they describe, with the history, review and team access the repository already has.
-- Every save is a **commit** (`docent: update work/checkout`); opening fetches the current file; deleting a scene commits its removal. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
-- Writes carry the file's SHA, so a scene someone changed on GitHub since you opened it is a **loud conflict**, never a silent overwrite: *"scene changed on GitHub since it was loaded — reload it to get the latest."*
-- **Branch, then propose.** Pick the branch a project works on, cut a new one for a set of changes, and open a **pull request** back onto the base — diagrams get reviewed the way the code beside them is.
+- A bound project is a **local working copy**: scenes open and save at disk speed, offline included, as the same plain `.excalidraw` files. Synchronization is explicit, like code — **pull**, then **push**, which lands every local change as **one commit**. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
+- When both sides changed a scene, nothing is merged and nothing is overwritten: the scene is listed as a **conflict** with two answers, *Keep mine* and *Take remote*. A push is refused while one is unanswered, and refused if the branch moved while you were drawing — *"the remote branch moved — pull first."*
+- **Branch, then propose.** Pushing to the base branch is **disabled**: cut a branch for a set of changes (Docent offers one the first time you save on the base), let it check point your saves for you, and open a **pull request** back onto the base — diagrams get reviewed the way the code beside them is.
 - Works against **GitHub Enterprise** too: the binding carries its own API base (`https://<host>/api/v3`).
 - Auth is a **fine-grained personal access token** with **Contents: Read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
 - Connecting **checks what the token can do** and says so: a token with read access but no write access binds as **read-only** — the scenes open, and the project wears a `read-only` tag — instead of failing later with a mystery on the first save.
@@ -412,10 +412,36 @@ tag in the list until a token that can write replaces it. A save that GitHub
 refuses says exactly what is missing: *"GitHub rejected the write — the token
 needs Contents: Read and write on `owner/repo`"*.
 
+**A bound project is a working copy.** Its scenes are ordinary `.excalidraw`
+files in the project's own folder, exactly like an unbound project's: opening
+and saving never wait on the network, and both work offline. Synchronization is
+explicit, like code. The **Sync** row says where the copy stands — *"2 modified
+· remote ahead"*, *"clean · up to date"* — and gives you two verbs. **Pull**
+fast-forwards every scene only one side changed and leaves the rest alone;
+where both sides changed, the file on disk is not touched and the scene is
+listed as a conflict with two answers, **Keep mine** and **Take remote**. There
+is no merge, because there is no meaningful line-merge for a drawing. **Push**
+lands every local change — modified, new, and deleted — as **one commit** on
+the branch, refused if the branch moved while you were drawing (pull first) or
+while a conflict is unanswered. Scenes carry a small tag in the grid —
+`modified`, `new`, `conflicted` — so the state is visible before you sync.
+
+**Protected trunk, checkpointed drafts.** Docent never pushes to the base
+branch: that push is refused outright, so the diagrams on `main` change only
+through a pull request someone merged. Saving is never blocked by it — a save
+while you are on the base lands locally as always, and Docent offers once per
+session to cut a draft branch (`docent/diagrams-<date>`) so the work can be
+pushed and reviewed. On a draft branch you do not have to remember to push:
+local changes are committed automatically a short while after you stop saving,
+and swept up periodically after that. It is silent — a short commit sha appears
+in the Sync row and nothing else — except when the branch has moved underneath,
+which it says once and then leaves to you.
+
 **Branches and pull requests.** A bound project shows a **Branch** row: the
 branch its scenes come from and go to, with the repository's default marked
-`(base)`. Switching branches switches what the scene grid shows and where the
-next save commits. **＋ Branch** cuts a new branch off the current one
+`(base)`. Switching branches replaces the working copy with that branch's
+scenes, so it is refused while anything is unpushed — push or resolve first.
+**＋ Branch** cuts a new branch off the current one
 (suggested name: `docent/diagrams-<date>`) and moves the project onto it in the
 same step, so drafts never land on `main` by accident. Once a project is off
 its base, **Open PR** opens a pull request from the working branch onto it and
@@ -514,7 +540,8 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 7. **Legend-as-data.** Declared style→meaning mappings are applied by the exporter; unmapped styling is stripped. Styling is only noise if the legend says so.
 8. **Intent is captured, never guessed.** Meaning enters through the legend, `customData` annotations, and frame narratives at authoring time — it is not recoverable from the data model afterward. Narratives are the single source for both export and tour narration.
 9. **Completeness = round-trip comprehension.** "The export carries the diagram's meaning" is defined by a scored question bank in CI (CONSTITUTION.md Q6) — measured, not asserted.
-10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and SHA-based conflict detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
+10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and blob-SHA change detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
+11. **Bound projects are local-first.** A binding does not move a project's scenes onto the network: the folder stays the working copy, so opens and saves never wait on GitHub and work offline. Synchronization is explicit — pull, resolve, push — and file-granular, because a drawing has no meaningful line-merge. Docent never pushes to the base branch; drafts on a branch check point themselves.
 11. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
 
 ---

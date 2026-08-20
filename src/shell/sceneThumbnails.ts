@@ -20,7 +20,7 @@ export function portfolioThumbnail(
   const hit = cache.get(key);
   if (hit) return hit;
   const pending = (async () => {
-    const { text: json } = await loadScene(project, scene);
+    const json = await loadScene(project, scene);
     const snapshot = snapshotFromSceneJSON(json);
     const tiers = computeTiers(snapshot);
     let include: Set<string> | null = null;

@@ -39,6 +39,14 @@ tiny_http = "0.12"
 # response are a tag and a URL.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
+# The content hash the working copy is measured against (S14, D29). `ring` is
+# already linked into every build — ureq's rustls uses it for TLS — so naming
+# it here adds a use, not a dependency: no new crate is compiled, downloaded,
+# or shipped. Preferred over `sha2` for exactly that reason: sha2 is in the
+# tree only as tauri-codegen's *build*-time dependency, so depending on it
+# would mean compiling and linking a second hash implementation at runtime.
+ring = "0.17"
+
 # Native open/save dialogs. macOS and Windows use their platform APIs
 # unconditionally; on Linux the GTK3 backend is chosen over the default
 # XDG-portal one because Tauri already requires GTK3 there, so the app gains

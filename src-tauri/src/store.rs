@@ -22,12 +22,14 @@
 //! answers false instantly with no box on screen, alert() vanishes — so a page
 //! that asks the user anything has to ask through here or not at all.
 //!
-//! A project may be bound to a GitHub repository instead (S14, D27), in which
-//! case its scenes are read and written over GitHub's HTTP API and its local
-//! directory is left alone. The rules for that live in `github.rs`; this file
-//! only routes to them, and holds the one thing the desktop must decide for
-//! itself: where the token file goes (the app's config directory, never the
-//! portfolio).
+//! A project may also be bound to a GitHub repository (S14, D27, D29), which
+//! changes nothing about the routes above it: the project directory *is* the
+//! working copy, so scene CRUD is the same code either way and never waits on
+//! the network. What a binding adds is the sync verbs — status, pull, resolve,
+//! push — whose rules live in `sync.rs` and whose calls live in `github.rs`.
+//! This file routes to them, and holds the one thing the desktop must decide
+//! for itself: where the token file goes (the app's config directory, never
+//! the portfolio).
 
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -40,6 +42,7 @@ use std::time::UNIX_EPOCH;
 use tiny_http::{Header, Method, Request, Response, Server};
 
 use crate::github::{self, Binding, Cache};
+use crate::sync;
 
 const MAX_SCENE_BYTES: usize = 50 * 1024 * 1024;
 /// Import reads whatever file the user pointed at. The scene ceiling would let
@@ -57,12 +60,6 @@ const ALLOWED_ORIGINS: &[&str] = &[
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ];
-
-/// The conflict token a bound scene carries in both directions (S14). Because
-/// the desktop store is cross-origin, it has to be named twice in the CORS
-/// answer — allowed on the way in, exposed on the way out — or the page could
-/// send it and never read it back.
-const SCENE_SHA_HEADER: &str = "X-Docent-Scene-Sha";
 
 /// The title every message box wears unless the page names one. It is the
 /// application's name because that is what a native box is expected to say
@@ -286,12 +283,11 @@ impl HttpError {
 
 type Result<T> = std::result::Result<T, HttpError>;
 
-/// A successful reply: a status, a body that is already JSON text, and the
-/// headers this particular route adds (only the scene sha, so far).
+/// A successful reply: a status and a body that is already JSON text — a
+/// scene answers with its own bytes, everything else with an envelope.
 struct Reply {
     status: u16,
     json: String,
-    headers: Vec<(&'static str, String)>,
 }
 
 impl Reply {
@@ -303,13 +299,7 @@ impl Reply {
         Self {
             status,
             json: json.into(),
-            headers: Vec::new(),
         }
-    }
-
-    fn with_header(mut self, name: &'static str, value: impl Into<String>) -> Self {
-        self.headers.push((name, value.into()));
-        self
     }
 }
 
@@ -335,10 +325,7 @@ fn serve(context: &Context, dialogs: &dyn Dialogs, mut request: Request) {
                 "Access-Control-Allow-Methods",
                 "GET, POST, PUT, DELETE, OPTIONS",
             ))
-            .with_header(header(
-                "Access-Control-Allow-Headers",
-                &format!("content-type, {SCENE_SHA_HEADER}"),
-            ))
+            .with_header(header("Access-Control-Allow-Headers", "content-type"))
             .with_header(header("Access-Control-Max-Age", "86400"));
         for extra in cors_headers(origin.as_deref()) {
             response = response.with_header(extra);
@@ -347,22 +334,17 @@ fn serve(context: &Context, dialogs: &dyn Dialogs, mut request: Request) {
         return;
     }
 
-    let (status, body, extra_headers) =
-        match dispatch(context, dialogs, origin.as_deref(), &mut request) {
-            Ok(reply) => (reply.status, reply.json, reply.headers),
-            Err(err) => (
-                err.status,
-                serde_json::json!({ "error": err.message }).to_string(),
-                Vec::new(),
-            ),
-        };
+    let (status, body) = match dispatch(context, dialogs, origin.as_deref(), &mut request) {
+        Ok(reply) => (reply.status, reply.json),
+        Err(err) => (
+            err.status,
+            serde_json::json!({ "error": err.message }).to_string(),
+        ),
+    };
 
     let mut response = Response::from_string(body)
         .with_status_code(status)
         .with_header(header("Content-Type", "application/json"));
-    for (name, value) in extra_headers {
-        response = response.with_header(header(name, &value));
-    }
     for extra in cors_headers(origin.as_deref()) {
         response = response.with_header(extra);
     }
@@ -374,10 +356,6 @@ fn cors_headers(origin: Option<&str>) -> Vec<Header> {
     if let Some(origin) = origin {
         if ALLOWED_ORIGINS.contains(&origin) {
             headers.push(header("Access-Control-Allow-Origin", origin));
-            // Without this the page can send the conflict token but never read
-            // the new one back, and every second save would be a false
-            // conflict.
-            headers.push(header("Access-Control-Expose-Headers", SCENE_SHA_HEADER));
         }
     }
     headers
@@ -448,10 +426,10 @@ fn dispatch(
         }
         if method == Method::Delete {
             let dir = project_dir(data_dir, project)?;
-            // Deleting a bound project unbinds it and removes the local
-            // directory. Nothing on GitHub is touched — the repository is the
-            // user's, and a portfolio operation must never reach into it
-            // destructively.
+            // Deleting a bound project unbinds it and removes the working copy
+            // and its sync state. Nothing on GitHub is touched — the
+            // repository is the user's, and a portfolio operation must never
+            // reach into it destructively.
             remove_binding(context, project)?;
             match fs::remove_dir_all(&dir) {
                 Ok(()) => {}
@@ -518,27 +496,72 @@ fn dispatch(
         return open_pull_request(&binding, &token, &body);
     }
 
-    if segments.len() == 4 && part(3) == Some("scenes") && method == Method::Get {
+    // The sync verbs (S14, D29). `sync-status` needs no token: its local half
+    // is the whole point, and a project whose credential is gone still has to
+    // be able to say what its own files did.
+    if segments.len() == 4 && part(3) == Some("sync-status") && method == Method::Get {
         let project = &segments[2];
-        if let Some((binding, token)) = bound(context, project)? {
-            let scenes = github::list(project, &binding, &token, &context.cache)?;
-            return Ok(Reply::ok(serde_json::to_string(&scenes).map_err(json)?));
-        }
-        return list_scenes(data_dir, project);
+        check_name(project, "project")?;
+        let binding = github::load_bindings(data_dir)
+            .remove(project)
+            .ok_or_else(|| {
+                HttpError::new(404, format!("no GitHub binding for project: {project}"))
+            })?;
+        let token = github::token_for(&context.secrets_file, project);
+        let answer = sync::status(
+            data_dir,
+            project,
+            &binding,
+            token.as_deref(),
+            &context.cache,
+        );
+        return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
     }
 
+    if segments.len() == 4 && part(3) == Some("pull") && method == Method::Post {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        require_app_origin(origin)?;
+        let (binding, token) = bound_or_404(context, project)?;
+        let answer = sync::pull(data_dir, project, &binding, &token, &context.cache)?;
+        return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
+    }
+
+    if segments.len() == 5
+        && part(3) == Some("pull")
+        && part(4) == Some("resolve")
+        && method == Method::Post
+    {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        require_app_origin(origin)?;
+        let (binding, token) = bound_or_404(context, project)?;
+        let body = object_body(&read_body(request)?, "a resolution")?;
+        let answer = sync::resolve(data_dir, project, &binding, &token, &body)?;
+        return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
+    }
+
+    if segments.len() == 4 && part(3) == Some("push") && method == Method::Post {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        require_app_origin(origin)?;
+        let (binding, token) = bound_or_404(context, project)?;
+        let answer = sync::push(data_dir, project, &binding, &token, &context.cache)?;
+        return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
+    }
+
+    if segments.len() == 4 && part(3) == Some("scenes") && method == Method::Get {
+        return list_scenes(data_dir, &segments[2]);
+    }
+
+    // Scene CRUD is the same code for every project (D29): a bound project's
+    // directory is its working copy, so opening and saving are file operations
+    // that never wait on — or even reach — the network.
     if segments.len() == 5 && part(3) == Some("scenes") {
         let (project, scene) = (&segments[2], &segments[4]);
         let file = scene_path(data_dir, project, scene)?;
-        // A bound project's scenes live in the repository; the local directory
-        // stays on disk but is not read, not written, and not listed.
-        let bound = bound(context, project)?;
 
         if method == Method::Get {
-            if let Some((binding, token)) = &bound {
-                let (raw, sha) = github::load(project, binding, token, &context.cache, scene)?;
-                return Ok(Reply::ok(raw).with_header(SCENE_SHA_HEADER, sha));
-            }
             return match fs::read_to_string(&file) {
                 Ok(raw) => Ok(Reply::ok(raw)),
                 Err(_) => Err(HttpError::new(
@@ -549,11 +572,6 @@ fn dispatch(
         }
 
         if method == Method::Put {
-            let header_sha = request
-                .headers()
-                .iter()
-                .find(|h| h.field.equiv(SCENE_SHA_HEADER))
-                .map(|h| h.value.as_str().to_string());
             let body = read_body(request)?;
             // The store persists .excalidraw files and nothing else (D17) —
             // reject anything that isn't one, loudly. Bound or not.
@@ -561,20 +579,6 @@ fn dispatch(
                 serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
             if parsed.get("type").and_then(|t| t.as_str()) != Some("excalidraw") {
                 return Err(HttpError::new(400, "body is not an .excalidraw scene"));
-            }
-            if let Some((binding, token)) = &bound {
-                let sha = github::save(
-                    project,
-                    binding,
-                    token,
-                    &context.cache,
-                    scene,
-                    &body,
-                    header_sha.as_deref(),
-                )?;
-                return Ok(Reply::ok(
-                    serde_json::json!({ "ok": true, "sha": sha }).to_string(),
-                ));
             }
             let dir = project_dir(data_dir, project)?;
             if !dir.is_dir() {
@@ -590,10 +594,6 @@ fn dispatch(
         }
 
         if method == Method::Delete {
-            if let Some((binding, token)) = &bound {
-                github::delete(project, binding, token, &context.cache, scene)?;
-                return Ok(Reply::ok(r#"{"ok":true}"#));
-            }
             return match fs::remove_file(&file) {
                 Ok(()) => Ok(Reply::ok(r#"{"ok":true}"#)),
                 Err(_) => Err(HttpError::new(
@@ -720,7 +720,7 @@ fn set_active_branch(context: &Context, project: &str, branch: &str) -> Result<(
     }
     // A different branch is a different set of scenes: whatever this process
     // remembered about the old one is now wrong rather than merely stale.
-    context.cache.forget_all(project);
+    context.cache.forget(project);
     Ok(())
 }
 
@@ -735,6 +735,10 @@ struct BindingAnswer {
     base_branch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     warning: Option<String>,
+    /// How many scenes the working copy gained or lost by switching branches
+    /// (D29) — present only when this PUT was a switch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pulled: Option<usize>,
 }
 
 /// What a created branch answers with (D28).
@@ -757,9 +761,32 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         serde_json::from_str(body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
     let mut binding = github::normalize_binding(&input)?;
     let new_token = github::normalize_token(&input)?;
-    // A bound project still owns a local directory: it is where it came from,
-    // and where it returns to if the binding is removed.
+    // A bound project's directory is its working copy (D29): binding creates
+    // it if it is missing and never touches what is already in it — the first
+    // pull is what reconciles those files with the repository.
     fs::create_dir_all(project_dir(&context.data_dir, project)?).map_err(internal)?;
+    // Moving an existing binding to another branch means the working copy is
+    // about to be replaced with that branch's content, so it has to be clean
+    // first. Answered before the probe: there is no point asking GitHub
+    // anything when the switch cannot happen.
+    // What the caller means by "the branch": stated explicitly, else whatever
+    // this project is already on. Absent both, the binding is fresh and the
+    // probe below names the branch — which cannot be a switch.
+    if binding.branch.is_empty() {
+        if let Some(stored) = github::load_bindings(&context.data_dir).get(project) {
+            binding.branch = stored.branch.clone();
+        }
+    }
+    let switching = !binding.branch.is_empty()
+        && github::load_bindings(&context.data_dir)
+            .get(project)
+            .is_some_and(|stored| stored.branch != binding.branch);
+    if switching {
+        let dirty = sync::dirty_scenes(&context.data_dir, project);
+        if !dirty.is_empty() {
+            return Err(HttpError::new(409, github::dirty_switch_error(&dirty)));
+        }
+    }
     // Whatever token this binding will run on — the one just given, or the one
     // already stored. Without either there is nothing to probe with.
     let token = new_token
@@ -770,6 +797,15 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         None => github::Probe::unknown(),
     };
     binding.can_write = probe.can_write;
+    // The active branch: what was asked for (or already recorded), else the
+    // repository's own default as the probe just read it, else the
+    // conventional name — a store that cannot ask still has to answer.
+    if binding.branch.is_empty() {
+        binding.branch = probe
+            .default_branch
+            .clone()
+            .unwrap_or_else(|| github::DEFAULT_BRANCH.to_string());
+    }
     let mut bindings = github::load_bindings(&context.data_dir);
     // The base is sticky, and every step of this fallback is a real case: what
     // the client stated, else what this project already recorded — which is
@@ -796,19 +832,38 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         secrets.insert(project.to_string(), token);
         github::save_secrets(&context.secrets_file, &secrets).map_err(internal)?;
     }
-    context.cache.forget_all(project);
+    // A different branch is a different set of blobs: whatever this process
+    // remembered about the old one is now wrong rather than merely stale.
+    context.cache.forget(project);
+    // The copy was clean, so a switch can only fast-forward it: every scene
+    // either arrives, changes, or goes, and nothing of the user's is at stake.
+    // A pull that cannot reach GitHub fails loudly — the binding has moved,
+    // and the fix is to pull again rather than to pretend it did not.
+    let pulled = match (switching, token) {
+        (false, _) => None,
+        (true, None) => Some(0),
+        (true, Some(token)) => {
+            let stored = bindings.get(project).expect("just inserted");
+            let answer = sync::pull(&context.data_dir, project, stored, &token, &context.cache)?;
+            Some(answer.updated.len() + answer.removed.len())
+        }
+    };
     Ok(Reply::ok(
         serde_json::to_string(&BindingAnswer {
             ok: true,
             can_write: probe.can_write,
             base_branch,
             warning: probe.warning,
+            pulled,
         })
         .map_err(json)?,
     ))
 }
 
-/// Unbind: metadata and token go, the local directory and GitHub both stay.
+/// Unbind: metadata, sync state and token go; the working copy and GitHub both
+/// stay. Dropping the sync state is what makes rebinding safe — with no
+/// recorded base, every local file reads as never-synced and the first pull
+/// keeps all of them.
 fn remove_binding(context: &Context, project: &str) -> Result<()> {
     let mut bindings = github::load_bindings(&context.data_dir);
     if bindings.remove(project).is_some() {
@@ -818,7 +873,8 @@ fn remove_binding(context: &Context, project: &str) -> Result<()> {
     if secrets.remove(project).is_some() {
         github::save_secrets(&context.secrets_file, &secrets).map_err(internal)?;
     }
-    context.cache.forget_all(project);
+    sync::remove_state(&context.data_dir, project);
+    context.cache.forget(project);
     Ok(())
 }
 
@@ -1054,22 +1110,12 @@ fn list_projects(context: &Context) -> Result<Reply> {
         if id.starts_with('.') {
             continue;
         }
-        if let Some(binding) = bindings.get(&id) {
-            // Deliberately not a network call: the projects listing is the
-            // first thing the modal asks for and must never wait on GitHub.
-            // The count is whatever this process last saw, and zero until it
-            // has seen anything.
-            let scenes = context.cache.count(&id);
-            let can_write = binding.can_write;
-            projects.push(ProjectInfo {
-                id,
-                scenes,
-                updated_at: None,
-                bound: true,
-                can_write,
-            });
-            continue;
-        }
+        // A bound project counts its working copy exactly like any other
+        // (D29): the count is a directory read, never a network call, and it
+        // is true whether or not GitHub can be reached. What the last probe
+        // learned about the token travels with it so the modal can mark a
+        // read-only project without a request per project.
+        let binding = bindings.get(&id);
         let mut scenes = 0_usize;
         let mut updated_at: Option<u128> = None;
         for scene in fs::read_dir(entry.path()).map_err(internal)? {
@@ -1086,8 +1132,8 @@ fn list_projects(context: &Context) -> Result<Reply> {
             id,
             scenes,
             updated_at: updated_at.map(iso8601),
-            bound: false,
-            can_write: None,
+            bound: binding.is_some(),
+            can_write: binding.and_then(|binding| binding.can_write),
         });
     }
     sort_by(&mut projects, |project| &project.id);

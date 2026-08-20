@@ -15,6 +15,7 @@
 
 pub mod github;
 pub mod store;
+pub mod sync;
 pub mod updates;
 
 use std::path::PathBuf;

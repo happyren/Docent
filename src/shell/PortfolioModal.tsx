@@ -10,11 +10,14 @@
  * a bound project wears a ⛓ in the list — plus a "read-only" tag when the
  * store's bind-time probe found a token that can read the repository but not
  * write to it. Everything else about the modal is the same either way — the
- * store makes a bound project look like any other.
+ * store makes a bound project look like any other, because a bound project's
+ * scenes really are local files (D29).
  *
  * The strip's branch row (D28) is the repository's own review flow: pick a
  * branch to work on, cut a new one to draft in, and open a pull request back
- * onto the base when the drafting is done.
+ * onto the base when the drafting is done. Below it the sync row (D29) is the
+ * synchronization itself: where this copy stands, pull, push, and the
+ * per-scene questions a pull could not answer on its own.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -28,15 +31,27 @@ import {
   listProjects,
   listScenes,
   openPullRequest,
+  pull,
+  push,
   putBinding,
+  resolveConflict,
   saveScene,
   storeAvailable,
   switchBranch,
+  syncStatus,
   type Binding,
   type BranchInfo,
   type ProjectInfo,
   type SceneInfo,
+  type SceneSyncState,
+  type SyncStatus,
 } from "../portfolio/client";
+import {
+  beginSync,
+  endSync,
+  onAutoCommit,
+  suggestedBranch,
+} from "../portfolio/autoCommit";
 import { alertDialog, confirmDialog } from "./dialogs";
 import { portfolioThumbnail } from "./sceneThumbnails";
 
@@ -97,9 +112,44 @@ const EMPTY_FORM = {
   token: "",
 };
 
-/** What a new branch is called unless the user says otherwise (D28). */
-const suggestedBranch = () =>
-  `docent/diagrams-${new Date().toISOString().slice(0, 10)}`;
+/**
+ * The one-line summary of where a bound project stands: what the working copy
+ * did, what the branch did, and — on the protected trunk (D33) — why Push is
+ * not on offer. Derived entirely from one sync-status answer, so it says the
+ * same thing the buttons beside it do.
+ */
+function summarize(sync: SyncStatus | null): string {
+  if (!sync) return "checking…";
+  const counts = new Map<SceneSyncState, number>();
+  for (const scene of sync.local) {
+    if (scene.state === "clean") continue;
+    counts.set(scene.state, (counts.get(scene.state) ?? 0) + 1);
+  }
+  // A fixed order so the line never reshuffles between refreshes, with the
+  // state that blocks a push named first.
+  const order: SceneSyncState[] = ["conflicted", "modified", "new", "deleted"];
+  const changes = order
+    .filter((state) => counts.has(state))
+    .map((state) => `${counts.get(state)} ${state}`);
+  const local = changes.length > 0 ? changes.join(", ") : "clean";
+  const remote = !sync.remote.reachable
+    ? "remote unreachable"
+    : sync.remote.changed.length + sync.remote.removed.length > 0
+      ? "remote ahead"
+      : "up to date";
+  const parts = [local, remote];
+  if (sync.branch === sync.baseBranch) {
+    parts.push(`on ${sync.baseBranch} — create a branch to push`);
+  }
+  return parts.join(" · ");
+}
+
+/** Everything a push would carry — what makes the button worth pressing. */
+const hasPushable = (sync: SyncStatus | null) =>
+  sync?.local.some((scene) => scene.state !== "clean") ?? false;
+
+const conflictsOf = (sync: SyncStatus | null) =>
+  sync?.local.filter((scene) => scene.state === "conflicted") ?? [];
 
 /**
  * The branch row (D28): which branch this project's scenes come from and go
@@ -265,6 +315,147 @@ function BranchRow({
 }
 
 /**
+ * The sync row (D29, D33): where this working copy stands against the branch,
+ * and the two verbs that move it. Pull fast-forwards and asks about anything
+ * it could not decide; Push lands every local change as one commit — never on
+ * the base branch, and never over an unanswered question.
+ *
+ * A conflict is not an error state to clear: it is a question with two
+ * answers, one row each, and neither of them is a merge.
+ */
+function SyncRow({
+  project,
+  sync,
+  disabled,
+  onChanged,
+}: {
+  project: string;
+  sync: SyncStatus | null;
+  disabled: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+
+  // What the background checkpoint did, said where the manual verbs say their
+  // own results — the author should not have to guess whether it is running.
+  useEffect(
+    () =>
+      onAutoCommit((event) => {
+        if (event.project !== project) return;
+        setNote(
+          event.kind === "committed"
+            ? `auto-committed ${event.commit?.slice(0, 7) ?? ""}`.trim()
+            : `drafting on ${event.branch}`,
+        );
+        onChanged();
+      }),
+    [project, onChanged],
+  );
+
+  /**
+   * Run one verb, holding the project so the background checkpoint cannot
+   * overlap it, and saying loudly whatever the store refused with.
+   */
+  const act = (label: string, action: () => Promise<string | null>) =>
+    void (async () => {
+      if (!beginSync(project)) return;
+      setBusy(true);
+      try {
+        setNote(await action());
+      } catch (err) {
+        setNote(null);
+        await alertDialog(
+          `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      } finally {
+        endSync(project);
+        setBusy(false);
+        onChanged();
+      }
+    })();
+
+  const doPull = () =>
+    act("Pull", async () => {
+      const result = await pull(project);
+      const said = [
+        result.updated.length > 0 && `${result.updated.length} updated`,
+        result.removed.length > 0 && `${result.removed.length} removed`,
+        result.kept.length > 0 && `${result.kept.length} kept`,
+        result.conflicts.length > 0 && `${result.conflicts.length} conflicted`,
+      ].filter((part): part is string => typeof part === "string");
+      return said.length > 0 ? `pulled: ${said.join(", ")}` : "already up to date";
+    });
+
+  const doPush = () =>
+    act("Push", async () => {
+      const result = await push(project);
+      // The short sha is what a user checks against the repository, and the
+      // Open PR button beside it is where the branch goes next.
+      return `pushed ${result.commit.slice(0, 7)}`;
+    });
+
+  const answer = (scene: string, resolution: "keep-local" | "take-remote") =>
+    act("Resolve", async () => {
+      await resolveConflict(project, scene, resolution);
+      return `${scene}: ${resolution === "keep-local" ? "kept yours" : "took theirs"}`;
+    });
+
+  const working = busy || disabled;
+  const conflicts = conflictsOf(sync);
+  const onBase = sync !== null && sync.branch === sync.baseBranch;
+  const pushable = hasPushable(sync) && !onBase;
+
+  return (
+    <>
+      <div className="docent-portfolio-github-branches">
+        <span className="docent-portfolio-github-label">Sync</span>
+        <span className="docent-portfolio-sync-summary">{summarize(sync)}</span>
+        <button
+          disabled={working || sync === null}
+          title="Bring this copy up to date with the branch"
+          onClick={doPull}
+        >
+          Pull
+        </button>
+        <button
+          disabled={working || !pushable}
+          title={
+            onBase
+              ? `${sync?.baseBranch ?? "The base branch"} is protected — create a branch, then push and open a pull request`
+              : "Commit every local change to the branch"
+          }
+          onClick={doPush}
+        >
+          Push
+        </button>
+        {note && <span className="docent-portfolio-sync-note">{note}</span>}
+      </div>
+      {conflicts.map((scene) => (
+        <div key={scene.name} className="docent-portfolio-github-branches">
+          <span className="docent-portfolio-conflict">conflict</span>
+          <span className="docent-portfolio-sync-summary">{scene.name}</span>
+          <button
+            disabled={working}
+            title="Keep this copy; the next push overwrites the branch"
+            onClick={() => answer(scene.name, "keep-local")}
+          >
+            Keep mine
+          </button>
+          <button
+            disabled={working}
+            title="Replace this copy with the branch's"
+            onClick={() => answer(scene.name, "take-remote")}
+          >
+            Take remote
+          </button>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/**
  * The GitHub strip (S14) for the selected project: connect it to a repository,
  * change where it points, replace its token, or disconnect it. The token field
  * is write-only in both directions — the store never sends one back, so an
@@ -272,9 +463,11 @@ function BranchRow({
  */
 function GitHubPanel({
   project,
+  sync,
   onChanged,
 }: {
   project: string;
+  sync: SyncStatus | null;
   onChanged: () => void;
 }) {
   const [binding, setBinding] = useState<Binding | null | undefined>(undefined);
@@ -429,15 +622,23 @@ function GitHubPanel({
           </>
         )}
       </div>
-      {/* Branches need a token to ask about at all, and the line above already
-          says when there isn't one. */}
+      {/* Branches and synchronization both need a token to ask about at all,
+          and the line above already says when there isn't one. */}
       {binding && binding.hasToken && (
-        <BranchRow
-          project={project}
-          binding={binding}
-          disabled={busy}
-          onChanged={reload}
-        />
+        <>
+          <BranchRow
+            project={project}
+            binding={binding}
+            disabled={busy}
+            onChanged={reload}
+          />
+          <SyncRow
+            project={project}
+            sync={sync}
+            disabled={busy}
+            onChanged={onChanged}
+          />
+        </>
       )}
       {open && (
         <div className="docent-portfolio-github-form">
@@ -560,6 +761,9 @@ export function PortfolioModal({
   const [newProject, setNewProject] = useState("");
   const [saveName, setSaveName] = useState(suggestedName);
   const [busy, setBusy] = useState(false);
+  // Where the selected project stands against its branch (D29), or null when
+  // it is a plain local project — which is what a 404 from the store means.
+  const [sync, setSync] = useState<SyncStatus | null>(null);
   // Bumped whenever the scenes on screen start coming from somewhere else —
   // a new binding, or another branch of the same repository (D28). Thumbnails
   // are cached per scene revision, and "the same name at the same timestamp on
@@ -603,13 +807,53 @@ export function PortfolioModal({
     );
   }, []);
 
+  /**
+   * A project's sync state, or null when it has none. Never fatal: an unbound
+   * project answers 404 here, and a store that cannot say is no reason to stop
+   * showing the scenes.
+   */
+  const refreshSync = useCallback(async (project: string) => {
+    try {
+      setSync(await syncStatus(project));
+    } catch {
+      setSync(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (!selected) {
       setScenes([]);
+      setSync(null);
       return;
     }
     refreshScenes(selected).catch(fail);
-  }, [selected, refreshScenes]);
+    void refreshSync(selected);
+  }, [selected, refreshScenes, refreshSync]);
+
+  /**
+   * What every binding, branch and sync action ends with. Binding, unbinding,
+   * switching branches and pulling all change where the scenes come from, so
+   * both listings — and every thumbnail — are stale the moment one lands. The
+   * scene listing goes before the sync state on purpose: it is what puts the
+   * project's count back into the sidebar.
+   */
+  const handleSynced = useCallback(() => {
+    if (!selected) return;
+    setThumbRevision((revision) => revision + 1);
+    void (async () => {
+      await refreshProjects();
+      await refreshScenes(selected);
+      await refreshSync(selected);
+    })().catch(fail);
+  }, [selected, refreshProjects, refreshScenes, refreshSync]);
+
+  /** The badge a scene wears in the grid, or nothing when it is clean. */
+  const badgeOf = (name: string): SceneSyncState | null => {
+    const state = sync?.local.find((scene) => scene.name === name)?.state;
+    return state === undefined || state === "clean" || state === "deleted"
+      ? null
+      : state;
+  };
 
   // Opened to save: put the caret in the name field with the suggestion
   // selected, so typing replaces it. The field only exists once a project is
@@ -676,6 +920,9 @@ export function PortfolioModal({
         await deleteScene(selected, name);
         setScenes(await listScenes(selected));
         await refreshProjects();
+        // Deleting a bound scene is a local deletion the next push carries, so
+        // the sync line has just changed.
+        await refreshSync(selected);
       });
     })();
   };
@@ -717,6 +964,7 @@ export function PortfolioModal({
       await onSaveScene(selected, name);
       setScenes(await listScenes(selected));
       await refreshProjects();
+      await refreshSync(selected);
     });
   };
 
@@ -835,6 +1083,25 @@ export function PortfolioModal({
                         />
                         <div className="docent-scene-caption">
                           <span className="docent-portfolio-name">{s.name}</span>
+                          {/* What this scene did since the last sync (D29) —
+                              shown only when it did something. */}
+                          {badgeOf(s.name) && (
+                            <span
+                              className={
+                                "docent-scene-tag" +
+                                (badgeOf(s.name) === "conflicted"
+                                  ? " is-conflicted"
+                                  : "")
+                              }
+                              title={
+                                badgeOf(s.name) === "conflicted"
+                                  ? "Changed here and on the branch — answer it in the sync row below"
+                                  : "Not on the branch yet — Push commits it"
+                              }
+                            >
+                              {badgeOf(s.name)}
+                            </span>
+                          )}
                           <span className="docent-portfolio-meta">
                             {fmtTime(s.updatedAt)}
                           </span>
@@ -880,18 +1147,8 @@ export function PortfolioModal({
                   </div>
                   <GitHubPanel
                     project={selected}
-                    onChanged={() => {
-                      // Binding, unbinding, and switching branches all swap
-                      // where the scenes come from, so both listings — and
-                      // every thumbnail — are stale the moment it lands. The
-                      // scene listing goes second on purpose: it is what puts
-                      // the bound project's count back into the sidebar.
-                      setThumbRevision((revision) => revision + 1);
-                      void (async () => {
-                        await refreshProjects();
-                        await refreshScenes(selected);
-                      })().catch(fail);
-                    }}
+                    sync={sync}
+                    onChanged={handleSynced}
                   />
                 </>
               )}

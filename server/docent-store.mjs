@@ -9,20 +9,24 @@
  * Served same-origin behind nginx at /api/ (D18); the dev server proxies
  * the same path, so the client never needs CORS.
  *
- * A project may instead be **bound to a GitHub repository** (S14, D27): its
- * scenes then live in that repo and every route below reads and writes them
- * over GitHub's HTTP API — no `git` binary anywhere. The local directory of a
- * bound project stays on disk untouched and is ignored while the binding
- * lasts. Binding metadata lives in one dotfile at the data root; the token
- * never does (see BINDINGS_FILE / SECRETS_FILE below).
+ * A project may also be **bound to a GitHub repository** (S14, D27, D29), and
+ * that changes nothing about how its scenes are read and written: the project
+ * directory *is* the working copy, and open/save never wait on the network.
+ * What a binding adds is explicit synchronization, like code — pull, resolve,
+ * push — plus the branch and pull-request routes below. No `git` binary
+ * anywhere; everything speaks GitHub's HTTP API.
+ *
+ * Binding metadata lives in one dotfile at the data root and per-project sync
+ * state beside it; neither ever carries the token (see BINDINGS_FILE /
+ * SYNC_DIR / SECRETS_FILE below).
  *
  * Run:  node server/docent-store.mjs      (port 3400, data dir ./data)
  * Env:  DOCENT_STORE_PORT, DOCENT_DATA, DOCENT_SECRETS
  *
  * A bound project also gets the repository's own review flow (D28): the
- * binding records a `baseBranch`, the active `branch` is where every scene
- * operation lands, and the two branch routes below are how a user drafts on a
- * branch and opens a pull request back onto the base.
+ * binding records a `baseBranch`, the active `branch` is what pull and push
+ * talk to, and the two branch routes below are how a user drafts on a branch
+ * and opens a pull request back onto the base.
  *
  * API (JSON in/out; errors are { error } with a 4xx/5xx status):
  *   GET    /api/health                          → { ok: true }
@@ -30,17 +34,22 @@
  *   PUT    /api/projects/:project               → { id }            (create)
  *   DELETE /api/projects/:project               → { ok }            (recursive)
  *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, baseBranch, apiBase, hasToken, canWrite }
- *   PUT    /api/projects/:project/binding       → { ok, canWrite, baseBranch, warning? }  (token write-only)
- *   DELETE /api/projects/:project/binding       → { ok }            (local dir stays)
+ *   PUT    /api/projects/:project/binding       → { ok, canWrite, baseBranch, warning?, pulled? }  (token write-only)
+ *   DELETE /api/projects/:project/binding       → { ok }            (working copy stays)
  *   GET    /api/projects/:project/branches      → [{ name, isBase, isActive }]
  *   POST   /api/projects/:project/branches      → { ok, branch }    (creates it and switches to it)
  *   POST   /api/projects/:project/pull-request  → { ok, url, number }
- *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size, sha? }]
- *   GET    /api/projects/:project/scenes/:name  → scene JSON        (+ X-Docent-Scene-Sha when bound)
- *   PUT    /api/projects/:project/scenes/:name  → { ok, sha? }      (atomic; X-Docent-Scene-Sha guards bound writes)
+ *   GET    /api/projects/:project/sync-status   → { branch, baseBranch, local, remote }
+ *   POST   /api/projects/:project/pull          → { ok, updated, removed, kept, conflicts }
+ *   POST   /api/projects/:project/pull/resolve  → { ok, scene, resolution }
+ *   POST   /api/projects/:project/push          → { ok, commit, pushed, removedRemotely }
+ *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size }]
+ *   GET    /api/projects/:project/scenes/:name  → scene JSON
+ *   PUT    /api/projects/:project/scenes/:name  → { ok }            (atomic)
  *   DELETE /api/projects/:project/scenes/:name  → { ok }
  */
 import http from "node:http";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -53,6 +62,12 @@ const EXT = ".excalidraw";
 // holding project-id → binding metadata. It carries no secrets, so copying a
 // portfolio can never leak a credential.
 const BINDINGS_FILE = path.join(DATA_DIR, ".docent", "bindings.json");
+
+// The same exception, for the other half of a binding: what each scene looked
+// like at the last synchronization, per project (D29). It is derived state —
+// delete it and the next pull rebuilds it conservatively, keeping every local
+// file — and, like the bindings file, it carries no secrets.
+const SYNC_DIR = path.join(DATA_DIR, ".docent", "sync");
 
 // Tokens live outside the data tree, in deployment config. The default sits in
 // the process working directory rather than under DOCENT_DATA precisely so a
@@ -106,9 +121,17 @@ const API_BASE_RE = /^https?:\/\/[^\s/?#]+(\/[^\s?#]*)?$/;
 /** Every GitHub answer that means "your credential is the problem". */
 const TOKEN_ERROR =
   "GitHub token missing or rejected for this project — set it in the binding";
-/** The one message a losing write gets, on both stores, word for word. */
-const CONFLICT_ERROR =
-  "scene changed on GitHub since it was loaded — reload it to get the latest";
+/** What a push gets when someone else committed first — the one fix is a pull. */
+const MOVED_ERROR = "the remote branch moved — pull first";
+/** …and what it gets on the protected trunk (D33), where only a merge lands. */
+const BASE_BRANCH_ERROR =
+  "pushing to the base branch is disabled — create a branch and open a pull request";
+/** …and what it gets when the last pull left questions the author must answer. */
+const unresolvedError = (names) =>
+  `resolve the conflicted scenes first: ${names.join(", ")}`;
+/** …and what a branch switch gets while the working copy is not clean. */
+const dirtySwitchError = (names) =>
+  `push or resolve local changes before switching branches: ${names.join(", ")}`;
 
 /**
  * The other half of a 403: GitHub authenticated the token and refused the
@@ -129,14 +152,12 @@ const USER_AGENT = "docent-store";
 const GITHUB_TIMEOUT_MS = 30_000;
 
 /**
- * Per-process caches, deliberately not persisted. `listings` is the
- * If-None-Match cache for the one listing call (loads always fetch fresh);
- * `counts` is what lets `GET /api/projects` name a bound project's scene count
- * without blocking the whole listing on the network — before anything has been
- * listed a bound project simply reports zero.
+ * The If-None-Match cache for the one listing call every sync verb starts
+ * with. Deliberately per-process and not persisted: it is an optimization
+ * against GitHub's rate limit, never a source of truth — the working copy on
+ * disk is that (D29).
  */
 const listingCache = new Map();
-const boundCounts = new Map();
 
 const readJsonFile = async (file, fallback) => {
   try {
@@ -180,6 +201,120 @@ async function bindingFor(project) {
 async function tokenFor(project) {
   const token = (await readSecrets())[project];
   return typeof token === "string" && token !== "" ? token : null;
+}
+
+// ---------------------------------------------------------------------------
+// sync state (S14, D29) — what each scene looked like at the last sync
+// ---------------------------------------------------------------------------
+
+/**
+ * The content hash the working copy is measured against. Any stable hash would
+ * do; sha-256 is the one both implementations already have without a
+ * dependency, and writing it down means the file is comparable by eye.
+ */
+const sha256 = (text) => createHash("sha256").update(text, "utf8").digest("hex");
+
+const syncFile = (project) => path.join(SYNC_DIR, `${project}.json`);
+
+/**
+ * A scene's base: the blob sha it had on the branch at the last sync, and the
+ * hash of the content that came with it. An empty `baseSha` means "the remote
+ * has never had this scene" — which is different from "the remote deleted it",
+ * and the difference is what stops a pull from deleting a file GitHub never
+ * carried. `conflictSha` is present only while a scene is conflicted: it is
+ * the remote sha the author has yet to accept or reject, and an empty string
+ * there means the remote deleted the scene while it was being edited here.
+ */
+async function readSync(project) {
+  const parsed = await readJsonFile(syncFile(project), {});
+  const scenes = parsed.scenes;
+  const state = new Map();
+  if (!scenes || typeof scenes !== "object" || Array.isArray(scenes)) return state;
+  for (const [name, entry] of Object.entries(scenes)) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    state.set(name, {
+      baseSha: typeof entry.baseSha === "string" ? entry.baseSha : "",
+      baseHash: typeof entry.baseHash === "string" ? entry.baseHash : "",
+      conflictSha: typeof entry.conflictSha === "string" ? entry.conflictSha : null,
+    });
+  }
+  return state;
+}
+
+/**
+ * Written atomically, with scene names in code-point order and a trailing
+ * newline, so the file is byte-identical to the one the desktop store writes
+ * for the same state — and diffable when a user looks at it.
+ */
+async function writeSync(project, state) {
+  const scenes = {};
+  for (const name of [...state.keys()].sort()) {
+    const entry = state.get(name);
+    scenes[name] = {
+      baseSha: entry.baseSha,
+      baseHash: entry.baseHash,
+      ...(entry.conflictSha === null ? {} : { conflictSha: entry.conflictSha }),
+    };
+  }
+  const file = syncFile(project);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ scenes }, null, 2) + "\n", "utf8");
+  await fs.rename(tmp, file);
+}
+
+const removeSync = (project) => fs.rm(syncFile(project), { force: true });
+
+/**
+ * The working copy: every addressable scene in the project directory, by
+ * content hash. A `.excalidraw` file whose name this store could not address
+ * round-trip is left out of sync entirely — it stays on disk, and no verb ever
+ * claims to have pushed it.
+ */
+async function workingCopy(project) {
+  let files;
+  try {
+    files = await fs.readdir(projectDir(project));
+  } catch {
+    return new Map();
+  }
+  const copy = new Map();
+  for (const file of files) {
+    if (!file.endsWith(EXT)) continue;
+    const name = file.slice(0, -EXT.length);
+    if (!NAME_RE.test(name)) continue;
+    copy.set(name, sha256(await fs.readFile(path.join(projectDir(project), file), "utf8")));
+  }
+  return copy;
+}
+
+/**
+ * What happened to one scene since the last sync, from this side alone. No
+ * network, by construction: it is a file hash against a recorded one.
+ */
+function sceneState(hash, base) {
+  if (base && base.conflictSha !== null) return "conflicted";
+  if (hash === undefined) return base ? "deleted" : "clean";
+  if (!base) return "new";
+  return hash === base.baseHash ? "clean" : "modified";
+}
+
+const byName = (a, b) => a.localeCompare(b);
+
+/** Every scene the project knows about — on disk, recorded, or both. */
+function sceneNames(...maps) {
+  const names = new Set();
+  for (const map of maps) for (const name of map.keys()) names.add(name);
+  return [...names].sort(byName);
+}
+
+async function localStates(project) {
+  const copy = await workingCopy(project);
+  const bases = await readSync(project);
+  return sceneNames(copy, bases).map((name) => ({
+    name,
+    state: sceneState(copy.get(name), bases.get(name) ?? null),
+  }));
 }
 
 /**
@@ -287,7 +422,12 @@ function normalizeBinding(input) {
   if (!OWNER_RE.test(owner)) throw bad(ownerError);
   if (!OWNER_RE.test(repo)) throw bad(repoError);
   const repoPath = normalizeRepoPath(textOr("path", "", PATH_ERROR));
-  const branch = checkBranch(textOr("branch", DEFAULT_BRANCH, BRANCH_ERROR));
+  // Absent stays absent: the active branch resolves in putBinding — stored
+  // binding first, else the repository's own default branch as the probe
+  // reads it. Defaulting to a *name* here would bind projects to a branch
+  // the repository may simply not have.
+  const branch = textOr("branch", "", BRANCH_ERROR);
+  if (branch !== "") checkBranch(branch);
   // Stating the base is allowed but never required: putBinding resolves it
   // from the repository when the client leaves it out (D28).
   const baseBranch = textOr("baseBranch", "", BRANCH_ERROR);
@@ -315,9 +455,27 @@ async function putBinding(project, body) {
   }
   const requested = normalizeBinding(input);
   const newToken = normalizeToken(input.token);
-  // A bound project still owns a local directory: it is where it came from,
-  // and where it returns to if the binding is removed.
+  // A bound project's directory is its working copy (D29): binding creates it
+  // if it is missing and never touches what is already in it — the first pull
+  // is what reconciles those files with the repository.
   await fs.mkdir(projectDir(project), { recursive: true });
+  // Moving an existing binding to another branch means the working copy is
+  // about to be replaced with that branch's content, so it has to be clean
+  // first. Answered before the probe: there is no point asking GitHub anything
+  // when the switch cannot happen.
+  const previous = await bindingFor(project);
+  // What the caller means by "the branch": stated explicitly, else whatever
+  // this project is already on. Absent both, the binding is fresh and the
+  // probe below names the branch — which cannot be a switch.
+  const statedBranch = requested.branch || previous?.branch || "";
+  const switching =
+    previous !== null && statedBranch !== "" && previous.branch !== statedBranch;
+  if (switching) {
+    const dirty = (await localStates(project))
+      .filter((scene) => scene.state !== "clean")
+      .map((scene) => scene.name);
+    if (dirty.length > 0) throw new HttpError(409, dirtySwitchError(dirty));
+  }
   // Whatever token this binding will run on — the one just given, or the one
   // already stored. Without either there is nothing to probe with.
   const token = newToken ?? (await tokenFor(project));
@@ -332,13 +490,17 @@ async function putBinding(project, body) {
   // makes switching branches a PUT of `{ branch }` and nothing else — else the
   // repository's own default branch as the probe just read it, else the branch
   // being bound, because a store that cannot ask still has to answer.
+  // The active branch: what was asked for (or already recorded), else the
+  // repository's own default as the probe just read it, else the
+  // conventional name — a store that cannot ask still has to answer.
+  const branch = statedBranch || probe.defaultBranch || DEFAULT_BRANCH;
   const baseBranch =
     requested.baseBranch ||
     (typeof stored?.baseBranch === "string" && stored.baseBranch !== ""
       ? stored.baseBranch
       : "") ||
     probe.defaultBranch ||
-    requested.branch;
+    branch;
   // Field order is the order the desktop store's struct declares, so the
   // dotfile stays byte-comparable across the two implementations. Unknown
   // `canWrite` is stored as an absent field rather than an explicit null, so a
@@ -347,7 +509,7 @@ async function putBinding(project, body) {
     owner: requested.owner,
     repo: requested.repo,
     path: requested.path,
-    branch: requested.branch,
+    branch,
     baseBranch,
     apiBase: requested.apiBase,
     ...(probe.canWrite === null ? {} : { canWrite: probe.canWrite }),
@@ -358,17 +520,31 @@ async function putBinding(project, body) {
     secrets[project] = newToken;
     await writeJsonFile(SECRETS_FILE, secrets, 0o600);
   }
+  // A different branch is a different set of blobs: whatever this process
+  // remembered about the old one is now wrong rather than merely stale.
   listingCache.delete(project);
-  boundCounts.delete(project);
-  return {
+  const answer = {
     ok: true,
     canWrite: probe.canWrite,
     baseBranch,
     ...(probe.warning ? { warning: probe.warning } : {}),
   };
+  if (!switching) return answer;
+  // The copy was clean, so this can only fast-forward it: every scene either
+  // arrives, changes, or goes, and nothing of the user's is at stake. A pull
+  // that cannot reach GitHub throws, loudly — the binding has moved, and the
+  // fix is to pull again rather than to pretend the switch did not happen.
+  const pulled =
+    token === null ? { updated: [], removed: [] } : await pullProject(project, bindings[project], token);
+  return { ...answer, pulled: pulled.updated.length + pulled.removed.length };
 }
 
-/** Unbind: metadata and token go, the local directory and GitHub both stay. */
+/**
+ * Unbind: metadata, sync state and token go; the working copy and GitHub both
+ * stay. Dropping the sync state is what makes rebinding safe — with no
+ * recorded base, every local file reads as never-synced and the first pull
+ * keeps all of them.
+ */
 async function removeBinding(project) {
   const bindings = await readBindings();
   if (project in bindings) {
@@ -380,8 +556,8 @@ async function removeBinding(project) {
     delete secrets[project];
     await writeJsonFile(SECRETS_FILE, secrets, 0o600);
   }
+  await removeSync(project);
   listingCache.delete(project);
-  boundCounts.delete(project);
   return { ok: true };
 }
 
@@ -525,29 +701,32 @@ const parseJson = (text) => {
  */
 const isTooLarge = (status, text) => status === 403 && /too large/i.test(text);
 
-async function githubListing(project, binding, token) {
+/**
+ * What the bound directory holds on the active branch: scene name → blob sha,
+ * in one request. Revalidated with If-None-Match, because every sync verb
+ * starts here and a project that has not moved should cost the rate limit
+ * nothing.
+ */
+async function remoteListing(project, binding, token) {
   const url = `${contentsUrl(binding, null)}?ref=${encodeURIComponent(binding.branch)}`;
   const cached = listingCache.get(project);
   const res = await github(token, "GET", url, {
     headers: cached?.etag ? { "if-none-match": cached.etag } : undefined,
   });
-  if (res.status === 304 && cached) {
-    boundCounts.set(project, cached.scenes.length);
-    return cached.scenes;
-  }
+  if (res.status === 304 && cached) return new Map(cached.entries);
   // A bound path that does not exist yet is the normal state right after
-  // binding — the first save creates it. Listing it as empty is honest; a
-  // wrong owner/repo shows the same, and then fails loudly on the first write.
+  // binding — the first push creates it. Listing it as empty is honest; a
+  // wrong owner/repo shows the same, and then fails loudly on the first push.
   if (res.status === 404) {
-    boundCounts.set(project, 0);
-    return [];
+    listingCache.delete(project);
+    return new Map();
   }
   if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
   const entries = parseJson(res.text);
   if (!Array.isArray(entries)) {
     throw new HttpError(502, "the bound path is a file, not a directory");
   }
-  const scenes = entries
+  const listed = entries
     .filter(
       (entry) =>
         entry?.type === "file" &&
@@ -557,143 +736,90 @@ async function githubListing(project, binding, token) {
         // directory belongs to the repository, not to the portfolio.
         NAME_RE.test(entry.name.slice(0, -EXT.length)),
     )
-    .map((entry) => ({
-      name: entry.name.slice(0, -EXT.length),
-      updatedAt: null,
-      size: typeof entry.size === "number" ? entry.size : 0,
-      sha: String(entry.sha ?? ""),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  // One extra request for the whole listing rather than one per scene: the
-  // branch's last commit touching the bound path stamps every scene. Coarse
-  // but honest — and it is exactly what the thumbnail cache keys on, so any
-  // change to any scene re-renders them.
-  if (scenes.length > 0) {
-    const stamp = await lastCommitDate(binding, token);
-    for (const scene of scenes) scene.updatedAt = stamp;
-  }
-  listingCache.set(project, { etag: res.etag, scenes });
-  boundCounts.set(project, scenes.length);
-  return scenes;
-}
-
-async function lastCommitDate(binding, token) {
-  const query = new URLSearchParams({ per_page: "1", sha: binding.branch });
-  if (binding.path !== "") query.set("path", binding.path);
-  const res = await github(
-    token,
-    "GET",
-    repoUrl(binding, `/commits?${query.toString()}`),
-  );
-  if (res.status < 200 || res.status >= 300) return null;
-  try {
-    const commit = JSON.parse(res.text)?.[0]?.commit;
-    const date = commit?.committer?.date ?? commit?.author?.date;
-    return typeof date === "string" ? date : null;
-  } catch {
-    // A listing is still a listing without timestamps.
-    return null;
-  }
-}
-
-/** The file's metadata, or null when GitHub says it isn't there. */
-async function githubFileMeta(binding, token, scene) {
-  const url = `${contentsUrl(binding, scene + EXT)}?ref=${encodeURIComponent(binding.branch)}`;
-  const res = await github(token, "GET", url);
-  if (res.status === 404) return null;
-  if (isTooLarge(res.status, res.text)) return { sha: null, oversize: true };
-  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
-  const json = parseJson(res.text);
-  return { sha: typeof json.sha === "string" ? json.sha : null, json };
+    .map((entry) => [entry.name.slice(0, -EXT.length), String(entry.sha ?? "")])
+    .sort((a, b) => byName(a[0], b[0]));
+  listingCache.set(project, { etag: res.etag, entries: listed });
+  return new Map(listed);
 }
 
 /**
- * The blob sha the file currently has on the branch, or null when there is no
- * such file. A file past the contents API's size limit answers without one, so
- * the listing — which always carries shas — is the fallback.
+ * One blob, by sha. Every read goes through the Git Data API rather than the
+ * contents API: blobs carry no 1 MB inline ceiling, so a large scene needs no
+ * fallback path at all.
  */
-async function currentSha(project, binding, token, scene) {
-  const meta = await githubFileMeta(binding, token, scene);
-  if (!meta) return null;
-  if (meta.sha) return meta.sha;
-  const listed = (await githubListing(project, binding, token)).find(
-    (entry) => entry.name === scene,
-  );
-  return listed?.sha ?? null;
-}
-
-async function githubLoad(project, binding, token, scene) {
-  const meta = await githubFileMeta(binding, token, scene);
-  if (!meta) throw new HttpError(404, `no such scene: ${project}/${scene}`);
-  const json = meta.json;
-  if (json?.encoding === "base64" && typeof json.content === "string" && json.content.trim() !== "") {
-    return {
-      raw: Buffer.from(json.content, "base64").toString("utf8"),
-      sha: meta.sha ?? "",
-    };
-  }
-  // Oversize, or content withheld: read the blob itself, addressed by the sha
-  // the listing knows.
-  const sha = meta.sha ?? (await currentSha(project, binding, token, scene));
-  if (!sha) throw new HttpError(404, `no such scene: ${project}/${scene}`);
-  const blob = await github(
+async function githubBlob(binding, token, sha) {
+  const res = await github(
     token,
     "GET",
     repoUrl(binding, `/git/blobs/${encodeURIComponent(sha)}`),
   );
-  if (blob.status < 200 || blob.status >= 300) throw githubFailure(blob.status, blob.text);
-  const body = parseJson(blob.text);
+  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
+  const body = parseJson(res.text);
   if (typeof body.content !== "string") {
     throw new HttpError(502, "GitHub API error (blob carried no content)");
   }
-  return { raw: Buffer.from(body.content, "base64").toString("utf8"), sha };
+  return Buffer.from(body.content, "base64").toString("utf8");
 }
 
-async function githubSave(project, binding, token, scene, body, headerSha) {
-  let sha = headerSha ?? null;
-  if (!sha) {
-    // No conflict token: this is the last-write-wins path, so the current sha
-    // is fetched purely to satisfy GitHub's own update requirement.
-    sha = await currentSha(project, binding, token, scene);
+/** The branch's head commit and the tree that commit points at. */
+async function githubHead(binding, token) {
+  const heads = `/git/ref/heads/${encodeSegments(binding.branch.split("/"))}`;
+  const ref = await github(token, "GET", repoUrl(binding, heads));
+  if (ref.status === 404) {
+    throw new HttpError(
+      404,
+      `no branch named ${binding.branch} on ${binding.owner}/${binding.repo}`,
+    );
   }
-  const res = await github(token, "PUT", contentsUrl(binding, scene + EXT), {
-    body: JSON.stringify({
-      message: `docent: ${sha ? "update" : "create"} ${project}/${scene}`,
-      content: Buffer.from(body, "utf8").toString("base64"),
-      branch: binding.branch,
-      ...(sha ? { sha } : {}),
-    }),
+  if (ref.status < 200 || ref.status >= 300) throw githubFailure(ref.status, ref.text);
+  const commit = parseJson(ref.text)?.object?.sha;
+  if (typeof commit !== "string" || commit === "") {
+    throw new HttpError(502, "GitHub API error (ref carried no sha)");
+  }
+  const res = await github(
+    token,
+    "GET",
+    repoUrl(binding, `/git/commits/${encodeURIComponent(commit)}`),
+  );
+  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
+  const tree = parseJson(res.text)?.tree?.sha;
+  if (typeof tree !== "string" || tree === "") {
+    throw new HttpError(502, "GitHub API error (commit carried no tree)");
+  }
+  return { commit, tree };
+}
+
+/** POST one of the Git Data objects and read the sha back out of the answer. */
+async function githubCreate(binding, token, endpoint, payload) {
+  const res = await github(token, "POST", repoUrl(binding, endpoint), {
+    body: JSON.stringify(payload),
   });
-  // 409 is GitHub's own conflict; 422 is what it answers when the sha is stale
-  // or names a file that is no longer there. Both mean the same thing to a
-  // user: someone else moved first.
-  if (res.status === 409 || res.status === 422) throw new HttpError(409, CONFLICT_ERROR);
   if (res.status < 200 || res.status >= 300) {
     throw githubWriteFailure(binding, res.status, res.text);
   }
-  listingCache.delete(project);
-  const created = parseJson(res.text);
-  const newSha = created?.content?.sha;
-  return { ok: true, sha: typeof newSha === "string" ? newSha : null };
+  const sha = parseJson(res.text)?.sha;
+  if (typeof sha !== "string" || sha === "") {
+    throw new HttpError(502, `GitHub API error (${endpoint} carried no sha)`);
+  }
+  return sha;
 }
 
-async function githubDelete(project, binding, token, scene) {
-  const sha = await currentSha(project, binding, token, scene);
-  if (!sha) throw new HttpError(404, `no such scene: ${project}/${scene}`);
-  const res = await github(token, "DELETE", contentsUrl(binding, scene + EXT), {
-    body: JSON.stringify({
-      message: `docent: delete ${project}/${scene}`,
-      sha,
-      branch: binding.branch,
-    }),
+/**
+ * Move the branch to the new commit, without force. GitHub answers a
+ * non-fast-forward with a 422, which is the whole point: it is what makes
+ * "someone else pushed while you were drawing" a refusal instead of a lost
+ * commit. Nothing is left behind by the refusal — the blobs, tree and commit
+ * exist unreferenced and GitHub collects them.
+ */
+async function githubUpdateRef(binding, token, commit) {
+  const heads = `/git/refs/heads/${encodeSegments(binding.branch.split("/"))}`;
+  const res = await github(token, "PATCH", repoUrl(binding, heads), {
+    body: JSON.stringify({ sha: commit, force: false }),
   });
-  if (res.status === 409 || res.status === 422) throw new HttpError(409, CONFLICT_ERROR);
+  if (res.status === 422) throw new HttpError(409, MOVED_ERROR);
   if (res.status < 200 || res.status >= 300) {
     throw githubWriteFailure(binding, res.status, res.text);
   }
-  listingCache.delete(project);
-  return { ok: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -753,10 +879,11 @@ async function setActiveBranch(project, branch) {
   if (!binding) return;
   bindings[project] = { ...binding, branch };
   await writeJsonFile(BINDINGS_FILE, bindings);
-  // A different branch is a different set of scenes: whatever this process
-  // remembered about the old one is now wrong rather than merely stale.
+  // A different branch is a different set of blobs: whatever this process
+  // remembered about the old one is now wrong rather than merely stale. The
+  // recorded bases stay valid — a branch cut here starts at the same head, so
+  // every scene's blob is the same object on both names (D28).
   listingCache.delete(project);
-  boundCounts.delete(project);
 }
 
 /**
@@ -857,24 +984,299 @@ async function openPullRequest(binding, token, body) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// the sync verbs (D29) — the only routes that touch the network
+// ---------------------------------------------------------------------------
+
+/** Where a scene lives inside the repository, from the repository's root. */
+const repoFile = (binding, scene) =>
+  binding.path === "" ? scene + EXT : `${binding.path}/${scene}${EXT}`;
+
+/** Write one scene of the working copy, atomically, as a save would. */
+async function writeWorkingFile(project, scene, text) {
+  const file = scenePath(project, scene);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const tmp = file + ".tmp";
+  await fs.writeFile(tmp, text, "utf8");
+  await fs.rename(tmp, file);
+}
+
 /**
- * Resolve a bound project to everything a GitHub call needs. A binding with no
- * token is refused here rather than at GitHub, so the answer is the same 401
- * either way and no pointless request leaves the machine.
+ * Fast-forward the working copy from the branch. Every scene is decided on its
+ * own, and the rule never varies: when only one side moved, that side wins;
+ * when both moved, nothing is touched and the author is asked (D29). There is
+ * no merge, because there is no meaningful line-merge for a drawing.
+ *
+ * A scene that has never been synced — a project bound before any of this
+ * existed, or a file drawn before the first pull — has no recorded base, so it
+ * is local-new and kept. That is what makes the first pull of a legacy binding
+ * safe: it can add and it can flag, but it cannot delete.
  */
-async function boundContext(project) {
+async function pullProject(project, binding, token) {
+  const remote = await remoteListing(project, binding, token);
+  const bases = await readSync(project);
+  const copy = await workingCopy(project);
+  const updated = [];
+  const removed = [];
+  const kept = [];
+  const conflicts = [];
+
+  for (const name of sceneNames(copy, bases, remote)) {
+    const hash = copy.get(name);
+    const base = bases.get(name) ?? null;
+    const remoteSha = remote.has(name) ? remote.get(name) : null;
+    const state = sceneState(hash, base);
+    // "Changed" is measured against the recorded base, never against the file:
+    // a scene the remote has never carried (empty baseSha) is absent, not
+    // deleted, and absence is not a change.
+    const remoteChanged =
+      remoteSha === null
+        ? base !== null && base.baseSha !== ""
+        : base === null || remoteSha !== base.baseSha;
+
+    if (!remoteChanged) {
+      if (state !== "clean") kept.push(name);
+      continue;
+    }
+    if (state === "clean") {
+      if (remoteSha === null) {
+        await fs.rm(scenePath(project, name), { force: true });
+        bases.delete(name);
+        removed.push(name);
+      } else {
+        const text = await githubBlob(binding, token, remoteSha);
+        await writeWorkingFile(project, name, text);
+        bases.set(name, { baseSha: remoteSha, baseHash: sha256(text), conflictSha: null });
+        updated.push(name);
+      }
+      continue;
+    }
+    if (state === "deleted" && remoteSha === null) {
+      // Both sides deleted it: there is nothing to reconcile and nothing to
+      // ask about — the copy and the branch already agree.
+      bases.delete(name);
+      removed.push(name);
+      continue;
+    }
+    if (state === "new" && remoteSha !== null) {
+      // A file and a blob that have never met. Identical content is the common
+      // case — a project bound to a repository that already held its scenes —
+      // and it is an agreement rather than a conflict.
+      const text = await githubBlob(binding, token, remoteSha);
+      if (sha256(text) === hash) {
+        bases.set(name, { baseSha: remoteSha, baseHash: hash, conflictSha: null });
+        updated.push(name);
+        continue;
+      }
+    }
+    // Both sides moved. The file on disk is not touched — the author's work is
+    // never overwritten by a pull — and the remote sha is recorded as the
+    // question to answer. An empty one means the remote deleted it.
+    bases.set(name, {
+      baseSha: base?.baseSha ?? "",
+      baseHash: base?.baseHash ?? "",
+      conflictSha: remoteSha ?? "",
+    });
+    conflicts.push(name);
+  }
+
+  await writeSync(project, bases);
+  return { ok: true, updated, removed, kept, conflicts };
+}
+
+/**
+ * Answer one conflicted scene. Keeping the local copy does not write anything
+ * — it records that the remote sha has been seen and rejected, so the next
+ * push overwrites it deliberately rather than tripping the same conflict
+ * again. Taking the remote's copy overwrites the file, which is why it is the
+ * one resolution that has to be asked for explicitly.
+ */
+async function resolveScene(project, binding, token, body) {
+  const input = objectBody(body, "a resolution");
+  if (typeof input.scene !== "string") {
+    throw bad("body is not a resolution — name the scene to resolve");
+  }
+  const scene = checkName(input.scene, "scene");
+  const resolution = input.resolution;
+  if (resolution !== "keep-local" && resolution !== "take-remote") {
+    throw bad('invalid resolution — use "keep-local" or "take-remote"');
+  }
+  const bases = await readSync(project);
+  const base = bases.get(scene);
+  if (!base || base.conflictSha === null) {
+    throw bad(`scene is not conflicted: ${project}/${scene}`);
+  }
+  if (resolution === "keep-local") {
+    bases.set(scene, {
+      baseSha: base.conflictSha,
+      baseHash: base.baseHash,
+      conflictSha: null,
+    });
+  } else if (base.conflictSha === "") {
+    // The remote deleted it and the author accepts that, so the local file
+    // goes too and the scene stops being tracked.
+    await fs.rm(scenePath(project, scene), { force: true });
+    bases.delete(scene);
+  } else {
+    const text = await githubBlob(binding, token, base.conflictSha);
+    await writeWorkingFile(project, scene, text);
+    bases.set(scene, {
+      baseSha: base.conflictSha,
+      baseHash: sha256(text),
+      conflictSha: null,
+    });
+  }
+  await writeSync(project, bases);
+  return { ok: true, scene, resolution };
+}
+
+/**
+ * Land every local change on the branch as **one** commit, built through the
+ * Git Data API: a blob per changed scene, one tree over the head's tree with
+ * deletions as null-sha entries, one commit, and a non-force ref update. One
+ * commit rather than one per scene because a drawing session is one change to
+ * a reader of the repository's history, and because a half-applied push is not
+ * a state anyone should have to reason about.
+ */
+async function pushProject(project, binding, token) {
+  // The trunk is protected (D33): through Docent the base branch only ever
+  // changes by a pull request someone merged. Checked before anything else,
+  // because it is a fact about the branch rather than about the changes —
+  // saving stays local and unblocked either way.
+  if (binding.branch === baseBranchOf(binding)) {
+    throw new HttpError(409, BASE_BRANCH_ERROR);
+  }
+  const bases = await readSync(project);
+  const copy = await workingCopy(project);
+  const conflicted = [];
+  const changed = [];
+  const deleted = [];
+  for (const name of sceneNames(copy, bases)) {
+    const state = sceneState(copy.get(name), bases.get(name) ?? null);
+    if (state === "conflicted") conflicted.push(name);
+    else if (state === "new" || state === "modified") changed.push(name);
+    else if (state === "deleted") deleted.push(name);
+  }
+  // Pushing over an unanswered question would silently pick a side, which is
+  // exactly what D29 forbids.
+  if (conflicted.length > 0) throw new HttpError(409, unresolvedError(conflicted));
+  if (changed.length === 0 && deleted.length === 0) {
+    throw bad("nothing to push");
+  }
+
+  // The branch may have moved since the last pull. Everything this push
+  // would write or delete is checked against what the last synchronization
+  // recorded — a scene someone else changed meanwhile must be pulled and
+  // answered (D29), never silently overwritten. Scenes this push does not
+  // touch are the base tree's business and ride through unchanged, so
+  // unrelated remote work never blocks a push.
+  const remote = await remoteListing(project, binding, token);
+  const movedScenes = [...changed, ...deleted].filter((name) => {
+    const base = bases.get(name)?.baseSha ?? null;
+    return (remote.get(name) ?? null) !== base;
+  });
+  if (movedScenes.length > 0) throw new HttpError(409, MOVED_ERROR);
+
+  // Read the branch before creating anything: a push at a branch that is not
+  // there costs no objects at all.
+  const head = await githubHead(binding, token);
+  const entries = [];
+  const written = [];
+  for (const name of changed) {
+    const text = await fs.readFile(scenePath(project, name), "utf8");
+    const sha = await githubCreate(binding, token, "/git/blobs", {
+      content: Buffer.from(text, "utf8").toString("base64"),
+      encoding: "base64",
+    });
+    written.push({ name, sha, hash: sha256(text) });
+    entries.push({ path: repoFile(binding, name), mode: "100644", type: "blob", sha });
+  }
+  for (const name of deleted) {
+    // A null sha in a tree entry is how the Git Data API spells "remove this
+    // path from the base tree".
+    entries.push({ path: repoFile(binding, name), mode: "100644", type: "blob", sha: null });
+  }
+  const tree = await githubCreate(binding, token, "/git/trees", {
+    base_tree: head.tree,
+    tree: entries,
+  });
+  const total = changed.length + deleted.length;
+  const commit = await githubCreate(binding, token, "/git/commits", {
+    message: `docent: update ${project} (${total} scene(s))`,
+    tree,
+    parents: [head.commit],
+  });
+  await githubUpdateRef(binding, token, commit);
+
+  for (const scene of written) {
+    bases.set(scene.name, { baseSha: scene.sha, baseHash: scene.hash, conflictSha: null });
+  }
+  for (const name of deleted) bases.delete(name);
+  await writeSync(project, bases);
+  listingCache.delete(project);
+  return { ok: true, commit, pushed: changed, removedRemotely: deleted };
+}
+
+/**
+ * Where this project stands, in one answer: what the working copy did, and
+ * what the branch did. The local half never touches the network — it is file
+ * hashes against recorded ones — so a project with no token, or a machine with
+ * no route to GitHub, still gets the truth about its own scenes and a remote
+ * half that says plainly it could not be reached.
+ */
+async function syncStatus(project) {
   const binding = await bindingFor(project);
-  if (!binding) return null;
+  if (!binding) {
+    throw new HttpError(404, `no GitHub binding for project: ${project}`);
+  }
+  const local = await localStates(project);
+  let remote = { reachable: false, changed: [], removed: [] };
+  const token = await tokenFor(project);
+  if (token !== null) {
+    try {
+      const listing = await remoteListing(project, binding, token);
+      const bases = await readSync(project);
+      const changed = [];
+      const removed = [];
+      for (const [name, sha] of listing) {
+        const base = bases.get(name);
+        if (!base || base.baseSha !== sha) changed.push(name);
+      }
+      for (const [name, base] of bases) {
+        if (base.baseSha !== "" && !listing.has(name)) removed.push(name);
+      }
+      remote = {
+        reachable: true,
+        changed: changed.sort(byName),
+        removed: removed.sort(byName),
+      };
+    } catch {
+      // Unreachable, refused, rate-limited: the local half is still true, and
+      // saying so beats failing the whole answer.
+      remote = { reachable: false, changed: [], removed: [] };
+    }
+  }
+  return {
+    branch: binding.branch,
+    baseBranch: baseBranchOf(binding),
+    local,
+    remote,
+  };
+}
+
+/**
+ * Resolve a bound project to everything a GitHub call needs — every route that
+ * reaches the network starts here, and no other route does (D29). An unbound
+ * project has no such route at all, and a binding with no token is refused
+ * here rather than at GitHub, so the answer is the same 401 either way and no
+ * pointless request leaves the machine.
+ */
+async function boundOrFail(project) {
+  const binding = await bindingFor(project);
+  if (!binding) throw new HttpError(404, `no GitHub binding for project: ${project}`);
   const token = await tokenFor(project);
   if (!token) throw new HttpError(401, TOKEN_ERROR);
   return { binding, token };
-}
-
-/** The same, for routes that only exist on a bound project (D28). */
-async function boundOrFail(project) {
-  const bound = await boundContext(project);
-  if (!bound) throw new HttpError(404, `no GitHub binding for project: ${project}`);
-  return bound;
 }
 
 // ---------------------------------------------------------------------------
@@ -888,24 +1290,6 @@ async function listProjects() {
   for (const entry of entries.filter((e) => e.isDirectory())) {
     // The bindings dotfile's own directory is not a project (D27).
     if (entry.name.startsWith(".")) continue;
-    if (bindings[entry.name]) {
-      // Deliberately not a network call: the projects listing is the first
-      // thing the modal asks for and must never wait on GitHub. The count is
-      // whatever this process last saw, and zero until it has seen anything.
-      const cached = boundCounts.get(entry.name) ?? 0;
-      // What the last probe learned travels with the listing so the modal can
-      // mark a read-only project without a request per project — and it is
-      // still not a network call, because it comes off the bindings dotfile.
-      const canWrite = bindings[entry.name].canWrite;
-      projects.push({
-        id: entry.name,
-        scenes: cached,
-        updatedAt: null,
-        bound: true,
-        ...(typeof canWrite === "boolean" ? { canWrite } : {}),
-      });
-      continue;
-    }
     const files = await fs.readdir(path.join(DATA_DIR, entry.name));
     const scenes = files.filter((f) => f.endsWith(EXT));
     let updatedAt = 0;
@@ -913,18 +1297,30 @@ async function listProjects() {
       const st = await fs.stat(path.join(DATA_DIR, entry.name, f));
       updatedAt = Math.max(updatedAt, st.mtimeMs);
     }
+    // A bound project counts its working copy exactly like any other (D29):
+    // the count is a directory read, never a network call, and it is true
+    // whether or not GitHub can be reached. What the last probe learned about
+    // the token travels with it so the modal can mark a read-only project
+    // without a request per project.
+    const binding = bindings[entry.name];
+    const canWrite = binding?.canWrite;
     projects.push({
       id: entry.name,
       scenes: scenes.length,
       updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+      ...(binding ? { bound: true } : {}),
+      ...(binding && typeof canWrite === "boolean" ? { canWrite } : {}),
     });
   }
   return projects.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * A project's scenes: the files in its directory, bound or not. A binding
+ * changes where those files came from and where they will go, never how they
+ * are read (D29).
+ */
 async function listScenes(project) {
-  const bound = await boundContext(project);
-  if (bound) return githubListing(project, bound.binding, bound.token);
   const dir = projectDir(project);
   let files;
   try {
@@ -955,13 +1351,10 @@ async function readBody(req) {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-/** The conflict token a bound save carries, when the client kept one. */
-const SCENE_SHA_HEADER = "x-docent-scene-sha";
-
 async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-  // parts: ["api", "projects", :project?, ("scenes"|"binding")?, :scene?]
+  // parts: ["api", "projects", :project?, ("scenes"|"binding"|…)?, :scene?]
   if (parts[0] !== "api") throw new HttpError(404, "not found");
 
   if (parts[1] === "health" && req.method === "GET") {
@@ -980,9 +1373,10 @@ async function handle(req, res) {
       return { id: project };
     }
     if (req.method === "DELETE") {
-      // Deleting a bound project unbinds it and removes the local directory.
-      // Nothing on GitHub is touched — the repository is the user's, and a
-      // portfolio operation must never reach into it destructively.
+      // Deleting a bound project unbinds it and removes the working copy and
+      // its sync state. Nothing on GitHub is touched — the repository is the
+      // user's, and a portfolio operation must never reach into it
+      // destructively.
       checkName(project, "project");
       await removeBinding(project);
       await fs.rm(projectDir(project), { recursive: true, force: true });
@@ -1036,24 +1430,47 @@ async function handle(req, res) {
     return opened;
   }
 
+  // The sync verbs (S14, D29). `sync-status` needs no token: its local half is
+  // the whole point, and a project whose credential is gone still has to be
+  // able to say what its own files did.
+  if (parts.length === 4 && parts[3] === "sync-status" && req.method === "GET") {
+    return syncStatus(checkName(parts[2], "project"));
+  }
+
+  if (parts.length === 4 && parts[3] === "pull" && req.method === "POST") {
+    const project = checkName(parts[2], "project");
+    const bound = await boundOrFail(project);
+    return pullProject(project, bound.binding, bound.token);
+  }
+
+  if (
+    parts.length === 5 &&
+    parts[3] === "pull" &&
+    parts[4] === "resolve" &&
+    req.method === "POST"
+  ) {
+    const project = checkName(parts[2], "project");
+    const bound = await boundOrFail(project);
+    return resolveScene(project, bound.binding, bound.token, await readBody(req));
+  }
+
+  if (parts.length === 4 && parts[3] === "push" && req.method === "POST") {
+    const project = checkName(parts[2], "project");
+    const bound = await boundOrFail(project);
+    return pushProject(project, bound.binding, bound.token);
+  }
+
   if (parts.length === 4 && parts[3] === "scenes" && req.method === "GET") {
     return listScenes(parts[2]);
   }
 
+  // Scene CRUD is the same code for every project (D29): a bound project's
+  // directory is its working copy, so opening and saving are file operations
+  // that never wait on — or even reach — the network.
   if (parts.length === 5 && parts[3] === "scenes") {
     const [, , project, , scene] = parts;
     const file = scenePath(project, scene);
-    // A bound project's scenes live in the repository; the local directory
-    // stays on disk but is not read, not written, and not listed.
-    const bound = await boundContext(project);
     if (req.method === "GET") {
-      if (bound) {
-        const loaded = await githubLoad(project, bound.binding, bound.token, scene);
-        return {
-          raw: loaded.raw,
-          headers: { "x-docent-scene-sha": loaded.sha },
-        };
-      }
       try {
         return { raw: await fs.readFile(file, "utf8") };
       } catch {
@@ -1073,17 +1490,6 @@ async function handle(req, res) {
       if (parsed?.type !== "excalidraw") {
         throw new HttpError(400, "body is not an .excalidraw scene");
       }
-      if (bound) {
-        const sha = req.headers[SCENE_SHA_HEADER];
-        return githubSave(
-          project,
-          bound.binding,
-          bound.token,
-          scene,
-          body,
-          typeof sha === "string" && sha !== "" ? sha : null,
-        );
-      }
       try {
         await fs.access(projectDir(project));
       } catch {
@@ -1096,7 +1502,6 @@ async function handle(req, res) {
       return { ok: true };
     }
     if (req.method === "DELETE") {
-      if (bound) return githubDelete(project, bound.binding, bound.token, scene);
       try {
         await fs.unlink(file);
       } catch {
@@ -1112,11 +1517,10 @@ async function handle(req, res) {
 const server = http.createServer(async (req, res) => {
   try {
     const result = await handle(req, res);
+    // A scene answers with its own bytes rather than a JSON envelope: it is
+    // already a JSON document, and re-encoding it would change them.
     if (result && typeof result === "object" && "raw" in result) {
       res.setHeader("content-type", "application/json");
-      for (const [name, value] of Object.entries(result.headers ?? {})) {
-        if (value) res.setHeader(name, value);
-      }
       res.end(result.raw);
       return;
     }

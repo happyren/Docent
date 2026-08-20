@@ -669,6 +669,7 @@ name = "docent"
 version = "0.6.0"
 dependencies = [
  "rfd",
+ "ring",
  "serde",
  "serde_json",
  "tauri",
