@@ -26,6 +26,16 @@ body {
   height: 100%;
 }
 
+/*
+ * Desktop shell only (S13): the library sidebar opens from the native View
+ * menu there, so upstream's on-canvas trigger — the label wrapping the
+ * "Library" checkbox — is redundant chrome. The web build never carries this
+ * class and keeps the button.
+ */
+.docent-desktop .sidebar-trigger__label-element {
+  display: none;
+}
+
 
 
 

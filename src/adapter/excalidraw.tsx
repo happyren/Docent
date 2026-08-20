@@ -128,6 +128,12 @@ export interface DocentCanvasHandle {
   /** Toggle Excalidraw's view mode (read-only canvas) for presenting. */
   setViewMode(on: boolean): void;
   /**
+   * Toggle Excalidraw's library sidebar. Upstream's own trigger button is the
+   * only other way in, and the desktop shell hides it in favour of a native
+   * menu item — so the shell needs a typed way to ask (B1).
+   */
+  toggleLibrarySidebar(): void;
+  /**
    * CSS-scale the canvas elements about the viewport center (1 clears). The
    * camera engine's fake-zoom sink calls this every animation frame during
    * glides — it must stay compositor-only, which is why it targets the
@@ -271,6 +277,12 @@ export interface ExcalidrawCanvasProps {
   onDocumentChange?: (fingerprint: number) => void;
   onSelectionChange?: (selectedIds: string[]) => void;
   menuActions: SceneMenuActions;
+  /**
+   * Drop Docent's own entries from the hamburger menu, leaving only
+   * Excalidraw's default items. The desktop shell sets this because those
+   * actions live in the native menu bar there; the web build never does.
+   */
+  hideDocentMenuItems?: boolean;
 }
 
 type DocentData = {
@@ -512,6 +524,13 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         appState: { viewModeEnabled: on },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
+    },
+
+    // "default" is upstream's own sidebar; "library" its library tab. The
+    // deferred icon set (D23) still loads on first open — the onChange latch
+    // watches app state, not the trigger button.
+    toggleLibrarySidebar: () => {
+      api.toggleSidebar({ name: "default", tab: "library" });
     },
 
     elementAtClient: (clientX, clientY) => {
@@ -951,6 +970,7 @@ export function ExcalidrawCanvas({
   onDocumentChange,
   onSelectionChange,
   menuActions,
+  hideDocentMenuItems = false,
 }: ExcalidrawCanvasProps) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastFingerprintRef = useRef(0);
@@ -1008,35 +1028,39 @@ export function ExcalidrawCanvas({
       }}
     >
       <MainMenu>
-        <MainMenu.Item onSelect={menuActions.onPresent}>▶ Present</MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onOpenLegend}>Legend…</MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onOpenPortfolio}>
-          Portfolio…
-        </MainMenu.Item>
-        <MainMenu.Separator />
-        <MainMenu.Item onSelect={menuActions.onOpen} shortcut={`${MOD}+O`}>
-          Open…
-        </MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onSave} shortcut={`${MOD}+S`}>
-          Save
-        </MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onSaveAs} shortcut={`${MOD}+Shift+S`}>
-          Save as…
-        </MainMenu.Item>
-        <MainMenu.Separator />
-        <MainMenu.Item onSelect={menuActions.onExportMermaid}>
-          Export Mermaid…
-        </MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onExportSidecar}>
-          Export semantic JSON…
-        </MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
-          Arrange detail tiers
-        </MainMenu.Item>
-        <MainMenu.Item onSelect={menuActions.onConnectAgent}>
-          Connect agent bridge
-        </MainMenu.Item>
-        <MainMenu.Separator />
+        {!hideDocentMenuItems && (
+          <>
+            <MainMenu.Item onSelect={menuActions.onPresent}>▶ Present</MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onOpenLegend}>Legend…</MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onOpenPortfolio}>
+              Portfolio…
+            </MainMenu.Item>
+            <MainMenu.Separator />
+            <MainMenu.Item onSelect={menuActions.onOpen} shortcut={`${MOD}+O`}>
+              Open…
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onSave} shortcut={`${MOD}+S`}>
+              Save
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onSaveAs} shortcut={`${MOD}+Shift+S`}>
+              Save as…
+            </MainMenu.Item>
+            <MainMenu.Separator />
+            <MainMenu.Item onSelect={menuActions.onExportMermaid}>
+              Export Mermaid…
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onExportSidecar}>
+              Export semantic JSON…
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
+              Arrange detail tiers
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onConnectAgent}>
+              Connect agent bridge
+            </MainMenu.Item>
+            <MainMenu.Separator />
+          </>
+        )}
         <MainMenu.DefaultItems.SaveAsImage />
         <MainMenu.DefaultItems.SearchMenu />
         <MainMenu.DefaultItems.ClearCanvas />

@@ -26,6 +26,34 @@ import { useDrill } from "./useDrill";
 
 const UNTITLED = "untitled.excalidraw";
 
+/**
+ * The desktop shell (S13) announces itself before the page loads, the same way
+ * it announces its store. Everywhere else the global is absent and the app is
+ * the web app, unchanged: Docent's actions stay in the hamburger menu and the
+ * canvas keeps its own library button.
+ */
+const isDesktop = Boolean(
+  (window as { __DOCENT_DESKTOP__?: boolean }).__DOCENT_DESKTOP__,
+);
+
+/**
+ * Actions the native menu bar can invoke. The ids are the contract with the
+ * Rust menu (src-tauri/src/lib.rs) — change one side and the other must follow.
+ */
+type DocentMenuId =
+  | "open"
+  | "save"
+  | "save-as"
+  | "portfolio"
+  | "present"
+  | "legend"
+  | "arrange"
+  | "library"
+  | "export-mermaid"
+  | "export-sidecar";
+
+type DocentMenuWindow = Window & { __docentMenu?: (id: DocentMenuId) => void };
+
 export function App() {
   const canvasRef = useRef<DocentCanvasHandle | null>(null);
   const fsHandleRef = useRef<FileSystemFileHandle | null>(null);
@@ -450,6 +478,35 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [openScene, saveScene, saveSceneAs]);
 
+  // Native menu bar bridge (S13). The Rust handlers reach the page by
+  // evaluating `window.__docentMenu(id)`, which keeps the desktop shell free
+  // of any JS SDK (I7) — the same reasoning as the injected store base URL.
+  // Held in a ref so the registration survives re-renders: the handlers are
+  // rebuilt every render, the global is installed once.
+  const menuHandlersRef = useRef<Record<DocentMenuId, () => void>>(
+    {} as Record<DocentMenuId, () => void>,
+  );
+  menuHandlersRef.current = {
+    open: () => void openScene(),
+    save: () => void saveScene(),
+    "save-as": () => void saveSceneAs(),
+    portfolio: () => setPortfolioOpen(true),
+    present: () => presentation.enter(),
+    legend: () => setLegendOpen(true),
+    arrange: arrangeTiers,
+    library: () => canvasRef.current?.toggleLibrarySidebar(),
+    "export-mermaid": exportMermaidFile,
+    "export-sidecar": exportSidecarFile,
+  };
+  useEffect(() => {
+    if (!isDesktop) return;
+    const target = window as DocentMenuWindow;
+    target.__docentMenu = (id) => menuHandlersRef.current[id]?.();
+    return () => {
+      delete target.__docentMenu;
+    };
+  }, []);
+
   // Presentation keyboard controls (S2) + drill back (S11).
   const drillRef = useRef(drill);
   drillRef.current = drill;
@@ -564,7 +621,7 @@ export function App() {
         }`;
 
   return (
-    <div className="docent-app">
+    <div className={isDesktop ? "docent-app docent-desktop" : "docent-app"}>
       <main
         className="docent-canvas"
         ref={(el) => {
@@ -587,6 +644,7 @@ export function App() {
             onArrangeTiers: arrangeTiers,
             onConnectAgent: connectAgent,
           }}
+          hideDocentMenuItems={isDesktop}
         />
         {!presentation.active && (
           <div className="docent-file-chip" title={fileName ?? "untitled"}>

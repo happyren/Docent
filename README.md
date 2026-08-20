@@ -275,6 +275,10 @@ The same canvas in a native window — a [Tauri](https://v2.tauri.app) shell aro
 the same SPA build, with the portfolio store running natively inside the app
 (S13). No Docker, no Node, no browser tab.
 
+There, Docent's own actions live in the native menus (File, View, Export) and
+the in-canvas Library button is hidden, since View → Library opens it; the
+canvas hamburger keeps Excalidraw's own tools.
+
 **Download** the build for your platform from the
 [Desktop workflow](https://github.com/happyren/Docent/actions/workflows/desktop.yml)
 — each run uploads `.dmg`/`.app` (macOS, universal), `.msi`/`.exe` (Windows), and
