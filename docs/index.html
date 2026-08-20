@@ -10,68 +10,87 @@
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); line-height:1.55; }
   main { max-width:880px; margin:0 auto; padding:48px 24px 80px; }
-  header { text-align:center; margin-bottom:40px; }
+  header { text-align:center; margin-bottom:32px; }
   header img { width:96px; height:96px; border-radius:22px; }
   h1 { font-size:2.4rem; margin:16px 0 6px; }
   .tagline { color:var(--muted); font-size:1.15rem; margin:0; }
   .credit { margin-top:14px; font-size:.95rem; color:var(--muted); }
   .credit a { color:var(--accent); }
   a { color:var(--violet); }
-  .buttons { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin:28px 0 8px; }
-  .btn { background:var(--violet); color:#fff; text-decoration:none; padding:12px 22px; border-radius:10px; font-weight:600; }
-  .btn.alt { background:var(--panel); border:1px solid #3a3a42; }
+  .ghlink { text-align:center; margin:14px 0 0; }
+  .ghlink a { color:var(--muted); font-size:.95rem; }
+  .switcher { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; margin:26px 0 14px; }
+  .switcher button { background:var(--panel); color:var(--muted); border:1px solid #3a3a42; border-radius:999px; padding:8px 18px; font-size:.95rem; cursor:pointer; }
+  .switcher button.active { background:var(--violet); border-color:var(--violet); color:#fff; }
+  .detected { text-align:center; color:var(--muted); font-size:.85rem; margin:0 0 18px; }
   section { background:var(--panel); border:1px solid #33333b; border-radius:14px; padding:22px 26px; margin:18px 0; }
+  section.platform { display:none; }
+  section.platform.active { display:block; }
+  .no-js section.platform { display:block; }
   h2 { margin:0 0 10px; font-size:1.25rem; }
   h3 { margin:18px 0 6px; font-size:1.02rem; }
   pre { background:#141417; border:1px solid #33333b; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.85rem; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
   p code, li code { background:#141417; padding:1px 6px; border-radius:5px; }
   .note { color:var(--muted); font-size:.92rem; }
+  .cta { display:inline-block; background:var(--violet); color:#fff; text-decoration:none; padding:12px 22px; border-radius:10px; font-weight:600; border:none; font-size:1rem; cursor:pointer; }
+  .cta.small { padding:8px 16px; font-size:.9rem; }
+  .copyrow { display:flex; gap:8px; align-items:stretch; margin:10px 0; }
+  .copyrow pre { flex:1; margin:0; white-space:pre-wrap; word-break:break-all; }
   footer { text-align:center; color:var(--muted); font-size:.9rem; margin-top:48px; }
   footer a { color:var(--muted); }
   ul { margin:8px 0; padding-left:22px; }
 </style>
 </head>
-<body>
+<body class="no-js">
 <main>
   <header>
     <img src="icon.png" alt="Docent icon">
     <h1>Docent</h1>
     <p class="tagline">A docent walks you through the museum. This one walks humans — and AI&nbsp;agents — through your architecture diagrams.</p>
     <p class="credit">Inspired by and built upon <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> — the canvas, the hand-drawn rendering, and the file format are Excalidraw's work. Docent is an independent project, not affiliated with or endorsed by Excalidraw.</p>
-    <div class="buttons">
-      <a class="btn" href="https://github.com/happyren/Docent/releases/latest">Download</a>
-      <a class="btn alt" href="https://github.com/happyren/Docent">GitHub</a>
-    </div>
-    <p class="note">Free &amp; open source · MIT · macOS (Apple&nbsp;Silicon&nbsp;+&nbsp;Intel) · Windows · Linux · self-hosted</p>
+    <p class="note" style="margin-top:12px">Free &amp; open source · MIT · macOS (Apple&nbsp;Silicon&nbsp;+&nbsp;Intel) · Windows · Linux · self-hosted</p>
+    <p class="ghlink"><a href="https://github.com/happyren/Docent">Source on GitHub</a> · <a href="https://github.com/happyren/Docent/releases/latest">all downloads</a></p>
   </header>
 
-  <section>
+  <div class="switcher" id="switcher" hidden>
+    <button data-os="macos">macOS</button>
+    <button data-os="windows">Windows</button>
+    <button data-os="linux">Linux</button>
+    <button data-os="docker">Self-host</button>
+  </div>
+  <p class="detected" id="detected" hidden></p>
+
+  <section class="platform" id="p-macos">
     <h2>Install on macOS</h2>
-    <p>Docent is open-source and <strong>unsigned</strong> — we don't pay Apple's yearly developer fee, so macOS flags the download. That's a missing signature, not malware; the source is public if you'd like to check what you're running. Two ways in:</p>
-    <h3>Option A — one Terminal line (no security prompts)</h3>
+    <p>Docent is open-source and <strong>unsigned</strong> — we don't pay Apple's yearly developer fee, so macOS flags browser downloads. That's a missing signature, not malware; the source is public if you'd like to check what you're running.</p>
+    <h3>Recommended — one Terminal line, no security prompts</h3>
     <p class="note">Terminal downloads skip macOS quarantine entirely, so the app opens like any other:</p>
-    <pre><code>curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip &amp;&amp; ditto -x -k /tmp/Docent.zip /Applications &amp;&amp; open /Applications/Docent.app</code></pre>
-    <h3>Option B — downloaded in a browser?</h3>
-    <p>Unzip, then clear the quarantine flag once, then open normally:</p>
+    <div class="copyrow">
+      <pre id="mac-cmd"><code>curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip &amp;&amp; ditto -x -k /tmp/Docent.zip /Applications &amp;&amp; open /Applications/Docent.app</code></pre>
+      <button class="cta small" id="mac-copy" hidden>Copy</button>
+    </div>
+    <h3>Or download in the browser</h3>
+    <p><a href="https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip">Download the zip</a>, unzip, then clear the quarantine flag once and open normally:</p>
     <pre><code>xattr -cr ~/Downloads/Docent.app</code></pre>
     <p class="note">macOS will otherwise report the app as "damaged" — current macOS offers no <em>Open&nbsp;Anyway</em> for unsigned apps. One universal build covers Apple&nbsp;Silicon and Intel.</p>
   </section>
 
-  <section>
+  <section class="platform" id="p-windows">
     <h2>Install on Windows</h2>
-    <p><a href="https://github.com/happyren/Docent/releases/latest/download/Docent_windows_portable.zip">Download the portable zip</a>, unzip, and run <code>docent.exe</code> — a single file, no installer. If SmartScreen appears: <strong>More info → Run anyway</strong> (same reason: no paid code-signing certificate).</p>
+    <p style="margin:14px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_windows_portable.zip">Download for Windows (portable zip)</a></p>
+    <p>Unzip and run <code>docent.exe</code> — a single file, no installer. If SmartScreen appears: <strong>More info → Run anyway</strong> (same reason: no paid code-signing certificate).</p>
     <p class="note">Needs Microsoft's WebView2 runtime, preinstalled on Windows&nbsp;11 and current Windows&nbsp;10. Older machine? Use the NSIS installer from the <a href="https://github.com/happyren/Docent/releases/latest">release page</a> — it fetches the runtime.</p>
   </section>
 
-  <section>
+  <section class="platform" id="p-linux">
     <h2>Install on Linux</h2>
-    <p>Grab the AppImage from the <a href="https://github.com/happyren/Docent/releases/latest">latest release</a>, then:</p>
-    <pre><code>chmod +x Docent_*.AppImage &amp;&amp; ./Docent_*.AppImage</code></pre>
-    <p class="note"><code>.deb</code> and <code>.rpm</code> packages are attached too.</p>
+    <p style="margin:14px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_amd64.AppImage">Download for Linux (AppImage)</a></p>
+    <pre><code>chmod +x Docent_amd64.AppImage &amp;&amp; ./Docent_amd64.AppImage</code></pre>
+    <p class="note"><code>.deb</code> and <code>.rpm</code> packages are on the <a href="https://github.com/happyren/Docent/releases/latest">release page</a>.</p>
   </section>
 
-  <section>
+  <section class="platform" id="p-docker">
     <h2>Self-host (Docker)</h2>
     <p>The same app as a shared team deployment — portfolio store and the MCP agent endpoint included:</p>
     <pre><code>git clone https://github.com/happyren/Docent.git &amp;&amp; cd Docent &amp;&amp; docker compose up</code></pre>
@@ -83,6 +102,7 @@
     <ul>
       <li><strong>Longtake presentations</strong> — frames become waypoints; one continuous camera glide, no slide cuts.</li>
       <li><strong>Tiered drill-down</strong> — click a component, dive into its inner mechanism; unbounded layers on one canvas.</li>
+      <li><strong>GitHub sync</strong> — bind a project to a repository: every save is a commit, drafts on branches, pull requests from the app.</li>
       <li><strong>Semantic export</strong> — deterministic Mermaid + compact JSON with provenance on every fact, built for AI readers.</li>
       <li><strong>Agent-drivable</strong> — an open MCP endpoint lets any AI agent move the camera, highlight components, and narrate tours (self-hosted deployments).</li>
       <li><strong>Project portfolio</strong> — projects of scenes with large previews, stored as plain <code>.excalidraw</code> files.</li>
@@ -93,5 +113,47 @@
     <p>MIT licensed · <a href="https://github.com/happyren/Docent/blob/master/THIRD_PARTY_NOTICES.md">third-party notices</a> · built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> ❤️</p>
   </footer>
 </main>
+<script>
+(function () {
+  document.body.classList.remove("no-js");
+  var ua = navigator.userAgent;
+  var os = /Mac/.test(ua) ? "macos" : /Win/.test(ua) ? "windows" : /Linux|X11/.test(ua) ? "linux" : null;
+  var names = { macos: "macOS", windows: "Windows", linux: "Linux", docker: "Self-host" };
+  var switcher = document.getElementById("switcher");
+  var detected = document.getElementById("detected");
+  function show(target) {
+    document.querySelectorAll("section.platform").forEach(function (s) {
+      s.classList.toggle("active", s.id === "p-" + target);
+    });
+    switcher.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.os === target);
+    });
+  }
+  switcher.hidden = false;
+  switcher.querySelectorAll("button").forEach(function (b) {
+    b.addEventListener("click", function () { show(b.dataset.os); detected.hidden = true; });
+  });
+  if (os) {
+    detected.textContent = "Detected " + names[os] + " — showing the best install path. Wrong? Pick another above.";
+    detected.hidden = false;
+    show(os);
+  } else {
+    show("docker");
+  }
+  var copy = document.getElementById("mac-copy");
+  copy.hidden = false;
+  copy.addEventListener("click", function () {
+    var text = document.getElementById("mac-cmd").innerText;
+    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(
+      function () { copy.textContent = "Copied!"; setTimeout(function () { copy.textContent = "Copy"; }, 1600); },
+      function () {
+        var r = document.createRange(); r.selectNodeContents(document.getElementById("mac-cmd"));
+        var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        copy.textContent = "Select + \u2318C"; setTimeout(function () { copy.textContent = "Copy"; }, 2000);
+      }
+    );
+  });
+})();
+</script>
 </body>
 </html>
