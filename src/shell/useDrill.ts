@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { DocentCanvasHandle, SceneBounds, Viewport } from "../adapter";
 import type { CameraEngine } from "../camera/engine";
 import { bandPlacement, computeTiers, tierOfElement } from "../scene/tiers";
+import { alertDialog } from "./dialogs";
 
 interface DrillTier {
   frameId: string;
@@ -89,7 +90,9 @@ export function useDrill(
         push(info.bounds, frameId, frame?.name ?? "detail", frame?.bounds ?? bounds);
       } catch (err) {
         console.error(err);
-        window.alert(
+        // Raised and left to resolve on its own: this callback drives the
+        // camera and must stay synchronous for its callers.
+        void alertDialog(
           `Could not create detail frame: ${err instanceof Error ? err.message : err}`,
         );
       }

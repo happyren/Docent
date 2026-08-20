@@ -16,7 +16,11 @@
 //! `/desktop/import` and `/desktop/export` are the one part with no self-host
 //! counterpart: the system webview has no File System Access API and ignores
 //! anchor downloads, so reading or writing a file outside the portfolio has to
-//! happen here, behind a native dialog.
+//! happen here, behind a native dialog. `/desktop/confirm` and `/desktop/alert`
+//! join them for the same reason one step further out: the webview implements
+//! none of `window.confirm`, `window.alert` or `window.prompt` — confirm()
+//! answers false instantly with no box on screen, alert() vanishes — so a page
+//! that asks the user anything has to ask through here or not at all.
 //!
 //! A project may be bound to a GitHub repository instead (S14, D27), in which
 //! case its scenes are read and written over GitHub's HTTP API and its local
@@ -29,7 +33,7 @@ use std::fs;
 use std::io::{ErrorKind, Read};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::UNIX_EPOCH;
 
@@ -60,35 +64,89 @@ const ALLOWED_ORIGINS: &[&str] = &[
 /// send it and never read it back.
 const SCENE_SHA_HEADER: &str = "X-Docent-Scene-Sha";
 
-/// How the store asks the user for a path. The native implementation lives in
-/// the shell (`src/lib.rs`) rather than here, because a macOS dialog may only
-/// be raised on the main thread and only the shell holds the handle that can
-/// hop onto it. Behind a trait, the HTTP plumbing is also testable where there
-/// is no display at all.
-pub trait FileDialog: Send + Sync + 'static {
+/// The title every message box wears unless the page names one. It is the
+/// application's name because that is what a native box is expected to say
+/// where the web's `window.confirm` says the origin.
+const DIALOG_TITLE: &str = "Docent";
+
+/// How the store asks the user something the page cannot ask for itself: for a
+/// path, or for a plain yes/no. The native implementations live in the shell
+/// (`src/lib.rs`) rather than here, because a macOS dialog may only be raised
+/// on the main thread and only the shell holds the handle that can hop onto it.
+/// Behind a trait, the HTTP plumbing is also testable where there is no display
+/// at all.
+pub trait Dialogs: Send + Sync + 'static {
     /// The open dialog. `None` is a cancelled dialog, not a failure.
     fn pick_open(&self) -> Option<PathBuf>;
     /// The save dialog, seeded with `suggested_name`.
     fn pick_save(&self, suggested_name: &str) -> Option<PathBuf>;
+    /// A question with two answers. `true` is the affirmative, exactly as
+    /// `window.confirm` returns it on the web — the page's destructive actions
+    /// read this the same way in both places.
+    fn confirm(&self, title: &str, message: &str) -> bool;
+    /// A message with one button. There is nothing to answer, only to read.
+    fn alert(&self, title: &str, message: &str);
+}
+
+/// One message box the stub swallowed: which kind it was, and exactly what it
+/// would have said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asked {
+    pub kind: AskKind,
+    pub title: String,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AskKind {
+    Confirm,
+    Alert,
 }
 
 /// A dialog stand-in for environments that have no display: `cancel` answers
-/// as a cancelled dialog, any other value is the path the user "picked".
+/// as a cancelled file dialog, any other value is the path the user "picked",
+/// and every message box is recorded rather than raised — so a test can assert
+/// on what the user would have been asked.
 /// `DOCENT_DIALOG_STUB` selects it in a running app; tests construct it
 /// directly, so parallel cases never contend over one process-wide variable.
 pub struct StubDialog {
     answer: String,
+    confirms: bool,
+    asked: Mutex<Vec<Asked>>,
 }
 
 impl StubDialog {
     pub fn new(answer: impl Into<String>) -> Self {
         Self {
             answer: answer.into(),
+            // Declining by default, the way `updates::RecordingDialog` declines
+            // to launch a browser: a run with no display must not let a
+            // destructive action through on an answer nobody gave.
+            confirms: false,
+            asked: Mutex::new(Vec::new()),
         }
+    }
+
+    /// How this stub answers confirmations. Builder rather than a constructor
+    /// argument so `new("cancel")` keeps reading as "the file dialogs cancel".
+    pub fn confirming(mut self, confirms: bool) -> Self {
+        self.confirms = confirms;
+        self
     }
 
     pub fn from_env() -> Option<Self> {
         std::env::var("DOCENT_DIALOG_STUB").ok().map(Self::new)
+    }
+
+    /// Every message box raised so far, oldest first.
+    pub fn asked(&self) -> Vec<Asked> {
+        self.log().clone()
+    }
+
+    fn log(&self) -> std::sync::MutexGuard<'_, Vec<Asked>> {
+        // A poisoned lock means a test already panicked; recovering the log is
+        // more useful than a second panic on top of the first.
+        self.asked.lock().unwrap_or_else(|err| err.into_inner())
     }
 
     fn answer(&self) -> Option<PathBuf> {
@@ -98,15 +156,32 @@ impl StubDialog {
             Some(PathBuf::from(&self.answer))
         }
     }
+
+    fn record(&self, kind: AskKind, title: &str, message: &str) {
+        self.log().push(Asked {
+            kind,
+            title: title.to_string(),
+            message: message.to_string(),
+        });
+    }
 }
 
-impl FileDialog for StubDialog {
+impl Dialogs for StubDialog {
     fn pick_open(&self) -> Option<PathBuf> {
         self.answer()
     }
 
     fn pick_save(&self, _suggested_name: &str) -> Option<PathBuf> {
         self.answer()
+    }
+
+    fn confirm(&self, title: &str, message: &str) -> bool {
+        self.record(AskKind::Confirm, title, message);
+        self.confirms
+    }
+
+    fn alert(&self, title: &str, message: &str) {
+        self.record(AskKind::Alert, title, message);
     }
 }
 
@@ -152,7 +227,7 @@ impl Drop for StoreHandle {
 pub fn spawn(
     data_dir: PathBuf,
     secrets_file: PathBuf,
-    dialogs: Arc<dyn FileDialog>,
+    dialogs: Arc<dyn Dialogs>,
 ) -> std::io::Result<StoreHandle> {
     fs::create_dir_all(&data_dir)?;
     let server = Server::http((Ipv4Addr::LOCALHOST, 0))
@@ -244,7 +319,7 @@ impl From<github::Failure> for HttpError {
     }
 }
 
-fn serve(context: &Context, dialogs: &dyn FileDialog, mut request: Request) {
+fn serve(context: &Context, dialogs: &dyn Dialogs, mut request: Request) {
     let origin = request
         .headers()
         .iter()
@@ -315,7 +390,7 @@ fn header(name: &str, value: &str) -> Header {
 
 fn dispatch(
     context: &Context,
-    dialogs: &dyn FileDialog,
+    dialogs: &dyn Dialogs,
     origin: Option<&str>,
     request: &mut Request,
 ) -> Result<Reply> {
@@ -324,10 +399,12 @@ fn dispatch(
     let segments = path_segments(request.url());
     let part = |i: usize| segments.get(i).map(String::as_str);
 
-    // The two endpoints that reach outside the portfolio, into whatever file
-    // the user points the dialog at. They are POSTs a page can send without a
-    // preflight, so CORS alone would not stop one — the app's own origin is
-    // required outright, and an unknown or absent one never raises a dialog.
+    // The endpoints that raise something on the user's screen: two that reach
+    // outside the portfolio into whatever file the dialog points at, and two
+    // that put a message box in front of them. They are POSTs a page can send
+    // without a preflight, so CORS alone would not stop one — the app's own
+    // origin is required outright, and an unknown or absent one never raises a
+    // dialog.
     if part(0) == Some("desktop") {
         if method != Method::Post {
             return Err(HttpError::new(404, "not found"));
@@ -338,6 +415,8 @@ fn dispatch(
         return match part(1) {
             Some("import") if segments.len() == 2 => import_file(dialogs),
             Some("export") if segments.len() == 2 => export_file(dialogs, request),
+            Some("confirm") if segments.len() == 2 => ask(dialogs, request, AskKind::Confirm),
+            Some("alert") if segments.len() == 2 => ask(dialogs, request, AskKind::Alert),
             _ => Err(HttpError::new(404, "not found")),
         };
     }
@@ -753,7 +832,7 @@ fn internal(err: std::io::Error) -> HttpError {
 
 /// Raise the open dialog and hand the page the file's text. The page decides
 /// whether the text is a scene — the same check it applies to `?scene=<url>`.
-fn import_file(dialogs: &dyn FileDialog) -> Result<Reply> {
+fn import_file(dialogs: &dyn Dialogs) -> Result<Reply> {
     let Some(path) = dialogs.pick_open() else {
         return Ok(Reply::ok(r#"{"canceled":true}"#));
     };
@@ -787,7 +866,7 @@ struct ExportRequest {
 /// Raise the save dialog and write the text the page generated — a scene, a
 /// Mermaid diagram, or a semantic sidecar. Only the dialog is the shell's
 /// business; the write happens here, off the main thread.
-fn export_file(dialogs: &dyn FileDialog, request: &mut Request) -> Result<Reply> {
+fn export_file(dialogs: &dyn Dialogs, request: &mut Request) -> Result<Reply> {
     let body = read_body(request)?;
     let payload: ExportRequest =
         serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not an export"))?;
@@ -805,6 +884,37 @@ fn export_file(dialogs: &dyn FileDialog, request: &mut Request) -> Result<Reply>
     Ok(Reply::ok(
         serde_json::json!({ "saved": path.to_string_lossy() }).to_string(),
     ))
+}
+
+/// Raise a message box and answer what the user did with it. Both kinds share
+/// this one handler because they share everything but the buttons: the same
+/// body shape, the same validation, and the same default title.
+///
+/// The page sends `{ message }` and optionally `{ title }`. A body that is not
+/// JSON, or that carries no message string, is the client's mistake and is
+/// refused before anything appears on screen — the same 400s the write routes
+/// answer with, for the same reason.
+fn ask(dialogs: &dyn Dialogs, request: &mut Request, kind: AskKind) -> Result<Reply> {
+    let body = read_body(request)?;
+    let input: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
+    let Some(message) = input.get("message").and_then(|value| value.as_str()) else {
+        return Err(HttpError::new(400, "body is not a message"));
+    };
+    let title = input
+        .get("title")
+        .and_then(|value| value.as_str())
+        .filter(|title| !title.is_empty())
+        .unwrap_or(DIALOG_TITLE);
+    match kind {
+        AskKind::Confirm => Ok(Reply::ok(
+            serde_json::json!({ "confirmed": dialogs.confirm(title, message) }).to_string(),
+        )),
+        AskKind::Alert => {
+            dialogs.alert(title, message);
+            Ok(Reply::ok(r#"{"ok":true}"#))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,6 +1245,34 @@ mod tests {
         assert_eq!(picked.pick_open(), expected);
         // The suggested name is the dialog's business, not the answer's.
         assert_eq!(picked.pick_save("other.excalidraw"), expected);
+    }
+
+    #[test]
+    fn the_stub_dialog_records_message_boxes_and_declines_by_default() {
+        let stub = StubDialog::new("cancel");
+        assert!(!stub.confirm("Docent", "Delete everything?"));
+        stub.alert("Docent", "Could not save.");
+        assert_eq!(
+            stub.asked(),
+            vec![
+                Asked {
+                    kind: AskKind::Confirm,
+                    title: "Docent".into(),
+                    message: "Delete everything?".into(),
+                },
+                Asked {
+                    kind: AskKind::Alert,
+                    title: "Docent".into(),
+                    message: "Could not save.".into(),
+                },
+            ]
+        );
+
+        // …and answers yes only where a test says so, never by default: a run
+        // with no display must not confirm a deletion nobody saw.
+        assert!(StubDialog::new("cancel")
+            .confirming(true)
+            .confirm("Docent", "Delete everything?"));
     }
 
     #[test]

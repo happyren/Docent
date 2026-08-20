@@ -15,6 +15,7 @@ import {
   writeSceneFile,
 } from "./scene-file";
 import { exportSceneFile, importSceneFile } from "./desktop-files";
+import { alertDialog } from "./dialogs";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
 import { IntentPanel } from "./IntentPanel";
@@ -266,7 +267,7 @@ export function App() {
       fitLayerOne();
     } catch (err) {
       console.error(err);
-      window.alert(`Could not open scene: ${err instanceof Error ? err.message : err}`);
+      await alertDialog(`Could not open scene: ${err instanceof Error ? err.message : err}`);
     }
   }, [markClean, fitLayerOne, syncSceneUrl]);
 
@@ -290,7 +291,7 @@ export function App() {
       }
     } catch (err) {
       console.error(err);
-      window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
+      await alertDialog(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
   }, [fileName, markClean, prepareSceneForSave, syncSceneUrl]);
 
@@ -314,7 +315,7 @@ export function App() {
         // A 409 lands here: the document stays dirty, deliberately, because the
         // work is still only in this tab and the message says to reload.
         console.error(err);
-        window.alert(
+        await alertDialog(
           `Could not save to portfolio: ${err instanceof Error ? err.message : err}`,
         );
       }
@@ -330,7 +331,7 @@ export function App() {
       markClean(null);
     } catch (err) {
       console.error(err);
-      window.alert(`Could not save scene: ${err instanceof Error ? err.message : err}`);
+      await alertDialog(`Could not save scene: ${err instanceof Error ? err.message : err}`);
     }
   }, [markClean, saveSceneAs, prepareSceneForSave]);
 
@@ -469,7 +470,7 @@ export function App() {
       fitLayerOne();
     } catch (err) {
       console.error(err);
-      window.alert(
+      await alertDialog(
         `Could not import scene: ${err instanceof Error ? err.message : err}`,
       );
     }
@@ -480,7 +481,7 @@ export function App() {
       await exportSceneFile(name, contents);
     } catch (err) {
       console.error(err);
-      window.alert(
+      await alertDialog(
         `Could not export "${name}": ${err instanceof Error ? err.message : err}`,
       );
     }
@@ -499,7 +500,9 @@ export function App() {
     if (projectParam && sceneParam) {
       void openPortfolioScene(projectParam, sceneParam).catch((err: unknown) => {
         console.error(`Failed to load ?project=${projectParam}&scene=${sceneParam}`, err);
-        window.alert(
+        // Not an async handler, so the box is raised and left to resolve on
+        // its own; nothing here waits on the answer.
+        void alertDialog(
           `Could not load "${projectParam}/${sceneParam}": ${err instanceof Error ? err.message : err}`,
         );
       });
@@ -533,7 +536,7 @@ export function App() {
       } catch (err) {
         if (!controller.signal.aborted) {
           console.error(`Failed to load ?scene=${sceneUrl}`, err);
-          window.alert(
+          await alertDialog(
             `Could not load scene "${sceneUrl}": ${err instanceof Error ? err.message : err}`,
           );
         }

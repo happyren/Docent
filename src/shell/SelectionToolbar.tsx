@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import type { DocentCanvasHandle, ElementInfo } from "../adapter";
 import type { CommandAPI } from "../command/api";
 import type { Drill } from "./useDrill";
+import { alertDialog } from "./dialogs";
 
 const BAR_OFFSET = 52;
 /** Keep clear of Excalidraw's islands: shape toolbar band on top, hamburger/undo row below. */
@@ -90,7 +91,9 @@ export function SelectionToolbar({
     try {
       action();
     } catch (err) {
-      window.alert(String(err instanceof Error ? err.message : err));
+      // The effect itself is synchronous — only the message box is not, and
+      // nothing here waits on it being dismissed.
+      void alertDialog(String(err instanceof Error ? err.message : err));
     }
   };
 
@@ -207,7 +210,7 @@ export function SelectionToolbar({
           onClick={() =>
             void commands
               .flow({ path: selectedIds })
-              .catch((err) => window.alert(String(err)))
+              .catch((err) => void alertDialog(String(err)))
           }
         >
           Flow

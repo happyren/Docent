@@ -5,10 +5,12 @@
 //! two things only the desktop has: an atomic write that leaves no `.tmp`
 //! behind and a CORS allowlist, because here the store is cross-origin.
 //!
-//! The desktop also owns two endpoints with no self-host counterpart —
-//! `/desktop/import` and `/desktop/export`, which raise a native dialog — so
-//! those are exercised here too, with the dialog stubbed: CI has no display,
-//! and the plumbing under test is the HTTP and file half either way.
+//! The desktop also owns four endpoints with no self-host counterpart —
+//! `/desktop/import` and `/desktop/export`, which raise a native file dialog,
+//! and `/desktop/confirm` and `/desktop/alert`, which raise a native message
+//! box because the system webview implements neither `window.confirm` nor
+//! `window.alert` — so those are exercised here too, with the dialogs stubbed:
+//! CI has no display, and the plumbing under test is the HTTP half either way.
 //!
 //! Each test gets its own data directory, its own ephemeral port, and its own
 //! stubbed dialog answer, so they run in parallel without sharing state.
@@ -21,7 +23,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use docent_lib::store::{self, StoreHandle, StubDialog};
+use docent_lib::store::{self, AskKind, Asked, StoreHandle, StubDialog};
 
 const SCENE: &str = r#"{"type":"excalidraw","version":2,"elements":[]}"#;
 const WEBVIEW_ORIGIN: &str = "tauri://localhost";
@@ -32,33 +34,48 @@ const WEBVIEW_ORIGIN: &str = "tauri://localhost";
 
 struct Fixture {
     store: Option<StoreHandle>,
+    /// The same stub the store holds, kept here so a test can read back which
+    /// message boxes the store would have put on screen.
+    dialogs: Arc<StubDialog>,
     data_dir: PathBuf,
     secrets_file: PathBuf,
 }
 
 impl Fixture {
-    /// A store whose dialogs always cancel — the answer no test that never
-    /// opens one can be surprised by.
+    /// A store whose dialogs always cancel and always decline — the answers no
+    /// test that never opens one can be surprised by.
     fn new() -> Self {
         Self::with_dialog("cancel")
     }
 
-    /// `answer` is what the stubbed dialog returns: `cancel`, or the path the
-    /// user would have picked.
+    /// `answer` is what the stubbed file dialog returns: `cancel`, or the path
+    /// the user would have picked.
     fn with_dialog(answer: &str) -> Self {
+        Self::build(answer, false)
+    }
+
+    /// A store whose message boxes are answered with OK, for the flows that
+    /// only continue when the user says yes.
+    fn confirming() -> Self {
+        Self::build("cancel", true)
+    }
+
+    fn build(answer: &str, confirms: bool) -> Self {
         let data_dir = std::env::temp_dir().join(unique_name("docent-store"));
         // Outside the data directory, as D27 requires of every deployment.
         let secrets_file = std::env::temp_dir()
             .join(unique_name("docent-secrets"))
             .with_extension("json");
+        let dialogs = Arc::new(StubDialog::new(answer).confirming(confirms));
         let store = store::spawn(
             data_dir.clone(),
             secrets_file.clone(),
-            Arc::new(StubDialog::new(answer)),
+            Arc::clone(&dialogs) as Arc<dyn store::Dialogs>,
         )
         .expect("store binds loopback");
         Self {
             store: Some(store),
+            dialogs,
             data_dir,
             secrets_file,
         }
@@ -70,6 +87,11 @@ impl Fixture {
 
     fn data_dir(&self) -> &Path {
         &self.data_dir
+    }
+
+    /// Every message box the store raised, oldest first.
+    fn asked(&self) -> Vec<Asked> {
+        self.dialogs.asked()
     }
 }
 
@@ -664,23 +686,123 @@ fn dialog_endpoints_answer_the_app_only() {
     let target = Scratch::new("docent-export-foreign");
     let fixture = Fixture::with_dialog(target.as_str());
     let port = fixture.port();
-    let body = serde_json::json!({ "name": "scene.excalidraw", "content": SCENE }).to_string();
+    let export = serde_json::json!({ "name": "scene.excalidraw", "content": SCENE }).to_string();
+    let message = serde_json::json!({ "message": "Delete everything?" }).to_string();
 
     // A simple POST needs no preflight, so the origin has to be checked on the
     // request itself — otherwise any page could raise a dialog on the user's
-    // screen, or write a file wherever they clicked.
+    // screen, write a file wherever they clicked, or put words in a box wearing
+    // this app's name.
     for origin in [Some("https://example.com"), None] {
-        for (path, body) in [("/desktop/import", None), ("/desktop/export", Some(&body))] {
+        for (path, body) in [
+            ("/desktop/import", None),
+            ("/desktop/export", Some(&export)),
+            ("/desktop/confirm", Some(&message)),
+            ("/desktop/alert", Some(&message)),
+        ] {
             let res = send(port, "POST", path, body.map(String::as_str), origin);
             assert_eq!(res.status, 403, "{path} from {origin:?}");
             assert_eq!(res.json()["error"], "forbidden");
         }
     }
     assert!(!target.path.exists());
+    assert!(
+        fixture.asked().is_empty(),
+        "a refused request must never reach the screen"
+    );
 
     // Only POST: a GET must not be able to raise a dialog from a plain link.
     assert_eq!(get(port, "/desktop/import").status, 404);
+    assert_eq!(get(port, "/desktop/confirm").status, 404);
     assert_eq!(post(port, "/desktop/nonsense", None).status, 404);
+}
+
+// ---------------------------------------------------------------------------
+// message boxes — the other desktop-only half
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_confirmed_question_answers_true() {
+    let fixture = Fixture::confirming();
+    let question = "Delete project \"work\" and its 2 scenes? This cannot be undone.";
+    let body = serde_json::json!({ "title": "Delete project", "message": question }).to_string();
+
+    let res = post(fixture.port(), "/desktop/confirm", Some(&body));
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "confirmed": true }));
+
+    // The page's own wording reaches the box unaltered — the desktop asks the
+    // question the web asks, in the platform's own dialog.
+    assert_eq!(
+        fixture.asked(),
+        vec![Asked {
+            kind: AskKind::Confirm,
+            title: "Delete project".into(),
+            message: question.into(),
+        }]
+    );
+}
+
+#[test]
+fn a_declined_question_answers_false() {
+    // The default stub declines, which is the answer a cancelled box gives.
+    let fixture = Fixture::new();
+    let body = serde_json::json!({ "message": "Overwrite scene \"work/checkout\"?" }).to_string();
+
+    let res = post(fixture.port(), "/desktop/confirm", Some(&body));
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "confirmed": false }));
+    // Asked all the same: declining is an answer, not a failure to ask.
+    assert_eq!(fixture.asked().len(), 1);
+    assert_eq!(fixture.asked()[0].kind, AskKind::Confirm);
+}
+
+#[test]
+fn an_alert_shows_the_message_and_answers_ok() {
+    let fixture = Fixture::new();
+    let message = "Could not save scene: HTTP 409";
+    let body = serde_json::json!({ "message": message }).to_string();
+
+    let res = post(fixture.port(), "/desktop/alert", Some(&body));
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json(), serde_json::json!({ "ok": true }));
+
+    // No title given, so the box wears the application's name.
+    assert_eq!(
+        fixture.asked(),
+        vec![Asked {
+            kind: AskKind::Alert,
+            title: "Docent".into(),
+            message: message.into(),
+        }]
+    );
+}
+
+#[test]
+fn message_boxes_refuse_a_body_that_carries_no_message() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    for path in ["/desktop/confirm", "/desktop/alert"] {
+        let not_json = post(port, path, Some("not json"));
+        assert_eq!(not_json.status, 400, "{path} with a non-JSON body");
+        assert_eq!(not_json.json()["error"], "body is not JSON");
+
+        for body in [
+            r#"{"title":"Docent"}"#,
+            r#"{"message":42}"#,
+            r#"{"message":null}"#,
+            "[]",
+        ] {
+            let res = post(port, path, Some(body));
+            assert_eq!(res.status, 400, "{path} with {body}");
+            assert_eq!(res.json()["error"], "body is not a message");
+        }
+    }
+
+    // Nothing was raised: a malformed ask is refused before it reaches the
+    // screen, so no box appears that the user cannot make sense of.
+    assert!(fixture.asked().is_empty());
 }
 
 fn entries(dir: &Path) -> Vec<String> {

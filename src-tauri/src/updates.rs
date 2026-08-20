@@ -140,10 +140,12 @@ impl Outcome {
 // dialogs
 // ---------------------------------------------------------------------------
 
-/// How the updater says something to the user — the message-box sibling of
-/// `store::FileDialog`, and behind a trait for the same two reasons: the native
+/// How the updater says something to the user — the sibling of
+/// `store::Dialogs`, and behind a trait for the same two reasons: the native
 /// implementation has to hop to the main thread and needs the shell's handle to
-/// do it, and a test has no display to raise a box on.
+/// do it, and a test has no display to raise a box on. It stays a trait of its
+/// own because what it shows is an `Outcome` with its own buttons, not the
+/// page's arbitrary text.
 pub trait MessageDialog: Send + Sync + 'static {
     /// Show `outcome`, and answer whether the user asked for the download page.
     /// Always `false` for an outcome that offers no such button.

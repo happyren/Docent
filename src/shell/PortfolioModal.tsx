@@ -37,6 +37,7 @@ import {
   type ProjectInfo,
   type SceneInfo,
 } from "../portfolio/client";
+import { alertDialog, confirmDialog } from "./dialogs";
 import { portfolioThumbnail } from "./sceneThumbnails";
 
 /** A brand-new scene is just an empty `.excalidraw` file (D17). */
@@ -160,7 +161,7 @@ function BranchRow({
       try {
         await action();
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : String(err));
+        await alertDialog(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
@@ -191,9 +192,11 @@ function BranchRow({
       const pull = await openPullRequest(project);
       // The system webview can quietly ignore window.open — nothing happens,
       // no error — so the alert is what actually guarantees the user leaves
-      // with the URL. It is deliberately not one or the other.
+      // with the URL. It is deliberately not one or the other, and on the
+      // desktop it is now a native box rather than a window.alert the webview
+      // would have swallowed too.
       window.open(pull.url, "_blank");
-      window.alert(`Pull request #${pull.number} opened:\n\n${pull.url}`);
+      await alertDialog(`Pull request #${pull.number} opened:\n\n${pull.url}`);
     });
 
   const working = busy || disabled;
@@ -348,14 +351,14 @@ function GitHubPanel({
         // common accident: fine-grained PATs default to Contents: Read.
         const target = `${stored?.owner ?? owner}/${stored?.repo ?? repo}`;
         if (result.canWrite === false) {
-          window.alert(
+          await alertDialog(
             `Connected read-only: scenes will open, but saving will fail. Grant the token "Contents: Read and write" on ${target}, then update the token here.`,
           );
         } else if (result.warning) {
-          window.alert(result.warning);
+          await alertDialog(result.warning);
         }
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : String(err));
+        await alertDialog(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
@@ -364,16 +367,17 @@ function GitHubPanel({
 
   const disconnect = () => {
     if (!binding) return;
-    if (
-      !window.confirm(
+    // The question is asked first and the work only starts once it is
+    // answered, exactly as before — awaiting it is what changed, not the
+    // order. `busy` still turns on for the work alone, so the modal is not
+    // frozen behind a box the user is reading.
+    void (async () => {
+      const confirmed = await confirmDialog(
         `Disconnect "${project}" from ${binding.owner}/${binding.repo}?\n\n` +
           "Nothing is deleted on GitHub, and the project's local folder — which " +
           "may still hold older scenes — comes back as its storage.",
-      )
-    ) {
-      return;
-    }
-    void (async () => {
+      );
+      if (!confirmed) return;
       setBusy(true);
       try {
         await deleteBinding(project);
@@ -381,7 +385,7 @@ function GitHubPanel({
         setOpen(false);
         onChanged();
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : String(err));
+        await alertDialog(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
@@ -563,8 +567,11 @@ export function PortfolioModal({
   const [thumbRevision, setThumbRevision] = useState(0);
   const saveNameRef = useRef<HTMLInputElement | null>(null);
 
+  // Async now that the box may be a native one the shell raises, but used the
+  // same way: as a `.catch` handler and from `run` below. Callers that do not
+  // await it simply do not wait for the user to dismiss it.
   const fail = (err: unknown) =>
-    window.alert(err instanceof Error ? err.message : String(err));
+    alertDialog(err instanceof Error ? err.message : String(err));
 
   const refreshProjects = useCallback(async () => {
     const list = await listProjects();
@@ -620,7 +627,7 @@ export function PortfolioModal({
     try {
       await action();
     } catch (err) {
-      fail(err);
+      await fail(err);
     } finally {
       setBusy(false);
     }
@@ -646,22 +653,31 @@ export function PortfolioModal({
       : `Delete project "${id}"${
           count ? ` and its ${count} scene${count === 1 ? "" : "s"}` : ""
         }? This cannot be undone.`;
-    if (!window.confirm(question)) return;
-    void run(async () => {
-      await deleteProject(id);
-      await refreshProjects();
-    });
+    // Ask, then delete — the gate is the same one, only awaited. A dialog the
+    // desktop shell could not raise answers no, so the deletion never runs on
+    // a question nobody saw.
+    void (async () => {
+      if (!(await confirmDialog(question))) return;
+      await run(async () => {
+        await deleteProject(id);
+        await refreshProjects();
+      });
+    })();
   };
 
   const removeScene = (name: string) => {
     if (!selected) return;
-    if (!window.confirm(`Delete scene "${selected}/${name}"? This cannot be undone.`))
-      return;
-    void run(async () => {
-      await deleteScene(selected, name);
-      setScenes(await listScenes(selected));
-      await refreshProjects();
-    });
+    void (async () => {
+      const confirmed = await confirmDialog(
+        `Delete scene "${selected}/${name}"? This cannot be undone.`,
+      );
+      if (!confirmed) return;
+      await run(async () => {
+        await deleteScene(selected, name);
+        setScenes(await listScenes(selected));
+        await refreshProjects();
+      });
+    })();
   };
 
   const openScene = (name: string) => {
@@ -678,7 +694,7 @@ export function PortfolioModal({
       const name = saveName.trim().replace(/\.excalidraw$/i, "");
       if (!name) return;
       if (scenes.some((s) => s.name === name)) {
-        window.alert(
+        await alertDialog(
           `Scene "${selected}/${name}" already exists — pick another name, or use "Save current scene here" to overwrite it.`,
         );
         return;
@@ -695,10 +711,7 @@ export function PortfolioModal({
       const name = saveName.trim().replace(/\.excalidraw$/i, "");
       if (!name) return;
       const exists = scenes.some((s) => s.name === name);
-      if (
-        exists &&
-        !window.confirm(`Overwrite scene "${selected}/${name}"?`)
-      ) {
+      if (exists && !(await confirmDialog(`Overwrite scene "${selected}/${name}"?`))) {
         return;
       }
       await onSaveScene(selected, name);

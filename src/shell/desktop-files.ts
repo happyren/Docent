@@ -16,7 +16,13 @@ export interface ImportedSceneFile {
   content: string;
 }
 
-async function dialog<T>(path: string, body?: string): Promise<T> {
+/**
+ * One POST to the shell's loopback store, parsed as the JSON answer it owes.
+ * Exported because the message boxes in dialogs.ts are the same conversation
+ * with the same shell — every `/desktop/*` endpoint answers this shape, and a
+ * second copy of the parsing would be a second place for it to drift.
+ */
+export async function postToShell<T>(path: string, body?: string): Promise<T> {
   const res = await fetch(API_BASE + path, {
     method: "POST",
     ...(body === undefined ? {} : { body }),
@@ -41,7 +47,7 @@ async function dialog<T>(path: string, body?: string): Promise<T> {
 
 /** Raise the open dialog and read what the user picked. Null when cancelled. */
 export async function importSceneFile(): Promise<ImportedSceneFile | null> {
-  const result = await dialog<{
+  const result = await postToShell<{
     name?: string;
     content?: string;
     canceled?: boolean;
@@ -55,7 +61,7 @@ export async function exportSceneFile(
   name: string,
   content: string,
 ): Promise<boolean> {
-  const result = await dialog<{ saved?: string; canceled?: boolean }>(
+  const result = await postToShell<{ saved?: string; canceled?: boolean }>(
     "/desktop/export",
     JSON.stringify({ name, content }),
   );

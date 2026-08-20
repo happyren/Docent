@@ -153,7 +153,7 @@ impl NativeDialog {
     }
 }
 
-impl store::FileDialog for NativeDialog {
+impl store::Dialogs for NativeDialog {
     fn pick_open(&self) -> Option<PathBuf> {
         self.on_main(|| {
             rfd::FileDialog::new()
@@ -171,6 +171,48 @@ impl store::FileDialog for NativeDialog {
         // the suggested name already carries the right one.
         self.on_main(move || rfd::FileDialog::new().set_file_name(suggested).save_file())
             .flatten()
+    }
+
+    fn confirm(&self, title: &str, message: &str) -> bool {
+        let (title, message) = (title.to_string(), message.to_string());
+        self.on_main(move || {
+            matches!(
+                rfd::MessageDialog::new()
+                    // A question about something irreversible, which is what
+                    // every one of the page's confirmations is about.
+                    .set_level(rfd::MessageLevel::Warning)
+                    .set_title(title)
+                    .set_description(message)
+                    // OK/Cancel rather than Yes/No: it is the pair
+                    // `window.confirm` raises on the web, so the messages —
+                    // written for that box, and unchanged — still read
+                    // correctly here, and it is the one two-button shape rfd
+                    // renders natively on all three platforms (custom labels
+                    // need the `common-controls-v6` feature this build does
+                    // not enable; see the updater below).
+                    .set_buttons(rfd::MessageButtons::OkCancel)
+                    .show(),
+                rfd::MessageDialogResult::Ok
+            )
+        })
+        // A box that could not be raised is a "no". The user was never asked,
+        // and a destructive action must never proceed on an answer nobody gave.
+        .unwrap_or(false)
+    }
+
+    fn alert(&self, title: &str, message: &str) {
+        let (title, message) = (title.to_string(), message.to_string());
+        // The answer is discarded because there is only one button; what
+        // matters is that this blocks until the user dismisses it, so a caller
+        // showing two messages shows them in order.
+        self.on_main(move || {
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title(title)
+                .set_description(message)
+                .set_buttons(rfd::MessageButtons::Ok)
+                .show();
+        });
     }
 }
 
@@ -456,7 +498,7 @@ pub fn run() {
 
             // The stub exists for environments with no display at all; a real
             // run always gets the platform dialogs.
-            let dialogs: Arc<dyn store::FileDialog> = match store::StubDialog::from_env() {
+            let dialogs: Arc<dyn store::Dialogs> = match store::StubDialog::from_env() {
                 Some(stub) => Arc::new(stub),
                 None => Arc::new(NativeDialog {
                     app: handle.clone(),
