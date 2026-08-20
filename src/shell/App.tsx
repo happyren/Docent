@@ -144,6 +144,25 @@ export function App() {
     };
   }, [commands, connectAgent]);
 
+  // Cmd/Ctrl+P means Present — claimed in the CAPTURE phase, because
+  // upstream listens for it too (to suggest its command palette) and the
+  // browser would otherwise print. In the desktop app the native menu
+  // usually consumes the chord first; this is the fallback for the focus
+  // states where the webview sees it instead — whichever side wins, the
+  // other never fires.
+  const enterPresentationRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "p") {
+        event.preventDefault();
+        event.stopPropagation();
+        enterPresentationRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, []);
+
   // Esc interrupts an agent tour outside presentation mode.
   const presentationActiveForEscRef = useRef(false);
   useEffect(() => {
@@ -155,6 +174,9 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [commands]);
   const presentation = usePresentation(canvas, camera);
+  enterPresentationRef.current = () => {
+    if (!presentation.active) presentation.enter();
+  };
 
   /** Scene point at the middle of the current viewport. */
   const viewportCenter = useCallback(() => {
@@ -765,16 +787,6 @@ export function App() {
           }}
           hideDocentMenuItems={isDesktop}
         />
-        {!presentation.active && (
-          <div className="docent-file-chip" title={fileName ?? "untitled"}>
-            {fileName ?? "untitled"}
-            {dirty && (
-              <span className="docent-dirty" title="Unsaved changes">
-                ●
-              </span>
-            )}
-          </div>
-        )}
         {canvas && (
           <Breadcrumbs
             canvas={canvas}
