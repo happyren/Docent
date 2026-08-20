@@ -128,6 +128,67 @@ fn the_bridge_answers_only_the_webview() {
 }
 
 #[test]
+fn the_stdio_shim_pipes_a_line_through_the_running_app() {
+    let pipe = mcp::spawn().expect("pipe binds");
+    let port = pipe.port();
+
+    // The fake page again: one canned answer for whatever arrives.
+    let page = thread::spawn(move || {
+        for _ in 0..10 {
+            let polled = send(port, "POST", "/bridge/poll", None, Some(WEBVIEW_ORIGIN));
+            if polled.status != 200 {
+                continue;
+            }
+            let queued: serde_json::Value =
+                serde_json::from_str(&polled.body).expect("queued json");
+            let answer = serde_json::json!({
+                "id": queued["id"],
+                "status": 200,
+                "json": r#"{"jsonrpc":"2.0","id":3,"result":{"viaShim":true}}"#,
+                "initialized": false,
+            });
+            send(
+                port,
+                "POST",
+                "/bridge/answer",
+                Some(&answer.to_string()),
+                Some(WEBVIEW_ORIGIN),
+            );
+            return;
+        }
+        panic!("the page never saw the shim's request");
+    });
+
+    let input = b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\"}\n" as &[u8];
+    let mut output = Vec::new();
+    mcp::stdio_shim(input, &mut output, move || vec![port]);
+    page.join().expect("page thread");
+    let printed = String::from_utf8(output).expect("utf8 output");
+    assert!(printed.contains(r#""viaShim":true"#), "{printed}");
+}
+
+#[test]
+fn the_stdio_shim_says_the_app_is_not_running() {
+    // Port 9 (discard) refuses on loopback — the shim must answer the
+    // request with words, not die or go silent.
+    let input =
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n" as &[u8];
+    let mut output = Vec::new();
+    mcp::stdio_shim(input, &mut output, || vec![9]);
+    let printed = String::from_utf8(output).expect("utf8 output");
+    assert!(printed.contains("Docent is not running"), "{printed}");
+    assert!(printed.contains(r#""id":1"#), "{printed}");
+}
+
+#[test]
+fn the_port_file_round_trips() {
+    let dir = std::env::temp_dir().join(format!("docent-portfile-{}", std::process::id()));
+    mcp::record_port_in(&dir, 43110);
+    assert_eq!(mcp::read_port_in(&dir), Some(43110));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn the_mcp_method_gate_matches_the_reference_server() {
     let pipe = mcp::spawn().expect("pipe binds");
     let port = pipe.port();

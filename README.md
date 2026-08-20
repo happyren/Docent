@@ -96,6 +96,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
   - `tour` — run a full narrated sequence of the above
 - The agent surface is **read-only**: camera, overlay, narration, and navigation — the document is never mutated, undo history stays clean.
 - Agents operate purely in **ID-space**. They never address pixels, never touch Excalidraw internals.
+- **The camera follows the narration**: agent highlights, flows, and tour steps frame their own targets whenever those wouldn't read at the current zoom — a walkthrough can't talk about something you can't see.
 
 ### 🗂 Project portfolio
 - One deployment hosts many **projects**; a project holds many **scenes** (work, personal, …).
@@ -289,6 +290,21 @@ clients' https requirement, so one line connects any client:
 ```bash
 claude mcp add --transport http docent http://127.0.0.1:3301/mcp
 ```
+
+Clients whose connector dialog insists on **https** even for loopback — Claude
+Desktop's does — use the stdio mode instead: the Docent binary is its own shim.
+In `claude_desktop_config.json` under `mcpServers`:
+
+```json
+"docent": {
+  "command": "/Applications/Docent.app/Contents/MacOS/docent",
+  "args": ["--agent-stdio"]
+}
+```
+
+(**Help → Agent Endpoint…** prints this stanza with the binary's real path on
+your machine.) The app must be running — the shim forwards to it and says so,
+politely, when it isn't.
 (e.g. `http://localhost:3000/?agent&scene=samples/demo.excalidraw`). The
 last-connected canvas answers the agents. Ask for `get_scene_graph` and start
 touring.

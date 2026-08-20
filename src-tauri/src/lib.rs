@@ -309,13 +309,22 @@ fn item(app: &AppHandle, action: MenuAction) -> tauri::Result<MenuItem<Wry>> {
 /// with a line any client's user can paste.
 fn show_agent_endpoint(app: AppHandle) {
     let message = match app.try_state::<mcp::McpHandle>() {
-        Some(endpoint) => format!(
-            "Any MCP client can drive this Docent — read-only: it can look, \
-             move the camera, and present, never edit.\n\n\
-             Endpoint (streamable HTTP, this machine only):\n{base}/mcp\n\n\
-             Claude Code:\nclaude mcp add --transport http docent {base}/mcp",
-            base = endpoint.base_url(),
-        ),
+        Some(endpoint) => {
+            let exe = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.to_str().map(String::from))
+                .unwrap_or_else(|| "<path to the Docent binary>".to_string());
+            format!(
+                "Any MCP client can drive this Docent — read-only: it can look, \
+                 move the camera, and present, never edit.\n\n\
+                 Endpoint (streamable HTTP, this machine only):\n{base}/mcp\n\n\
+                 Claude Code:\nclaude mcp add --transport http docent {base}/mcp\n\n\
+                 Claude Desktop and other stdio-only clients \
+                 (claude_desktop_config.json → mcpServers):\n\
+                 \"docent\": {{ \"command\": \"{exe}\", \"args\": [\"--agent-stdio\"] }}",
+                base = endpoint.base_url(),
+            )
+        }
         None => "The agent endpoint could not start — see the app's log output.".to_string(),
     };
     let _ = app.run_on_main_thread(move || {
@@ -591,6 +600,9 @@ pub fn run() {
             let mcp_base = match mcp::spawn() {
                 Ok(endpoint) => {
                     let base = endpoint.base_url();
+                    // The `--agent-stdio` shim finds the live port here even
+                    // when the fixed one was taken (D38).
+                    mcp::record_port(endpoint.port());
                     // Held for the process lifetime; dropping it stops it.
                     handle.manage(endpoint);
                     Some(base)

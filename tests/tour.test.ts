@@ -89,6 +89,50 @@ describe("tour (S8/S9, D10)", () => {
     expect(store.get().highlight).toBeNull();
   });
 
+  it("a step that shows without focusing frames what it shows (D37)", async () => {
+    const flyTo = vi.fn().mockResolvedValue(true);
+    // Zoomed far out: the gateway is in view but microscopic, which is
+    // exactly the failure content-aware touring exists to catch.
+    const reader = makeReader();
+    reader.getViewport = () => ({ scrollX: 20000, scrollY: 20000, zoom: 0.01 });
+    const api = new CommandAPI(
+      reader,
+      { flyTo, stop: vi.fn() } as unknown as CameraEngine,
+      new OverlayStore(),
+      { narrate: () => {} },
+    );
+    await api.tour({
+      steps: [{ highlight: ["n_gateway"], narrate: "The edge." }],
+      stepMs: 10,
+    });
+    expect(flyTo).toHaveBeenCalledTimes(1);
+    const gateway = demoSnapshot.elements.find((el) => el.id === "n_gateway")!;
+    const [bounds] = flyTo.mock.calls[0];
+    expect(bounds.x).toBe(gateway.x);
+    expect(bounds.width).toBe(gateway.width);
+  });
+
+  it("targets that already read well stay unframed", async () => {
+    const flyTo = vi.fn().mockResolvedValue(true);
+    const gateway = demoSnapshot.elements.find((el) => el.id === "n_gateway")!;
+    // A viewport sitting right on the gateway with room to spare: framing
+    // again would fight the framing an agent (or user) already chose.
+    const reader = makeReader();
+    reader.getViewport = () => ({
+      scrollX: -(gateway.x - 100),
+      scrollY: -(gateway.y - 100),
+      zoom: 1,
+    });
+    const api = new CommandAPI(
+      reader,
+      { flyTo, stop: vi.fn() } as unknown as CameraEngine,
+      new OverlayStore(),
+      { narrate: () => {} },
+    );
+    await api.frameTargets(["n_gateway"]);
+    expect(flyTo).not.toHaveBeenCalled();
+  });
+
   it("stopTour interrupts and clears immediately", async () => {
     const narrations: (string | null)[] = [];
     const store = new OverlayStore();

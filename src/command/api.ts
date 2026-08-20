@@ -190,6 +190,64 @@ export class CommandAPI {
     await this.camera.flyTo(info.bounds, { padding: params.padding ?? 0.2 });
   }
 
+  /** Union AABB of resolved effect targets; null when nothing resolves. */
+  private targetBounds(graph: SceneGraph, ids: string[]): SceneBounds | null {
+    const sourceIds = this.resolveEffectIds(graph, ids);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    let any = false;
+    for (const id of sourceIds) {
+      const info = this.reader.getElementInfo(id);
+      if (!info) continue;
+      any = true;
+      minX = Math.min(minX, info.bounds.x);
+      minY = Math.min(minY, info.bounds.y);
+      maxX = Math.max(maxX, info.bounds.x + info.bounds.width);
+      maxY = Math.max(maxY, info.bounds.y + info.bounds.height);
+    }
+    return any
+      ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+      : null;
+  }
+
+  /**
+   * Whether these bounds already read well: fully inside the viewport AND
+   * big enough to actually see — at least a tenth of the view in one
+   * dimension. "In view but microscopic" is the failure this catches: a
+   * narration about content the viewer cannot make out.
+   */
+  private readsWell(bounds: SceneBounds): boolean {
+    const vp = this.reader.getViewport();
+    const size = this.reader.getViewportSize();
+    if (size.width === 0 || size.height === 0 || vp.zoom <= 0) return false;
+    const viewX = -vp.scrollX;
+    const viewY = -vp.scrollY;
+    const viewW = size.width / vp.zoom;
+    const viewH = size.height / vp.zoom;
+    const inside =
+      bounds.x >= viewX &&
+      bounds.y >= viewY &&
+      bounds.x + bounds.width <= viewX + viewW &&
+      bounds.y + bounds.height <= viewY + viewH;
+    if (!inside) return false;
+    return Math.max(bounds.width / viewW, bounds.height / viewH) >= 0.1;
+  }
+
+  /**
+   * Frame a set of effect targets unless they already read well (D37): the
+   * camera follows the narrated action, never the other way round. Same id
+   * leniency as the effects themselves; unknown ids stay loud (I5).
+   */
+  async frameTargets(ids: string[], padding = 0.35): Promise<void> {
+    if (!ids.length) return;
+    const graph = this.getSceneGraph();
+    const bounds = this.targetBounds(graph, ids);
+    if (!bounds || this.readsWell(bounds)) return;
+    await this.camera.flyTo(bounds, { padding });
+  }
+
   /** Idempotent highlight; empty ids clears (S6). */
   highlight(params: { ids: string[]; style?: HighlightStyle }): void {
     if (!params.ids.length) {
@@ -277,6 +335,14 @@ export class CommandAPI {
             narration = frame?.narrative ?? null;
           }
           await this.focus({ id: step.focus });
+        } else if (step.highlight?.length || step.flow?.length) {
+          // A step that shows something but names no focus still frames what
+          // it shows (D37) — narrating over content the viewer cannot see is
+          // the one way a tour fails its audience.
+          await this.frameTargets([
+            ...(step.highlight ?? []),
+            ...(step.flow ?? []),
+          ]);
         }
         if (generation !== this.tourGeneration) break;
         if (narration !== null) this.narration.narrate(narration);

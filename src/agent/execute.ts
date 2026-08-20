@@ -143,16 +143,21 @@ export async function execute(
       shell.presentation[action]();
       return { presentation: action };
     }
-    case "highlight":
-      commands.highlight(
-        params as { ids: string[]; style?: HighlightStyle },
-      );
-      return { highlighted: (params as { ids: string[] }).ids };
-    case "flow":
-      await commands.flow(
-        params as { path: string[]; speed?: number; loop?: boolean },
-      );
-      return { pulsed: (params as { path: string[] }).path };
+    case "highlight": {
+      const p = params as { ids: string[]; style?: HighlightStyle };
+      // Content-aware (D37): an agent's highlight frames itself when its
+      // targets do not already read well. The user's own toolbar highlights
+      // never pass through here, so their camera stays theirs.
+      if (p.ids.length) await commands.frameTargets(p.ids);
+      commands.highlight(p);
+      return { highlighted: p.ids };
+    }
+    case "flow": {
+      const p = params as { path: string[]; speed?: number; loop?: boolean };
+      if (p.path.length) await commands.frameTargets(p.path);
+      await commands.flow(p);
+      return { pulsed: p.path };
+    }
     case "narrate":
       commands.narrate(params as { text: string | null });
       return { narrating: true };
