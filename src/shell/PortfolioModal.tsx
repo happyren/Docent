@@ -7,8 +7,10 @@
  *
  * A project may instead be bound to a GitHub repository (S14): the GitHub
  * strip below the scene grid is where that is set up, changed, and undone, and
- * a bound project wears a ⛓ in the list. Everything else about the modal is
- * the same either way — the store makes a bound project look like any other.
+ * a bound project wears a ⛓ in the list — plus a "read-only" tag when the
+ * store's bind-time probe found a token that can read the repository but not
+ * write to it. Everything else about the modal is the same either way — the
+ * store makes a bound project look like any other.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -134,7 +136,7 @@ function GitHubPanel({
         if (pasted.length === 2 && pasted[0] && pasted[1]) {
           [owner, repo] = pasted;
         }
-        await putBinding(project, {
+        const result = await putBinding(project, {
           owner,
           repo,
           path: form.path.trim(),
@@ -142,10 +144,22 @@ function GitHubPanel({
           apiBase: form.apiBase.trim(),
           token: form.token.trim(),
         });
-        setBinding(await getBinding(project));
+        const stored = await getBinding(project);
+        setBinding(stored);
         setOpen(false);
         edit({ token: "" });
         onChanged();
+        // The store asked GitHub what this token may do, so say it now rather
+        // than let the first save be the messenger. A read-only token is the
+        // common accident: fine-grained PATs default to Contents: Read.
+        const target = `${stored?.owner ?? owner}/${stored?.repo ?? repo}`;
+        if (result.canWrite === false) {
+          window.alert(
+            `Connected read-only: scenes will open, but saving will fail. Grant the token "Contents: Read and write" on ${target}, then update the token here.`,
+          );
+        } else if (result.warning) {
+          window.alert(result.warning);
+        }
       } catch (err) {
         window.alert(err instanceof Error ? err.message : String(err));
       } finally {
@@ -255,7 +269,7 @@ function GitHubPanel({
               placeholder={
                 binding?.hasToken
                   ? "leave blank to keep the current token"
-                  : "fine-grained PAT with Contents: read & write"
+                  : "fine-grained PAT with Contents: Read and write"
               }
               value={form.token}
               disabled={busy}
@@ -523,6 +537,19 @@ export function PortfolioModal({
                         title="Scenes live in a GitHub repository"
                       >
                         ⛓
+                      </span>
+                    )}
+                    {/* Only ever shown when the store *knows* the token cannot
+                        write — an unverified binding says nothing here. */}
+                    {p.canWrite === false && (
+                      <span
+                        className="docent-portfolio-readonly"
+                        title={
+                          "The stored token can read this repository but not write to it — " +
+                          'scenes open, saving fails. Grant it "Contents: Read and write".'
+                        }
+                      >
+                        read-only
                       </span>
                     )}
                     <span className="docent-portfolio-meta">

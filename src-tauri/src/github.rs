@@ -34,6 +34,23 @@ pub const TOKEN_ERROR: &str =
 pub const CONFLICT_ERROR: &str =
     "scene changed on GitHub since it was loaded — reload it to get the latest";
 
+/// The other half of a 403: GitHub authenticated the token and refused the
+/// write anyway. A fine-grained PAT defaults to Contents: Read, and an
+/// organization can block writes by policy — either way the scenes list and
+/// open, and only saving fails, so the credential message ("missing or
+/// rejected") reads as nonsense. This one names what to change instead. It
+/// answers writes only; a read that is refused keeps `TOKEN_ERROR`.
+pub fn write_rejected(owner: &str, repo: &str) -> String {
+    format!(
+        "GitHub rejected the write — the token needs Contents: Read and write on {owner}/{repo} (organization repos may also require fine-grained token approval)"
+    )
+}
+
+/// What the bind-time probe says when it could not find out (see `probe_access`).
+fn unverified_access(owner: &str, repo: &str) -> String {
+    format!("could not verify access to {owner}/{repo} — check the repo name and token")
+}
+
 const USER_AGENT: &str = "docent-store";
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// Base64 inflates by a third and GitHub wraps it in JSON, so the ceiling on a
@@ -60,9 +77,18 @@ pub struct Binding {
     pub branch: String,
     #[serde(rename = "apiBase")]
     pub api_base: String,
+    /// What the last bind-time probe learned about writing to this repository.
+    /// Absent means nothing has been learned — a binding written before this
+    /// existed, one stored without a token, or a probe that could not reach
+    /// GitHub — and absent rather than `null` so the dotfile stays byte-equal
+    /// to what the reference store writes for the same binding.
+    #[serde(rename = "canWrite", default, skip_serializing_if = "Option::is_none")]
+    pub can_write: Option<bool>,
 }
 
 /// A binding as the API states it — never with the token, in either direction.
+/// `canWrite` is the probe's verdict, null whenever it is unknown; it is
+/// metadata, not a secret.
 #[derive(serde::Serialize)]
 pub struct PublicBinding<'a> {
     owner: &'a str,
@@ -73,6 +99,8 @@ pub struct PublicBinding<'a> {
     api_base: &'a str,
     #[serde(rename = "hasToken")]
     has_token: bool,
+    #[serde(rename = "canWrite")]
+    can_write: Option<bool>,
 }
 
 impl Binding {
@@ -84,6 +112,7 @@ impl Binding {
             branch: &self.branch,
             api_base: &self.api_base,
             has_token,
+            can_write: self.can_write,
         }
     }
 }
@@ -267,6 +296,8 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
         path,
         branch,
         api_base,
+        // Never taken from the request body: only a probe may set this.
+        can_write: None,
     })
 }
 
@@ -631,6 +662,75 @@ fn failure(status: u16, text: &str) -> Failure {
     Failure::new(502, format!("GitHub API error ({status}){detail}"))
 }
 
+/// The same, for a PUT or a DELETE. GitHub's 403 on a write means "I know who
+/// you are and you may not do that" — which is a different fix from a bad
+/// token, and the only place a user can act on the difference. A 401 still maps
+/// to `TOKEN_ERROR` here, because a credential GitHub refuses outright is
+/// refused for reads too and the read message already says so.
+fn write_failure(binding: &Binding, status: u16, text: &str) -> Failure {
+    if status == 403 && !is_too_large(status, text) {
+        return Failure::new(403, write_rejected(&binding.owner, &binding.repo));
+    }
+    failure(status, text)
+}
+
+/// What a bind-time probe learned: the write bit, and why it is unknown when
+/// it is. `can_write: None` with no warning is "GitHub answered, but said
+/// nothing about permissions"; with one, "GitHub could not be asked".
+pub struct Probe {
+    pub can_write: Option<bool>,
+    pub warning: Option<String>,
+}
+
+impl Probe {
+    /// No token, so nothing was asked and nothing is known.
+    pub fn unknown() -> Self {
+        Self {
+            can_write: None,
+            warning: None,
+        }
+    }
+}
+
+/// Ask GitHub what this token may do with the repository, once, at bind time.
+/// `GET /repos/{owner}/{repo}` answers an authenticated caller with a
+/// `permissions` object — `{ admin, maintain, push, triage, pull }` — and
+/// `push` is the bit that decides whether a save can ever work. Naming a
+/// read-only token here is the whole point: otherwise the user learns it from
+/// a failed save, long after the form is closed.
+///
+/// It never fails. A binding is worth storing even when the probe cannot reach
+/// GitHub, so every unhappy answer is "unknown" plus a warning rather than a
+/// refusal to bind.
+pub fn probe_access(binding: &Binding, token: &str) -> Probe {
+    let unverified = || Probe {
+        can_write: None,
+        warning: Some(unverified_access(&binding.owner, &binding.repo)),
+    };
+    // Unreachable, refused, timed out: the repository may be perfectly fine
+    // and this machine briefly not.
+    let Ok(reply) = request(token, "GET", &repo_url(binding, ""), None, None) else {
+        return unverified();
+    };
+    if reply.status != 200 {
+        return unverified();
+    }
+    // An answer without a permissions object (an unauthenticated read, some
+    // Enterprise versions) says nothing either way — and guessing "writable"
+    // there is exactly the lie this probe exists to stop.
+    let can_write = serde_json::from_str::<serde_json::Value>(&reply.text)
+        .ok()
+        .and_then(|body| {
+            body.get("permissions")
+                .and_then(|permissions| permissions.get("push"))
+                .and_then(|push| push.as_bool())
+        });
+    Probe {
+        can_write,
+        warning: None,
+    }
+}
+
 fn parse_json(text: &str) -> Result<serde_json::Value> {
     serde_json::from_str(text)
         .map_err(|_| Failure::new(502, "GitHub API error (unparseable response)"))
@@ -887,7 +987,7 @@ pub fn save(
         return Err(Failure::new(409, CONFLICT_ERROR));
     }
     if !reply.is_success() {
-        return Err(failure(reply.status, &reply.text));
+        return Err(write_failure(binding, reply.status, &reply.text));
     }
     cache.forget(project);
     let created = parse_json(&reply.text)?;
@@ -919,7 +1019,7 @@ pub fn delete(
         return Err(Failure::new(409, CONFLICT_ERROR));
     }
     if !reply.is_success() {
-        return Err(failure(reply.status, &reply.text));
+        return Err(write_failure(binding, reply.status, &reply.text));
     }
     cache.forget(project);
     Ok(())
@@ -936,6 +1036,7 @@ mod tests {
             path: path.into(),
             branch: "main".into(),
             api_base: "https://api.github.com".into(),
+            can_write: None,
         }
     }
 
@@ -1067,5 +1168,29 @@ mod tests {
         assert_eq!(other.status, 502);
         assert_eq!(other.message, "GitHub API error (500): boom");
         assert_eq!(failure(500, "not json").message, "GitHub API error (500)");
+    }
+
+    #[test]
+    fn a_refused_write_is_a_permission_problem_not_a_credential_one() {
+        let binding = binding("docs/diagrams");
+        let refused = write_failure(
+            &binding,
+            403,
+            "{\"message\":\"Resource not accessible by personal access token\"}",
+        );
+        assert_eq!(refused.status, 403);
+        assert_eq!(
+            refused.message,
+            "GitHub rejected the write — the token needs Contents: Read and write on acme/diagrams (organization repos may also require fine-grained token approval)"
+        );
+        // A credential GitHub refuses outright is refused for reads too, and
+        // that message already says what to do.
+        let rejected = write_failure(&binding, 401, "{\"message\":\"Bad credentials\"}");
+        assert_eq!(rejected.status, 401);
+        assert_eq!(rejected.message, TOKEN_ERROR);
+        // …and a 403 that names a size is not a permission problem either, so
+        // it keeps whatever mapping it had rather than gaining a new claim.
+        let oversize = write_failure(&binding, 403, "{\"message\":\"blob is too large\"}");
+        assert_eq!(oversize.message, TOKEN_ERROR);
     }
 }

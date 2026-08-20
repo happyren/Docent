@@ -518,24 +518,52 @@ fn bound(context: &Context, project: &str) -> Result<Option<(Binding, String)>> 
     Ok(Some((binding, token)))
 }
 
+/// What a stored binding answers with. A struct rather than a `json!` literal
+/// so the key order is the reference store's, which sorts nothing.
+#[derive(serde::Serialize)]
+struct BindingAnswer {
+    ok: bool,
+    #[serde(rename = "canWrite")]
+    can_write: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warning: Option<String>,
+}
+
 fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
     let input: serde_json::Value =
         serde_json::from_str(body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
-    let binding = github::normalize_binding(&input)?;
-    let token = github::normalize_token(&input)?;
+    let mut binding = github::normalize_binding(&input)?;
+    let new_token = github::normalize_token(&input)?;
     // A bound project still owns a local directory: it is where it came from,
     // and where it returns to if the binding is removed.
     fs::create_dir_all(project_dir(&context.data_dir, project)?).map_err(internal)?;
+    // Whatever token this binding will run on — the one just given, or the one
+    // already stored. Without either there is nothing to probe with.
+    let token = new_token
+        .clone()
+        .or_else(|| github::token_for(&context.secrets_file, project));
+    let probe = match &token {
+        Some(token) => github::probe_access(&binding, token),
+        None => github::Probe::unknown(),
+    };
+    binding.can_write = probe.can_write;
     let mut bindings = github::load_bindings(&context.data_dir);
     bindings.insert(project.to_string(), binding);
     github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
-    if let Some(token) = token {
+    if let Some(token) = new_token {
         let mut secrets = github::load_secrets(&context.secrets_file);
         secrets.insert(project.to_string(), token);
         github::save_secrets(&context.secrets_file, &secrets).map_err(internal)?;
     }
     context.cache.forget_all(project);
-    Ok(Reply::ok(r#"{"ok":true}"#))
+    Ok(Reply::ok(
+        serde_json::to_string(&BindingAnswer {
+            ok: true,
+            can_write: probe.can_write,
+            warning: probe.warning,
+        })
+        .map_err(json)?,
+    ))
 }
 
 /// Unbind: metadata and token go, the local directory and GitHub both stay.
@@ -717,6 +745,12 @@ struct ProjectInfo {
     /// byte-identical to what this store answered before bindings existed.
     #[serde(skip_serializing_if = "is_false")]
     bound: bool,
+    /// What the last bind-time probe learned, when it learned anything — the
+    /// modal marks a read-only project from this rather than asking for every
+    /// project's binding, and it is still not a network call because it comes
+    /// off the bindings dotfile.
+    #[serde(rename = "canWrite", skip_serializing_if = "Option::is_none")]
+    can_write: Option<bool>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -747,17 +781,19 @@ fn list_projects(context: &Context) -> Result<Reply> {
         if id.starts_with('.') {
             continue;
         }
-        if bindings.contains_key(&id) {
+        if let Some(binding) = bindings.get(&id) {
             // Deliberately not a network call: the projects listing is the
             // first thing the modal asks for and must never wait on GitHub.
             // The count is whatever this process last saw, and zero until it
             // has seen anything.
             let scenes = context.cache.count(&id);
+            let can_write = binding.can_write;
             projects.push(ProjectInfo {
                 id,
                 scenes,
                 updated_at: None,
                 bound: true,
+                can_write,
             });
             continue;
         }
@@ -778,6 +814,7 @@ fn list_projects(context: &Context) -> Result<Reply> {
             scenes,
             updated_at: updated_at.map(iso8601),
             bound: false,
+            can_write: None,
         });
     }
     sort_by(&mut projects, |project| &project.id);

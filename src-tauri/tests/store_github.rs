@@ -38,6 +38,9 @@ const CONFLICT_MESSAGE: &str =
     "scene changed on GitHub since it was loaded — reload it to get the latest";
 const TOKEN_MESSAGE: &str =
     "GitHub token missing or rejected for this project — set it in the binding";
+const WRITE_MESSAGE: &str = "GitHub rejected the write — the token needs Contents: Read and write on acme/diagrams (organization repos may also require fine-grained token approval)";
+const UNVERIFIED_MESSAGE: &str =
+    "could not verify access to acme/diagrams — check the repo name and token";
 
 // ---------------------------------------------------------------------------
 // the mock GitHub API
@@ -69,6 +72,12 @@ struct Repository {
     seen: Vec<Seen>,
     /// Bumped by every write, so the listing's ETag changes when it should.
     version: u64,
+    /// A token that may read and not write — what a fine-grained PAT is by
+    /// default. Contents GETs answer normally; PUT and DELETE answer GitHub's
+    /// own 403, and the repository probe reports `push: false`.
+    read_only: bool,
+    /// `GET /repos/acme/diagrams` answers 404 — a wrong name, or a private repo.
+    repo_missing: bool,
 }
 
 struct MockGitHub {
@@ -137,6 +146,16 @@ impl MockGitHub {
 
     fn file_count(&self) -> usize {
         self.repo.lock().expect("repository").files.len()
+    }
+
+    /// Make every write answer the way GitHub answers a read-only token.
+    fn set_read_only(&self, read_only: bool) {
+        self.repo.lock().expect("repository").read_only = read_only;
+    }
+
+    /// Make the repository itself unreachable, so the probe learns nothing.
+    fn set_repo_missing(&self, missing: bool) {
+        self.repo.lock().expect("repository").repo_missing = missing;
     }
 
     fn seen(&self) -> Vec<Seen> {
@@ -298,6 +317,28 @@ fn answer(
     }
     let rest: Vec<&str> = segments[3..].iter().map(String::as_str).collect();
 
+    // The repository itself: what the bind-time capability probe asks for. The
+    // permissions object is the shape the REST API answers an authenticated
+    // caller with, `push` being the write bit.
+    if rest.is_empty() && method == "GET" {
+        if repo.repo_missing {
+            return not_found();
+        }
+        return (
+            200,
+            Payload::json(serde_json::json!({
+                "full_name": "acme/diagrams",
+                "permissions": {
+                    "admin": false,
+                    "maintain": false,
+                    "push": !repo.read_only,
+                    "triage": false,
+                    "pull": true,
+                },
+            })),
+        );
+    }
+
     match rest.first() {
         Some(&"commits") if method == "GET" => (
             200,
@@ -382,7 +423,20 @@ fn get_contents(repo: &Repository, repo_path: &str, if_none_match: Option<&str>)
     )
 }
 
+/// GitHub's own words when the token authenticates but may not write.
+fn refused() -> (u16, Payload) {
+    (
+        403,
+        Payload::json(
+            serde_json::json!({ "message": "Resource not accessible by personal access token" }),
+        ),
+    )
+}
+
 fn put_contents(repo: &mut Repository, repo_path: &str, body: &str) -> (u16, Payload) {
+    if repo.read_only {
+        return refused();
+    }
     let payload: serde_json::Value = serde_json::from_str(body).expect("the store sends JSON");
     let sha = payload.get("sha").and_then(|sha| sha.as_str());
     let existing = repo.files.get(repo_path).cloned();
@@ -427,6 +481,9 @@ fn put_contents(repo: &mut Repository, repo_path: &str, body: &str) -> (u16, Pay
 }
 
 fn delete_contents(repo: &mut Repository, repo_path: &str, body: &str) -> (u16, Payload) {
+    if repo.read_only {
+        return refused();
+    }
     let payload: serde_json::Value = serde_json::from_str(body).expect("the store sends JSON");
     let Some(existing) = repo.files.get(repo_path).cloned() else {
         return (
@@ -678,6 +735,8 @@ fn binds_a_project_and_the_token_never_comes_back_out() {
             "branch": "main",
             "apiBase": fixture.github.url,
             "hasToken": true,
+            // The bind-time probe found a token that can write, and says so.
+            "canWrite": true,
         })
     );
     // Not merely absent from the typed shape — absent from the bytes.
@@ -702,6 +761,8 @@ fn keeps_metadata_in_the_dotfile_and_the_token_out_of_the_data_tree() {
             "path": "docs/diagrams",
             "branch": "main",
             "apiBase": fixture.github.url,
+            // The probe's verdict is metadata, not a secret, so it lives here too.
+            "canWrite": true,
         })
     );
 
@@ -755,7 +816,12 @@ fn defaults_the_branch_and_the_api_base() {
         Some(r#"{"owner":"acme","repo":"diagrams"}"#),
     );
     assert_eq!(res.status, 200);
-    assert_eq!(res.json(), serde_json::json!({ "ok": true }));
+    // No token anywhere, so nothing was probed and nothing is claimed — and in
+    // particular no request left the machine for the default API base.
+    assert_eq!(
+        res.json(),
+        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null })
+    );
 
     assert_eq!(
         get(fixture.port(), "/api/projects/defaults/binding").json(),
@@ -766,6 +832,7 @@ fn defaults_the_branch_and_the_api_base() {
             "branch": "main",
             "apiBase": "https://api.github.com",
             "hasToken": false,
+            "canWrite": serde_json::Value::Null,
         })
     );
 }
@@ -1260,6 +1327,197 @@ fn deleting_a_bound_project_unbinds_it_and_leaves_github_alone() {
         before,
         "the repository is untouched"
     );
+}
+
+// ---------------------------------------------------------------------------
+// a token that reads but does not write — the case that used to read as
+// "token missing or rejected" while the scenes were plainly listing
+// ---------------------------------------------------------------------------
+
+/// The bindings dotfile, parsed.
+fn bindings_of(fixture: &Fixture) -> serde_json::Value {
+    serde_json::from_str(
+        &fs::read_to_string(fixture.data_dir().join(".docent").join("bindings.json"))
+            .expect("the bindings dotfile"),
+    )
+    .expect("valid JSON")
+}
+
+#[test]
+fn a_read_only_token_is_named_at_bind_time_and_remembered() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        put(fixture.port(), "/api/projects/readonly", None).status,
+        201
+    );
+    fixture.github.set_read_only(true);
+    let put_binding = fixture.bind("readonly", serde_json::json!({}));
+    assert_eq!(put_binding.status, 200, "{}", put_binding.body);
+    assert_eq!(
+        put_binding.json(),
+        serde_json::json!({ "ok": true, "canWrite": false })
+    );
+
+    // Persisted as metadata (not a secret), echoed by the binding route, and
+    // carried by the projects listing so the modal can mark it without asking.
+    assert_eq!(bindings_of(&fixture)["readonly"]["canWrite"], false);
+    let binding = get(fixture.port(), "/api/projects/readonly/binding").json();
+    assert_eq!(binding["hasToken"], true);
+    assert_eq!(binding["canWrite"], false);
+    let projects = get(fixture.port(), "/api/projects").json();
+    let listed = projects
+        .as_array()
+        .expect("array")
+        .iter()
+        .find(|project| project["id"] == "readonly")
+        .expect("the bound project")
+        .clone();
+    assert_eq!(listed["bound"], true);
+    assert_eq!(listed["canWrite"], false);
+
+    // …and a token that can write clears the mark again, which is the loop the
+    // message asks the user to close.
+    fixture.github.set_read_only(false);
+    let again = fixture.bind("readonly", serde_json::json!({}));
+    assert_eq!(
+        again.json(),
+        serde_json::json!({ "ok": true, "canWrite": true })
+    );
+    assert_eq!(bindings_of(&fixture)["readonly"]["canWrite"], true);
+}
+
+#[test]
+fn a_read_only_token_refuses_a_save_with_the_permission_that_is_missing() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+    fixture
+        .github
+        .put_file("docs/diagrams/checkout.excalidraw", SCENE);
+    fixture.github.set_read_only(true);
+
+    // Overwriting an existing scene…
+    let update = put(
+        fixture.port(),
+        "/api/projects/work/scenes/checkout",
+        Some(OTHER_SCENE),
+    );
+    assert_eq!(update.status, 403, "{}", update.body);
+    assert_eq!(update.json(), serde_json::json!({ "error": WRITE_MESSAGE }));
+
+    // …and creating one, which is what the field report was about.
+    let created = put(
+        fixture.port(),
+        "/api/projects/work/scenes/brand%20new",
+        Some(SCENE),
+    );
+    assert_eq!(created.status, 403, "{}", created.body);
+    assert_eq!(
+        created.json(),
+        serde_json::json!({ "error": WRITE_MESSAGE })
+    );
+    assert!(fixture
+        .github
+        .file("docs/diagrams/brand new.excalidraw")
+        .is_none());
+    // The scene that was there is exactly as it was.
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/checkout.excalidraw")
+            .as_deref(),
+        Some(SCENE)
+    );
+}
+
+#[test]
+fn a_read_only_token_refuses_a_delete_the_same_way() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+    fixture
+        .github
+        .put_file("docs/diagrams/checkout.excalidraw", SCENE);
+    fixture.github.set_read_only(true);
+
+    let res = delete(fixture.port(), "/api/projects/work/scenes/checkout");
+    assert_eq!(res.status, 403, "{}", res.body);
+    assert_eq!(res.json(), serde_json::json!({ "error": WRITE_MESSAGE }));
+    assert!(fixture
+        .github
+        .file("docs/diagrams/checkout.excalidraw")
+        .is_some());
+}
+
+#[test]
+fn a_read_only_token_still_lists_and_opens_scenes() {
+    let fixture = Fixture::new();
+    fixture.bound_project("work");
+    fixture
+        .github
+        .put_file("docs/diagrams/checkout.excalidraw", SCENE);
+    fixture.github.set_read_only(true);
+
+    let listed = get(fixture.port(), "/api/projects/work/scenes");
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    let scenes = listed.json();
+    assert_eq!(scenes.as_array().expect("array").len(), 1);
+    assert_eq!(scenes[0]["name"], "checkout");
+
+    let loaded = get(fixture.port(), "/api/projects/work/scenes/checkout");
+    assert_eq!(loaded.status, 200);
+    assert_eq!(loaded.body, SCENE);
+}
+
+#[test]
+fn an_unreachable_repository_still_binds_and_says_why() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        put(fixture.port(), "/api/projects/unverified", None).status,
+        201
+    );
+    fixture.github.set_repo_missing(true);
+
+    let res = fixture.bind("unverified", serde_json::json!({}));
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({
+            "ok": true,
+            "canWrite": serde_json::Value::Null,
+            "warning": UNVERIFIED_MESSAGE,
+        })
+    );
+    // Unknown is stored as an absent field, never as a claim either way.
+    assert!(bindings_of(&fixture)["unverified"]
+        .get("canWrite")
+        .is_none());
+    assert_eq!(
+        get(fixture.port(), "/api/projects/unverified/binding").json()["canWrite"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
+fn no_token_means_no_probe_at_all() {
+    let fixture = Fixture::new();
+    assert_eq!(
+        put(fixture.port(), "/api/projects/unprobed", None).status,
+        201
+    );
+    let res = fixture.bind(
+        "unprobed",
+        serde_json::json!({ "token": serde_json::Value::Null }),
+    );
+    assert_eq!(res.status, 200, "{}", res.body);
+    assert_eq!(
+        res.json(),
+        serde_json::json!({ "ok": true, "canWrite": serde_json::Value::Null })
+    );
+    // Nothing to ask with, so nothing was asked.
+    assert!(fixture
+        .github
+        .seen()
+        .iter()
+        .all(|entry| entry.url != "/repos/acme/diagrams"));
 }
 
 // ---------------------------------------------------------------------------

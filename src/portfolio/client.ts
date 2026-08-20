@@ -20,6 +20,12 @@ export interface ProjectInfo {
   updatedAt: string | null;
   /** Present only on projects bound to a GitHub repository (S14). */
   bound?: boolean;
+  /**
+   * What the last bind-time probe learned about writing to the bound
+   * repository. Absent means nothing is known — only `false` is worth showing,
+   * and it is the difference between "scenes open" and "scenes save".
+   */
+  canWrite?: boolean;
 }
 
 export interface SceneInfo {
@@ -42,6 +48,23 @@ export interface Binding {
   branch: string;
   apiBase: string;
   hasToken: boolean;
+  /**
+   * Whether the stored token may write to the repository, as the last
+   * bind-time probe found it. Null is "not known" — no token to ask with, or
+   * GitHub could not be reached — and never a reason to hide the binding.
+   */
+  canWrite: boolean | null;
+}
+
+/**
+ * What storing a binding answers: the probe's verdict, and — when it could not
+ * be reached — one line saying so. A read-only token is the case worth
+ * catching: everything reads, nothing saves.
+ */
+export interface BindingResult {
+  ok: boolean;
+  canWrite: boolean | null;
+  warning?: string;
 }
 
 /** What the binding form sends. `token` is write-only: omitted keeps the stored one. */
@@ -123,7 +146,7 @@ export async function getBinding(project: string): Promise<Binding | null> {
 export function putBinding(
   project: string,
   binding: BindingInput,
-): Promise<{ ok: boolean }> {
+): Promise<BindingResult> {
   return request(bindingUrl(project), {
     method: "PUT",
     body: JSON.stringify(binding),

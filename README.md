@@ -105,7 +105,8 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - Every save is a **commit** (`docent: update work/checkout`); opening fetches the current file; deleting a scene commits its removal. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
 - Writes carry the file's SHA, so a scene someone changed on GitHub since you opened it is a **loud conflict**, never a silent overwrite: *"scene changed on GitHub since it was loaded — reload it to get the latest."*
 - Works against **GitHub Enterprise** too: the binding carries its own API base (`https://<host>/api/v3`).
-- Auth is a **fine-grained personal access token** with **Contents: read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
+- Auth is a **fine-grained personal access token** with **Contents: Read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
+- Connecting **checks what the token can do** and says so: a token with read access but no write access binds as **read-only** — the scenes open, and the project wears a `read-only` tag — instead of failing later with a mystery on the first save.
 - Bound projects wear a ⛓ in the portfolio list. Unbound projects behave exactly as they always have; nothing reaches the network for them.
 
 ### 🧱 Architecture shapes out of the box
@@ -376,16 +377,35 @@ and a token. Branch and API base live under **Advanced** — the API base is wha
 makes GitHub Enterprise work (`https://<your-host>/api/v3`).
 
 **The token** is a [fine-grained personal access
-token](https://github.com/settings/personal-access-tokens) scoped to the one
-repository, with exactly one permission:
+token](https://github.com/settings/personal-access-tokens). Create it like
+this — the third step is the one that decides whether saving works:
 
-| Permission | Access |
-|---|---|
-| **Contents** | **Read and write** |
+1. **Generate new token** (fine-grained).
+2. **Repository access** → *Only select repositories* → the diagrams repository.
+3. **Permissions** → *Repository permissions* → **Contents: Read and write**.
+   Nothing else is needed. **Read** alone opens scenes and **cannot save them**
+   — that is the single most common way to end up with a project that browses
+   and never writes.
+4. Generate, copy, paste it into the Token field.
 
-Read-only is enough to open scenes but every save will fail; nothing else is
-needed. A classic PAT with `repo` also works, but grants far more than Docent
-uses.
+| Permission | Access | What it buys |
+|---|---|---|
+| **Contents** | **Read** | listing and opening scenes |
+| **Contents** | **Read and write** | …plus saving, creating and deleting them |
+
+**Organization-owned repositories** may also require the organization to
+approve fine-grained tokens at all (*Organization → Settings → Third-party
+Access → Personal access tokens*); until it does, a correctly scoped token
+still cannot write. Where fine-grained tokens are blocked outright, a **classic
+PAT with the `repo` scope** works too — it grants far more than Docent uses, so
+prefer fine-grained where the organization allows it.
+
+Docent checks this for you: **connecting probes the repository** and, if the
+token can read but not write, says so on the spot — *"Connected read-only:
+scenes will open, but saving will fail"* — and the project keeps a `read-only`
+tag in the list until a token that can write replaces it. A save that GitHub
+refuses says exactly what is missing: *"GitHub rejected the write — the token
+needs Contents: Read and write on `owner/repo`"*.
 
 **Where secrets live.** Binding metadata — owner, repo, path, branch, API base —
 goes in one dotfile at the data root, `data/.docent/bindings.json`, and carries
@@ -410,8 +430,11 @@ volumes:
 ```
 
 No API route ever returns a token — the binding endpoint answers
-`hasToken: true/false` and nothing more. Leave the token field blank when
-editing an existing binding to keep the stored one.
+`hasToken: true/false` and `canWrite: true/false/null` (what the last probe
+found; `null` is "not known"), and nothing more. Leave the token field blank
+when editing an existing binding to keep the stored one — the probe re-runs
+against it either way, so a permission granted on GitHub since is picked up by
+re-saving the binding.
 
 **Disconnecting** removes the binding and its token; the repository is untouched
 and the project's local folder takes over again. **Deleting a bound project**

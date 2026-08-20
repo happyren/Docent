@@ -535,6 +535,18 @@ body {
   opacity: 0.75;
 }
 
+/* Shown beside the ⛓ only when the store knows the token cannot write: the
+   project opens but never saves, and that is worth a standing word. */
+.docent-portfolio-readonly {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: #ffb86b;
+  border: 1px solid rgba(255, 184, 107, 0.4);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
 .docent-portfolio-github {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   padding-top: 10px;

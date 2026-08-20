@@ -42,6 +42,11 @@ const CONFLICT_MESSAGE =
   "scene changed on GitHub since it was loaded — reload it to get the latest";
 const TOKEN_MESSAGE =
   "GitHub token missing or rejected for this project — set it in the binding";
+const WRITE_MESSAGE =
+  "GitHub rejected the write — the token needs Contents: Read and write on acme/diagrams " +
+  "(organization repos may also require fine-grained token approval)";
+const UNVERIFIED_MESSAGE =
+  "could not verify access to acme/diagrams — check the repo name and token";
 
 // ---------------------------------------------------------------------------
 // the mock GitHub API
@@ -67,6 +72,14 @@ class MockGitHub {
   /** Bumped by every write, so the listing's ETag changes when it should. */
   version = 1;
   port = 0;
+  /**
+   * A token that may read and not write — what a fine-grained PAT is by
+   * default. Contents GETs answer normally; PUT and DELETE answer GitHub's own
+   * 403, and the repository probe reports `push: false`.
+   */
+  readOnly = false;
+  /** `GET /repos/acme/diagrams` answers 404 — a wrong name, or a private repo. */
+  repoMissing = false;
 
   constructor() {
     this.server = http.createServer((req, res) => {
@@ -118,6 +131,25 @@ class MockGitHub {
       return [404, { message: "Not Found" }];
     }
     const rest = segments.slice(3);
+    // The repository itself: what the bind-time capability probe asks for. The
+    // permissions object is the shape the REST API answers an authenticated
+    // caller with, `push` being the write bit.
+    if (rest.length === 0 && req.method === "GET") {
+      if (this.repoMissing) return [404, { message: "Not Found" }];
+      return [
+        200,
+        {
+          full_name: "acme/diagrams",
+          permissions: {
+            admin: false,
+            maintain: false,
+            push: !this.readOnly,
+            triage: false,
+            pull: true,
+          },
+        },
+      ];
+    }
     if (rest[0] === "commits" && req.method === "GET") {
       return [200, [{ sha: "c0ffee", commit: { committer: { date: COMMIT_DATE } } }]];
     }
@@ -187,7 +219,13 @@ class MockGitHub {
     return [200, children.sort().map((key) => this.entry(key)), { etag }];
   }
 
+  /** GitHub's own words when the token authenticates but may not write. */
+  private refused(): [number, unknown] {
+    return [403, { message: "Resource not accessible by personal access token" }];
+  }
+
   private put(repoPath: string, body: string): [number, unknown] {
+    if (this.readOnly) return this.refused();
     const payload = JSON.parse(body) as { content: string; sha?: string; message: string };
     const existing = this.files.get(repoPath);
     if (existing !== undefined && payload.sha !== blobSha(existing)) {
@@ -206,6 +244,7 @@ class MockGitHub {
   }
 
   private remove(repoPath: string, body: string): [number, unknown] {
+    if (this.readOnly) return this.refused();
     const payload = JSON.parse(body) as { sha: string };
     const existing = this.files.get(repoPath);
     if (existing === undefined) return [404, { message: "Not Found" }];
@@ -297,7 +336,8 @@ describe("GitHub binding", () => {
 
     const put = await bind("work");
     expect(put.status).toBe(200);
-    expect(await put.json()).toEqual({ ok: true });
+    // The bind-time probe found a token that can write, and says so.
+    expect(await put.json()).toEqual({ ok: true, canWrite: true });
 
     const get = await fetch(`${BASE}/api/projects/work/binding`);
     expect(get.status).toBe(200);
@@ -309,6 +349,7 @@ describe("GitHub binding", () => {
       branch: "main",
       apiBase: github.base,
       hasToken: true,
+      canWrite: true,
     });
     // Not merely absent from the typed shape — absent from the bytes.
     expect(body).not.toContain(TOKEN);
@@ -324,6 +365,8 @@ describe("GitHub binding", () => {
       path: "docs/diagrams",
       branch: "main",
       apiBase: github.base,
+      // The probe's verdict is metadata, not a secret, so it lives here too.
+      canWrite: true,
     });
 
     // Walk the whole data tree: nothing in it may carry the credential.
@@ -357,6 +400,9 @@ describe("GitHub binding", () => {
       body: JSON.stringify({ owner: "acme", repo: "diagrams" }),
     });
     expect(put.status).toBe(200);
+    // No token anywhere, so nothing was probed and nothing is claimed — and in
+    // particular no request left the machine for the default API base.
+    expect(await put.json()).toEqual({ ok: true, canWrite: null });
     const binding = await (await fetch(`${BASE}/api/projects/defaults/binding`)).json();
     expect(binding).toEqual({
       owner: "acme",
@@ -365,6 +411,7 @@ describe("GitHub binding", () => {
       branch: "main",
       apiBase: "https://api.github.com",
       hasToken: false,
+      canWrite: null,
     });
     expect((await fetch(`${BASE}/api/projects/defaults/binding`, { method: "DELETE" })).status)
       .toBe(200);
@@ -651,6 +698,144 @@ describe("bound project scenes", () => {
     const secrets = JSON.parse(await readFile(secretsFile, "utf8")) as Record<string, string>;
     expect(secrets.doomed).toBeUndefined();
     expect(github.files.size, "the repository is untouched").toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// a token that reads but does not write — the case that used to read as
+// "token missing or rejected" while the scenes were plainly listing
+// ---------------------------------------------------------------------------
+
+describe("read-only tokens", () => {
+  /** Run `body` against a repository this token may read and not write. */
+  const readOnly = async (body: () => Promise<void>) => {
+    github.readOnly = true;
+    try {
+      await body();
+    } finally {
+      github.readOnly = false;
+    }
+  };
+
+  const bindingsFile = async () =>
+    JSON.parse(
+      await readFile(path.join(dataDir, ".docent", "bindings.json"), "utf8"),
+    ) as Record<string, { canWrite?: boolean }>;
+
+  it("are named at bind time, and remembered", async () => {
+    await fetch(`${BASE}/api/projects/readonly`, { method: "PUT" });
+    await readOnly(async () => {
+      const put = await bind("readonly");
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({ ok: true, canWrite: false });
+    });
+
+    // Persisted as metadata (not a secret), echoed by the binding route, and
+    // carried by the projects listing so the modal can mark it without asking.
+    expect((await bindingsFile()).readonly.canWrite).toBe(false);
+    const binding = (await (
+      await fetch(`${BASE}/api/projects/readonly/binding`)
+    ).json()) as { hasToken: boolean; canWrite: boolean | null };
+    expect(binding).toMatchObject({ hasToken: true, canWrite: false });
+    const projects = (await (await fetch(`${BASE}/api/projects`)).json()) as {
+      id: string;
+      bound?: boolean;
+      canWrite?: boolean;
+    }[];
+    expect(projects.find((p) => p.id === "readonly")).toMatchObject({
+      bound: true,
+      canWrite: false,
+    });
+    // An unbound project gains no such field.
+    expect(projects.find((p) => p.id === "plain")?.canWrite).toBeUndefined();
+
+    // …and a token that can write clears the mark again, which is the loop the
+    // message asks the user to close.
+    const again = await bind("readonly");
+    expect(await again.json()).toEqual({ ok: true, canWrite: true });
+    expect((await bindingsFile()).readonly.canWrite).toBe(true);
+  });
+
+  it("refuse a save with the permission that is missing, not a credential message", async () => {
+    await readOnly(async () => {
+      // Overwriting an existing scene…
+      const update = await fetch(`${BASE}/api/projects/readonly/scenes/checkout`, {
+        method: "PUT",
+        body: SCENE,
+      });
+      expect(update.status).toBe(403);
+      expect(await update.json()).toEqual({ error: WRITE_MESSAGE });
+
+      // …and creating one, which is what the field report was about.
+      const created = await fetch(`${BASE}/api/projects/readonly/scenes/brand new`, {
+        method: "PUT",
+        body: SCENE,
+      });
+      expect(created.status).toBe(403);
+      expect(await created.json()).toEqual({ error: WRITE_MESSAGE });
+      expect(github.files.has("docs/diagrams/brand new.excalidraw")).toBe(false);
+    });
+  });
+
+  it("refuse a delete the same way, and the scene survives", async () => {
+    await readOnly(async () => {
+      const res = await fetch(`${BASE}/api/projects/readonly/scenes/checkout`, {
+        method: "DELETE",
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: WRITE_MESSAGE });
+    });
+    expect(github.files.has("docs/diagrams/checkout.excalidraw")).toBe(true);
+  });
+
+  it("still list and open scenes — reads are untouched", async () => {
+    await readOnly(async () => {
+      const listed = await fetch(`${BASE}/api/projects/readonly/scenes`);
+      expect(listed.status).toBe(200);
+      expect(((await listed.json()) as { name: string }[]).map((s) => s.name)).toEqual([
+        "big",
+        "checkout",
+      ]);
+
+      const loaded = await fetch(`${BASE}/api/projects/readonly/scenes/checkout`);
+      expect(loaded.status).toBe(200);
+      expect(await loaded.text()).toBe(OTHER_SCENE);
+    });
+  });
+
+  it("bind anyway when the repository cannot be reached, and say why", async () => {
+    github.repoMissing = true;
+    try {
+      await fetch(`${BASE}/api/projects/unverified`, { method: "PUT" });
+      const put = await bind("unverified");
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({
+        ok: true,
+        canWrite: null,
+        warning: UNVERIFIED_MESSAGE,
+      });
+    } finally {
+      github.repoMissing = false;
+    }
+    // Unknown is stored as an absent field, never as a claim either way.
+    expect("canWrite" in (await bindingsFile()).unverified).toBe(false);
+    const binding = (await (
+      await fetch(`${BASE}/api/projects/unverified/binding`)
+    ).json()) as { canWrite: boolean | null };
+    expect(binding.canWrite).toBeNull();
+    await fetch(`${BASE}/api/projects/unverified`, { method: "DELETE" });
+  });
+
+  it("are not probed for at all when there is no token", async () => {
+    const probes = () =>
+      github.seen.filter((entry) => entry.url === "/repos/acme/diagrams").length;
+    const before = probes();
+    await fetch(`${BASE}/api/projects/unprobed`, { method: "PUT" });
+    const put = await bind("unprobed", { token: undefined });
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ ok: true, canWrite: null });
+    expect(probes(), "nothing to ask with, so nothing was asked").toBe(before);
+    await fetch(`${BASE}/api/projects/unprobed`, { method: "DELETE" });
   });
 });
 

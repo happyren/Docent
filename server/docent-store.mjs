@@ -21,11 +21,11 @@
  *
  * API (JSON in/out; errors are { error } with a 4xx/5xx status):
  *   GET    /api/health                          → { ok: true }
- *   GET    /api/projects                        → [{ id, scenes, updatedAt, bound? }]
+ *   GET    /api/projects                        → [{ id, scenes, updatedAt, bound?, canWrite? }]
  *   PUT    /api/projects/:project               → { id }            (create)
  *   DELETE /api/projects/:project               → { ok }            (recursive)
- *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, apiBase, hasToken }
- *   PUT    /api/projects/:project/binding       → { ok }            (token write-only)
+ *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, apiBase, hasToken, canWrite }
+ *   PUT    /api/projects/:project/binding       → { ok, canWrite, warning? }  (token write-only)
  *   DELETE /api/projects/:project/binding       → { ok }            (local dir stays)
  *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size, sha? }]
  *   GET    /api/projects/:project/scenes/:name  → scene JSON        (+ X-Docent-Scene-Sha when bound)
@@ -96,6 +96,21 @@ const TOKEN_ERROR =
 const CONFLICT_ERROR =
   "scene changed on GitHub since it was loaded — reload it to get the latest";
 
+/**
+ * The other half of a 403: GitHub authenticated the token and refused the
+ * write anyway. A fine-grained PAT defaults to Contents: Read, and an
+ * organization can block writes by policy — either way the scenes list and
+ * open, and only saving fails, so the credential message ("missing or
+ * rejected") reads as nonsense. This one names what to change instead. It
+ * answers writes only; a read that is refused keeps TOKEN_ERROR.
+ */
+const writeRejected = (binding) =>
+  `GitHub rejected the write — the token needs Contents: Read and write on ${binding.owner}/${binding.repo} (organization repos may also require fine-grained token approval)`;
+
+/** What the bind-time probe says when it could not find out (see probeAccess). */
+const unverifiedAccess = (binding) =>
+  `could not verify access to ${binding.owner}/${binding.repo} — check the repo name and token`;
+
 const USER_AGENT = "docent-store";
 const GITHUB_TIMEOUT_MS = 30_000;
 
@@ -153,7 +168,12 @@ async function tokenFor(project) {
   return typeof token === "string" && token !== "" ? token : null;
 }
 
-/** A binding as the API states it — never with the token, in either direction. */
+/**
+ * A binding as the API states it — never with the token, in either direction.
+ * `canWrite` is what the last bind-time probe learned, and null whenever
+ * nothing has been learned: an older binding, one stored without a token, or a
+ * probe that could not reach GitHub. It is metadata, not a secret.
+ */
 const publicBinding = (binding, hasToken) => ({
   owner: binding.owner,
   repo: binding.repo,
@@ -161,6 +181,7 @@ const publicBinding = (binding, hasToken) => ({
   branch: binding.branch,
   apiBase: binding.apiBase,
   hasToken,
+  canWrite: typeof binding.canWrite === "boolean" ? binding.canWrite : null,
 });
 
 const bad = (message) => new HttpError(400, message);
@@ -237,21 +258,33 @@ async function putBinding(project, body) {
     throw new HttpError(400, "body is not JSON");
   }
   const binding = normalizeBinding(input);
-  const token = normalizeToken(input.token);
+  const newToken = normalizeToken(input.token);
   // A bound project still owns a local directory: it is where it came from,
   // and where it returns to if the binding is removed.
   await fs.mkdir(projectDir(project), { recursive: true });
+  // Whatever token this binding will run on — the one just given, or the one
+  // already stored. Without either there is nothing to probe with.
+  const token = newToken ?? (await tokenFor(project));
+  const probe = token === null ? { canWrite: null } : await probeAccess(binding, token);
   const bindings = await readBindings();
-  bindings[project] = binding;
+  // Unknown is stored as an absent field rather than an explicit null, so a
+  // binding written before this existed and one written now are the same
+  // bytes — and so both stores keep writing the same file.
+  bindings[project] =
+    probe.canWrite === null ? binding : { ...binding, canWrite: probe.canWrite };
   await writeJsonFile(BINDINGS_FILE, bindings);
-  if (token !== null) {
+  if (newToken !== null) {
     const secrets = await readSecrets();
-    secrets[project] = token;
+    secrets[project] = newToken;
     await writeJsonFile(SECRETS_FILE, secrets, 0o600);
   }
   listingCache.delete(project);
   boundCounts.delete(project);
-  return { ok: true };
+  return {
+    ok: true,
+    canWrite: probe.canWrite,
+    ...(probe.warning ? { warning: probe.warning } : {}),
+  };
 }
 
 /** Unbind: metadata and token go, the local directory and GitHub both stay. */
@@ -325,6 +358,57 @@ function githubFailure(status, text) {
     // relaying — the status is the whole message.
   }
   return new HttpError(502, `GitHub API error (${status})${detail}`);
+}
+
+/**
+ * The same, for a PUT or a DELETE. GitHub's 403 on a write means "I know who
+ * you are and you may not do that" — which is a different fix from a bad
+ * token, and the only place a user can act on the difference. A 401 still maps
+ * to TOKEN_ERROR here, because a credential GitHub refuses outright is refused
+ * for reads too and the read message already says so.
+ */
+function githubWriteFailure(binding, status, text) {
+  if (status === 403 && !isTooLarge(status, text)) {
+    return new HttpError(403, writeRejected(binding));
+  }
+  return githubFailure(status, text);
+}
+
+/**
+ * Ask GitHub what this token may do with the repository, once, at bind time.
+ * `GET /repos/{owner}/{repo}` answers an authenticated caller with a
+ * `permissions` object — `{ admin, maintain, push, triage, pull }` — and `push`
+ * is the bit that decides whether a save can ever work. Naming a read-only
+ * token here is the whole point: otherwise the user learns it from a failed
+ * save, long after the form is closed.
+ *
+ * It never throws. A binding is worth storing even when the probe cannot
+ * reach GitHub, so every unhappy answer is reported as "unknown" plus a
+ * warning rather than as a refusal to bind.
+ */
+async function probeAccess(binding, token) {
+  const unverified = { canWrite: null, warning: unverifiedAccess(binding) };
+  let res;
+  try {
+    res = await github(token, "GET", repoUrl(binding, ""));
+  } catch {
+    // Unreachable, refused, timed out: the repository may be perfectly fine
+    // and this machine briefly not.
+    return unverified;
+  }
+  if (res.status !== 200) return unverified;
+  let permissions;
+  try {
+    permissions = JSON.parse(res.text)?.permissions;
+  } catch {
+    return { canWrite: null };
+  }
+  // An answer without a permissions object (an unauthenticated read, some
+  // Enterprise versions) says nothing either way — and guessing "writable"
+  // there is exactly the lie this probe exists to stop.
+  return {
+    canWrite: typeof permissions?.push === "boolean" ? permissions.push : null,
+  };
 }
 
 const parseJson = (text) => {
@@ -488,7 +572,9 @@ async function githubSave(project, binding, token, scene, body, headerSha) {
   // or names a file that is no longer there. Both mean the same thing to a
   // user: someone else moved first.
   if (res.status === 409 || res.status === 422) throw new HttpError(409, CONFLICT_ERROR);
-  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
+  if (res.status < 200 || res.status >= 300) {
+    throw githubWriteFailure(binding, res.status, res.text);
+  }
   listingCache.delete(project);
   const created = parseJson(res.text);
   const newSha = created?.content?.sha;
@@ -506,7 +592,9 @@ async function githubDelete(project, binding, token, scene) {
     }),
   });
   if (res.status === 409 || res.status === 422) throw new HttpError(409, CONFLICT_ERROR);
-  if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
+  if (res.status < 200 || res.status >= 300) {
+    throw githubWriteFailure(binding, res.status, res.text);
+  }
   listingCache.delete(project);
   return { ok: true };
 }
@@ -540,11 +628,16 @@ async function listProjects() {
       // thing the modal asks for and must never wait on GitHub. The count is
       // whatever this process last saw, and zero until it has seen anything.
       const cached = boundCounts.get(entry.name) ?? 0;
+      // What the last probe learned travels with the listing so the modal can
+      // mark a read-only project without a request per project — and it is
+      // still not a network call, because it comes off the bindings dotfile.
+      const canWrite = bindings[entry.name].canWrite;
       projects.push({
         id: entry.name,
         scenes: cached,
         updatedAt: null,
         bound: true,
+        ...(typeof canWrite === "boolean" ? { canWrite } : {}),
       });
       continue;
     }
