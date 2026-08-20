@@ -836,3 +836,44 @@ body {
   width: 12px;
   text-align: center;
 }
+
+/* Intent panel saving state (D40) and the logic field (D42). */
+.docent-intent-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid #2f2f36;
+}
+
+.docent-intent-status {
+  font-size: 12px;
+  color: var(--docent-muted);
+}
+
+.docent-intent-unsaved {
+  color: var(--docent-accent);
+}
+
+.docent-intent-save {
+  background: #4a3b78;
+  color: var(--docent-fg);
+  border: 1px solid #5d4b96;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.docent-intent-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.docent-logic {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre;
+  resize: vertical;
+}

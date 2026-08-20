@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SceneBounds, Viewport } from "../adapter";
 import type { SceneReader } from "../command/api";
-import type { DetailBadge } from "../scene/detailBadges";
+import type { DetailBadge, LogicMark } from "../scene/detailBadges";
 import { edgePath, shapePath } from "./geometry";
 import type { OverlayState, OverlayStore } from "./state";
 
@@ -66,6 +66,74 @@ function targetPath(reader: SceneReader, id: string, pad: number): TargetPath | 
   };
 }
 
+/**
+ * One effect per target (D39): a target of one member keeps its own shape
+ * path; a composite or group — many members — becomes one rounded box over
+ * the union of its members. One glow path instead of one per stroke, and a
+ * hole the fill rule can reason about.
+ */
+function compositeTargetPath(
+  reader: SceneReader,
+  members: string[],
+  pad: number,
+): TargetPath | null {
+  if (members.length === 1) return targetPath(reader, members[0], pad);
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const id of members) {
+    const info = reader.getElementInfo(id);
+    if (!info) continue;
+    minX = Math.min(minX, info.bounds.x);
+    minY = Math.min(minY, info.bounds.y);
+    maxX = Math.max(maxX, info.bounds.x + info.bounds.width);
+    maxY = Math.max(maxY, info.bounds.y + info.bounds.height);
+  }
+  if (!Number.isFinite(minX)) return null;
+  const bounds = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  return {
+    id: members.join("+"),
+    d: shapePath("rectangle", bounds, pad),
+    isEdge: false,
+    bounds,
+    angle: 0,
+  };
+}
+
+/** Axis-aligned boxes that overlap merge into their enclosing box, until none do. */
+export function mergeOverlapping(boxes: SceneBounds[]): SceneBounds[] {
+  const out = boxes.map((b) => ({ ...b }));
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer: for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const a = out[i];
+        const b = out[j];
+        const overlaps =
+          a.x < b.x + b.width &&
+          b.x < a.x + a.width &&
+          a.y < b.y + b.height &&
+          b.y < a.y + a.height;
+        if (!overlaps) continue;
+        const x = Math.min(a.x, b.x);
+        const y = Math.min(a.y, b.y);
+        out[i] = {
+          x,
+          y,
+          width: Math.max(a.x + a.width, b.x + b.width) - x,
+          height: Math.max(a.y + a.height, b.y + b.height) - y,
+        };
+        out.splice(j, 1);
+        merged = true;
+        break outer;
+      }
+    }
+  }
+  return out;
+}
+
 /** Union of target bounds + margin — the blur filters' working region. */
 function filterRegion(targets: TargetPath[]): SceneBounds {
   if (!targets.length) return { x: 0, y: 0, width: 1, height: 1 };
@@ -92,15 +160,38 @@ function filterRegion(targets: TargetPath[]): SceneBounds {
  * fill-rule evenodd. Rotated shapes and edges use padded bounds boxes —
  * a hole must be a fill, not a stroke.
  */
-function spotlightHoles(targets: TargetPath[]): string {
-  return targets
-    .map((t) => {
-      if (t.isEdge || t.angle !== 0) {
-        const p = 14;
-        const { x, y, width, height } = t.bounds;
-        return `M${x - p} ${y - p} h${width + 2 * p} v${height + 2 * p} h${-(width + 2 * p)} Z`;
+export function spotlightHoles(targets: TargetPath[]): string {
+  // Under evenodd, holes that overlap cancel each other back to dark (D39).
+  // So: every target's hole is tested as a box; boxes that touch merge into
+  // one enclosing hole, and only a lone, unrotated, single-shape target
+  // keeps its true outline.
+  const p = 14;
+  const boxOf = (t: TargetPath): SceneBounds => ({
+    x: t.bounds.x - p,
+    y: t.bounds.y - p,
+    width: t.bounds.width + 2 * p,
+    height: t.bounds.height + 2 * p,
+  });
+  const boxes = targets.map(boxOf);
+  const clusters = mergeOverlapping(boxes);
+  return clusters
+    .map((box) => {
+      // Which targets landed in this cluster? One plain shape alone keeps
+      // its path; anything merged or boxy is the cluster's rectangle.
+      const inside = targets.filter((_t, i) => {
+        const b = boxes[i];
+        return (
+          b.x >= box.x &&
+          b.y >= box.y &&
+          b.x + b.width <= box.x + box.width &&
+          b.y + b.height <= box.y + box.height
+        );
+      });
+      const lone = inside.length === 1 ? inside[0] : null;
+      if (lone && !lone.isEdge && lone.angle === 0 && !lone.id.includes("+")) {
+        return lone.d;
       }
-      return t.d;
+      return `M${box.x} ${box.y} h${box.width} v${box.height} h${-box.width} Z`;
     })
     .join(" ");
 }
@@ -122,6 +213,7 @@ export function OverlayLayer({
   revision,
   badges = [],
   onBadgeClick,
+  logicMarks = [],
 }: {
   reader: SceneReader;
   store: OverlayStore;
@@ -133,6 +225,8 @@ export function OverlayLayer({
    */
   badges?: DetailBadge[];
   onBadgeClick?: (diveElementId: string) => void;
+  /** `{ }` marks on components that carry logic (D42) — passive chips. */
+  logicMarks?: LogicMark[];
 }) {
   const [overlay, setOverlay] = useState<OverlayState>(() => store.get());
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -186,8 +280,9 @@ export function OverlayLayer({
     return reader.onViewportChange(apply);
   }, [reader, overlay, revision]);
 
-  const highlightTargets: TargetPath[] = (overlay.highlight?.ids ?? [])
-    .map((id) => targetPath(reader, id, overlay.highlight?.style === "outline" ? 6 : 4))
+  const highlightPad = overlay.highlight?.style === "outline" ? 6 : 4;
+  const highlightTargets: TargetPath[] = (overlay.highlight?.targets ?? [])
+    .map((members) => compositeTargetPath(reader, members, highlightPad))
     .filter((t): t is TargetPath => t !== null);
 
   const flowTargets: TargetPath[] = (overlay.flow?.path ?? [])
@@ -422,6 +517,30 @@ export function OverlayLayer({
                     strokeWidth={s * 0.08}
                   />
                 </g>
+              </g>
+            );
+          })}
+          {logicMarks.map((m) => {
+            const s = m.size;
+            return (
+              <g
+                key={`logic:${m.id}`}
+                className="docent-logic-mark"
+                transform={`translate(${m.bounds.x + m.bounds.width - s / 2} ${m.bounds.y + m.bounds.height - s / 2})`}
+              >
+                <title>{`logic: ${m.preview}`}</title>
+                <rect width={s} height={s} rx={s * 0.27} fill="#1d9e75" opacity={0.9} />
+                <text
+                  x={s / 2}
+                  y={s * 0.72}
+                  textAnchor="middle"
+                  fontSize={s * 0.62}
+                  fontFamily="ui-monospace, Menlo, monospace"
+                  fontWeight="700"
+                  fill="#ffffff"
+                >
+                  {"{}"}
+                </text>
               </g>
             );
           })}

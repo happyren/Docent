@@ -30,6 +30,8 @@ function makeReader(): SceneReader {
         detailFrameId: null,
             tags: [],
             note: null,
+            intents: [],
+            logic: null,
             narrative: null,
             order: null,
             style: {
@@ -108,8 +110,40 @@ describe("tour (S8/S9, D10)", () => {
     expect(flyTo).toHaveBeenCalledTimes(1);
     const gateway = demoSnapshot.elements.find((el) => el.id === "n_gateway")!;
     const [bounds] = flyTo.mock.calls[0];
-    expect(bounds.x).toBe(gateway.x);
-    expect(bounds.width).toBe(gateway.width);
+    // Framed around the gateway, grown to the zoom ceiling (D44): the
+    // subject takes at most 40% of the framed box in either dimension.
+    expect(bounds.x).toBeLessThanOrEqual(gateway.x);
+    expect(bounds.x + bounds.width).toBeGreaterThanOrEqual(gateway.x + gateway.width);
+    expect(bounds.width).toBeCloseTo(gateway.width / 0.4, 5);
+  });
+
+  it("focus frames a component with its neighbourhood, under the ceiling (D44)", async () => {
+    const flyTo = vi.fn().mockResolvedValue(true);
+    const api = new CommandAPI(
+      makeReader(),
+      { flyTo, stop: vi.fn() } as unknown as CameraEngine,
+      new OverlayStore(),
+      { narrate: () => {} },
+    );
+    const el = (id: string) => demoSnapshot.elements.find((e) => e.id === id)!;
+    const gateway = el("n_gateway");
+    await api.focus({ id: "n_gateway" });
+    const [bounds] = flyTo.mock.calls[0];
+    // The gateway's edge-connected neighbours ride along…
+    for (const id of ["n_client", "n_auth"]) {
+      const n = el(id);
+      expect(bounds.x).toBeLessThanOrEqual(n.x);
+      expect(bounds.x + bounds.width).toBeGreaterThanOrEqual(n.x + n.width);
+    }
+    // …and the gateway itself never exceeds 40% of the framed box.
+    expect(gateway.width / bounds.width).toBeLessThanOrEqual(0.4 + 1e-9);
+    expect(gateway.height / bounds.height).toBeLessThanOrEqual(0.4 + 1e-9);
+
+    // context: "self" drops the neighbours but keeps the ceiling.
+    await api.focus({ id: "n_gateway", context: "self" });
+    const [alone] = flyTo.mock.calls[1];
+    expect(alone.width).toBeCloseTo(gateway.width / 0.4, 5);
+    expect(alone.width).toBeLessThan(bounds.width);
   });
 
   it("targets that already read well stay unframed", async () => {

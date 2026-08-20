@@ -7,6 +7,7 @@ export interface McpTool {
 }
 
 export const SERVER_INFO: { name: string; version: string };
+export const INSTRUCTIONS: string;
 export const TOOLS: McpTool[];
 
 export type CallTool = (

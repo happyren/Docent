@@ -58,3 +58,27 @@ export function detailBadges(snapshot: SceneSnapshot): DetailBadge[] {
   }
   return badges;
 }
+
+/** A `{ }` mark for every component that carries logic (D42). */
+export interface LogicMark {
+  id: string;
+  bounds: DetailBadge["bounds"];
+  size: number;
+  /** The first line, for the tooltip. */
+  preview: string;
+}
+
+export function logicMarks(snapshot: SceneSnapshot): LogicMark[] {
+  const graph = buildSceneGraph(snapshot);
+  return graph.nodes
+    .filter((node) => node.logic !== null)
+    .map((node) => ({
+      id: node.id,
+      bounds: node.bounds,
+      size: Math.min(
+        BADGE_SIZE,
+        Math.max(BADGE_MIN, Math.min(node.bounds.width, node.bounds.height) * 0.4),
+      ),
+      preview: (node.logic ?? "").split("\n")[0].slice(0, 60),
+    }));
+}

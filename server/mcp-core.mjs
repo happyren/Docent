@@ -14,14 +14,55 @@
  * drive everything else.
  */
 
-export const SERVER_INFO = { name: "docent", version: "1.0.0" };
+export const SERVER_INFO = { name: "docent", version: "1.1.0" };
+
+/**
+ * Handed to every client at initialize (D45): how a Docent diagram is meant
+ * to be read. Diagrams are tiered — a Layer 1 of frames, with components
+ * that declare detail layers beneath — and the honest way to read one is the
+ * way it is built: outline first, one tier at a time, diving where the
+ * question leads.
+ */
+export const INSTRUCTIONS = [
+  "Docent diagrams are TIERED: Layer 1 is a set of frames; components marked `detail` open a deeper layer (a frame) drawing their inner mechanism, and so on without bound.",
+  "Read progressively, never as one wall: call get_outline first (tiers, frames, what goes deeper), then read_frame on the one frame the question is about, dive into a component to go a tier down and climb to come back, and get_view to know where the camera is.",
+  "When the user asks about one part of the diagram, call find({query}) — it matches labels, tags, intents, notes, logic, narratives, and legend meanings across every tier and returns each hit with its tier trail, so the relevant layer is one dive away.",
+  "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
+  "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
+].join("\n");
 
 export const TOOLS = [
   {
     name: "get_scene_graph",
     description:
-      "Read the diagram as a semantic graph: nodes, edges, frames, groups, and the declared legend. Every entity has a stable `id` — all other tools address the scene through these ids. Nodes carry label/shape/frame/tags/note/detail (detail = the frame drawing that node's inner mechanism — `dive` goes there); edges carry from/to plus fromProvenance/toProvenance ('explicit' = drawn binding, 'inferred' = proximity guess) and, when declared, toRefined/fromRefined — the inner component of the endpoint's detail diagram the edge actually lands on or departs from; frames carry name/order/narrative (the author's own words — prefer them when narrating).\nExample: get_scene_graph() → {nodes:[{id:'n_gateway',label:'API Gateway',...}], edges:[{id:'e_req',from:'n_client',to:'n_gateway',toRefined:'n_router'}], frames:[{id:'f_ingress',name:'01 Ingress',narrative:'…'}]}",
+      "Read the whole diagram as its semantic graph — the legend-APPLIED view, not raw styling: nodes, edges, frames, groups, and the legend record, with stable `id`s every other tool addresses. Each node/edge carries what the author meant: `kind` and mapped properties (from the legend), `tags`, `note` and `intents` (declared statements, in order), `logic` (pseudocode/rules), `detail` (the frame drawing that node's inner mechanism — `dive` goes there), `toRefined`/`fromRefined` on edges (the inner component the edge lands on / departs from), and a `provenance` map per entity ('declared' = the author's words, 'inferred' = a heuristic; anything unlisted is read straight off the drawing). Frames carry `name`, `order`, and `narrative`. Diagrams are tiered: on a large one (more than 150 components) this answers with the outline and the progressive path instead — use get_outline / read_frame / find, or pass force: true.\nExample: get_scene_graph() → {provenanceDefault:'explicit', nodes:[{id:'n_gateway',label:'API Gateway',kind:'service',intents:['rate-limits at the edge'],provenance:{kind:'declared',intents:'declared'}}], edges:[{id:'e_req',from:'n_client',to:'n_gateway'}], frames:[{id:'f_ingress',name:'01 Ingress',narrative:'…'}]}",
+    inputSchema: {
+      type: "object",
+      properties: {
+        force: {
+          type: "boolean",
+          description: "Return the full graph even on a large diagram (default false)",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_outline",
+    description:
+      "The diagram's table of contents — read this FIRST. Tiers, every frame with its tier, name, narrative opener, component count, and which of its components go deeper (declare a detail layer), plus the totals. Cheap on any size of diagram; it is how you decide which frame to read_frame next and where to dive.\nExample: get_outline() → {tiers:2, components:41, frames:[{id:'f_core',name:'02 Core Services',tier:1,components:4,deeper:[{id:'n_orders',label:'Orders'}]},{id:'f_orders_internals',name:'Orders — internals',tier:2,via:{id:'n_orders',label:'Orders'},parent:'f_core',components:3}]}",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "find",
+    description:
+      "Locate the part of the diagram a question is about: case-insensitive keyword match across labels, tags, intents, notes, logic, frame names and narratives, and legend meanings, over EVERY tier. Hits come ranked (label and intents weigh most) with their `trail` — the tier path from Layer 1 down to the frame the hit lives in — so the right layer is one dive away; an empty trail means Layer 1.\nExample: find({query:'retry'}) → {hits:[{id:'n_retry_queue',type:'node',label:'Retry queue',frame:'f_orders_internals',trail:[{id:'f_orders_internals',name:'Orders — internals'}],matched:['label','logic']}]}",
+    inputSchema: {
+      type: "object",
+      properties: { query: { type: "string", description: "One or more keywords" } },
+      required: ["query"],
+      additionalProperties: false,
+    },
   },
   {
     name: "get_mermaid",
@@ -69,14 +110,19 @@ export const TOOLS = [
   {
     name: "focus",
     description:
-      "Glide the camera to an element's or frame's bounds with an eased tween — this is how you pan and zoom: focus a frame to see a whole tier, focus a node to move close, raise `padding` to pull back wider. Ids only, never pixels. Unknown ids return an error — never a silent no-op.\nExample: focus({id:'f_ingress'}) — fly to the ingress frame; focus({id:'n_db', padding:0.6}) — the database with plenty of context around it.",
+      "Glide the camera to a component, edge, or frame — this is how you pan and zoom, in ids only, never pixels. A component is framed WITH its neighbourhood (the components its edges connect it to on that tier) and never fills the view: a zoom ceiling keeps it under 40% of the frame, so the context that gives it meaning stays visible. context:'self' frames the component alone (still under the ceiling); focus a frame to see a whole tier; raise `padding` to pull back wider. Unknown ids return an error — never a silent no-op.\nExample: focus({id:'n_gateway'}) — the gateway with its client and auth neighbours in view; focus({id:'f_ingress'}) — the whole ingress frame.",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "Graph id of a node, edge, or frame" },
         padding: {
           type: "number",
-          description: "Fractional padding around the target (default 0.2; larger = zoomed further out)",
+          description: "Fractional padding around the framed box (default 0.2; larger = wider)",
+        },
+        context: {
+          type: "string",
+          enum: ["neighbors", "self"],
+          description: "For a component: frame it with its edge-connected neighbours (default) or alone",
         },
       },
       required: ["id"],
@@ -215,6 +261,7 @@ export async function dispatch(message, callTool) {
         protocolVersion: params?.protocolVersion ?? "2025-06-18",
         capabilities: { tools: {} },
         serverInfo: SERVER_INFO,
+        instructions: INSTRUCTIONS,
       });
     case "notifications/initialized":
     case "notifications/cancelled":

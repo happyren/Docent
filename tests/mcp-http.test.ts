@@ -74,9 +74,11 @@ describe("mcp streamable http", () => {
       "clear_effects",
       "climb",
       "dive",
+      "find",
       "flow",
       "focus",
       "get_mermaid",
+      "get_outline",
       "get_scene_graph",
       "get_view",
       "highlight",
@@ -172,15 +174,18 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 1,
       method: "initialize",
       params: { protocolVersion: "2025-06-18" },
-    })) as { result: { serverInfo: { name: string } } };
+    })) as { result: { serverInfo: { name: string }; instructions: string } };
     expect(init.result.serverInfo.name).toBe("docent");
+    // D45: every client is told the diagram is tiered and how to read it.
+    expect(init.result.instructions).toMatch(/TIERED/);
+    expect(init.result.instructions).toMatch(/get_outline/);
 
     const tools = (await send(proxy, {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(15);
+    expect(tools.result.tools).toHaveLength(17);
   });
 
   it("relays tool calls, including their errors", async () => {

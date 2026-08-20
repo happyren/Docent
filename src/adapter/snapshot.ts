@@ -35,7 +35,16 @@ export interface LegendRule {
 export interface DocentElementData {
   detailFrameId: string | null;
   tags: string[];
+  /**
+   * The first declared intent — kept as its own field because a single
+   * intent is stored as `note` (D41), which is what every file before A8
+   * wrote and what every reader before A8 understands.
+   */
   note: string | null;
+  /** Every declared intent, in order; `note` is always `intents[0]`. */
+  intents: string[];
+  /** Free-form pseudocode or rules for what this element does (D42). */
+  logic: string | null;
   narrative: string | null;
   order: number | null;
   /** Present only on the legend carrier element. */
@@ -150,6 +159,8 @@ function parseDocent(customData: unknown): DocentElementData {
     detailFrameId: null,
     tags: [],
     note: null,
+    intents: [],
+    logic: null,
     narrative: null,
     order: null,
     legend: null,
@@ -174,12 +185,21 @@ function parseDocent(customData: unknown): DocentElementData {
   const refine = refineRaw
     ? { to: asString(refineRaw.to), from: asString(refineRaw.from) }
     : null;
+  // Intents (D41): the `intents` list when written, else the lone `note`
+  // as a one-item list. `note` stays the first intent either way.
+  const listed = Array.isArray(d.intents)
+    ? d.intents.filter((t): t is string => typeof t === "string" && t.trim() !== "")
+    : [];
+  const note = asString(d.note);
+  const intents = listed.length ? listed : note ? [note] : [];
   return {
     detailFrameId: detail ? asString(detail.frameId) : null,
     refine: refine && (refine.to || refine.from) ? refine : null,
     composite: parseCompositeFlags(d.composite),
     tags,
-    note: asString(d.note),
+    note: intents[0] ?? null,
+    intents,
+    logic: asString(d.logic),
     narrative: asString(d.narrative),
     order:
       typeof d.order === "number" && Number.isFinite(d.order) ? d.order : null,

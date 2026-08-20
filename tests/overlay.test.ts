@@ -3,6 +3,7 @@ import type { EdgeGeometry } from "../src/adapter";
 import { CommandAPI, type SceneReader } from "../src/command/api";
 import type { CameraEngine } from "../src/camera/engine";
 import { edgePath, shapePath } from "../src/overlay/geometry";
+import { mergeOverlapping, spotlightHoles } from "../src/overlay/OverlayLayer";
 import { OverlayStore } from "../src/overlay/state";
 import { snapshotFromSceneJSON } from "../src/adapter/snapshot";
 import { readFileSync } from "node:fs";
@@ -36,6 +37,8 @@ function makeReader(): SceneReader {
         detailFrameId: null,
         tags: [],
         note: null,
+        intents: [],
+        logic: null,
         narrative: null,
         order: null,
         style: {
@@ -124,6 +127,8 @@ function makeIconReader(): SceneReader {
         detailFrameId: null,
         tags: [],
         note: null,
+        intents: [],
+        logic: null,
         narrative: null,
         order: null,
         style: {
@@ -189,6 +194,44 @@ describe("command API (B4, I5)", () => {
     api.highlight({ ids: ["g_icon"], style: "spotlight" });
     // The group's graph-node member resolves; the highlight is non-empty.
     expect(store.get().highlight?.ids.length).toBeGreaterThan(0);
+  });
+
+  it("a group lights as one target, not one per stroke (D39)", () => {
+    const store = new OverlayStore();
+    const api = new CommandAPI(makeIconReader(), makeCamera(), store);
+    api.highlight({ ids: ["g_icon"], style: "glow" });
+    const highlight = store.get().highlight!;
+    // Every member is lit, but the renderer is handed targets: each target
+    // with several members becomes ONE glow path / ONE hole.
+    expect(highlight.ids.length).toBeGreaterThan(0);
+    expect(highlight.targets.flat().sort()).toEqual(highlight.ids);
+    for (const target of highlight.targets) expect(target.length).toBeGreaterThan(0);
+  });
+
+  it("overlapping boxes merge into one enclosing box", () => {
+    const merged = mergeOverlapping([
+      { x: 0, y: 0, width: 100, height: 100 },
+      { x: 50, y: 50, width: 100, height: 100 },
+      { x: 500, y: 500, width: 10, height: 10 },
+    ]);
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toEqual({ x: 0, y: 0, width: 150, height: 150 });
+  });
+
+  it("spotlight holes never overlap — evenodd would re-darken the overlap", () => {
+    const box = (id: string, x: number, y: number, w: number, h: number) => ({
+      id,
+      d: shapePath("rectangle", { x, y, width: w, height: h }, 0),
+      isEdge: false,
+      bounds: { x, y, width: w, height: h },
+      angle: 0,
+    });
+    // Two strokes of one icon, overlapping: one hole, not two cancelling ones.
+    const holes = spotlightHoles([box("a", 0, 0, 100, 100), box("b", 40, 40, 100, 100)]);
+    expect((holes.match(/M/g) ?? []).length).toBe(1);
+    // Two far-apart plain shapes: two holes, each its own outline.
+    const apart = spotlightHoles([box("a", 0, 0, 100, 100), box("b", 900, 900, 100, 100)]);
+    expect((apart.match(/M/g) ?? []).length).toBe(2);
   });
 
   it("highlight is idempotent and clearable (S6)", () => {

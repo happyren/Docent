@@ -20,7 +20,7 @@ import { exportSceneFile, importSceneFile } from "./desktop-files";
 import { alertDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
-import { detailBadges } from "../scene/detailBadges";
+import { detailBadges, logicMarks } from "../scene/detailBadges";
 import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
 import { notePortfolioSave } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
@@ -813,6 +813,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canvas, detailMarkers, docVersion],
   );
+  const marks = useMemo(
+    () => (canvas && detailMarkers ? logicMarks(canvas.getSceneSnapshot()) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canvas, detailMarkers, docVersion],
+  );
   const onBadgeClick = useCallback((diveElementId: string) => {
     drillRef.current.dive(diveElementId);
   }, []);
@@ -966,6 +971,7 @@ export function App() {
               revision={docVersion}
               badges={badges}
               onBadgeClick={onBadgeClick}
+              logicMarks={marks}
             />
           </div>
         )}

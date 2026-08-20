@@ -86,6 +86,10 @@ export interface ElementInfo {
   detailFrameId: string | null;
   tags: string[];
   note: string | null;
+  /** Every declared intent in order (D41); `note` is the first. */
+  intents: string[];
+  /** Declared pseudocode/rules (D42). */
+  logic: string | null;
   narrative: string | null;
   order: number | null;
   style: {
@@ -171,10 +175,15 @@ export interface DocentCanvasHandle {
 
   /** Typed snapshot of the live scene — input to the scene graph/exporters. */
   getSceneSnapshot(): SceneSnapshot;
-  /** Author a node's tags/note (S10). Null clears a field. */
+  /**
+   * Author an element's tags, intents, and logic (S10, D41, D42). Null or
+   * empty clears a field. Intents are stored compatibly: one intent is
+   * written as `note` alone — byte-identical to every file before A8 — and
+   * the `intents` list is written only for two or more.
+   */
   setElementIntent(
     elementId: string,
-    patch: { tags?: string[] | null; note?: string | null },
+    patch: { tags?: string[] | null; intents?: string[] | null; logic?: string | null },
   ): void;
   /**
    * Declare whether a group is ONE component (D22): true collapses it in
@@ -311,6 +320,8 @@ type DocentData = {
   order?: unknown;
   tags?: unknown;
   note?: unknown;
+  intents?: unknown;
+  logic?: unknown;
   narrative?: unknown;
   legend?: unknown;
 };
@@ -325,6 +336,18 @@ function tagsOf(element: ExcalidrawElement): string[] {
   return Array.isArray(tags)
     ? tags.filter((t): t is string => typeof t === "string")
     : [];
+}
+
+/** The intents list (D41): the written list, else the lone note. */
+function intentsOf(docent: DocentData): string[] {
+  const listed = Array.isArray(docent.intents)
+    ? docent.intents.filter(
+        (t): t is string => typeof t === "string" && t.trim() !== "",
+      )
+    : [];
+  if (listed.length) return listed;
+  const note = stringField(docent.note);
+  return note ? [note] : [];
 }
 
 function stringField(v: unknown): string | null {
@@ -414,6 +437,8 @@ function toElementInfo(
     detailFrameId: detailFrameIdOf(element, elements),
     tags: tagsOf(element),
     note: stringField(docent.note),
+    intents: intentsOf(docent),
+    logic: stringField(docent.logic),
     narrative: stringField(docent.narrative),
     order: orderOf(element),
     style: {
@@ -697,7 +722,13 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
           el.id === elementId
             ? withDocentPatch(el, {
                 tags: patch.tags && patch.tags.length ? patch.tags : null,
-                note: patch.note || null,
+                // D41: `note` is always the first intent; the list only
+                // appears at two or more, so single-intent files stay as
+                // they have always been written.
+                note: patch.intents?.[0] || null,
+                intents:
+                  patch.intents && patch.intents.length > 1 ? patch.intents : null,
+                logic: patch.logic || null,
               })
             : el,
         ),

@@ -9,8 +9,190 @@ import type { CommandAPI } from "../command/api";
 import type { HighlightStyle } from "../overlay/state";
 import type { TourStep } from "../command/api";
 import { detailBadges } from "../scene/detailBadges";
-import { exportFrameSidecar, exportScene } from "../export";
+import { computeTiers } from "../scene/tiers";
+import type { SceneGraph } from "../scene/graph";
+import { applyLegend } from "../export/legend";
+import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
 import { listProjects, listScenes } from "../portfolio/client";
+
+/** Above this many components, get_scene_graph answers with the outline (D45). */
+export const WALL_THRESHOLD = 150;
+
+/**
+ * The table of contents (D45): tiers, frames with their tier and parentage,
+ * narrative openers, component counts, and which components go deeper.
+ */
+export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
+  const snapshot = commands.getSceneSnapshot();
+  const tiers = computeTiers(snapshot);
+  const frameGraphId = (sourceId: string | null) =>
+    sourceId ? (graph.frames.find((f) => f.sourceId === sourceId)?.id ?? null) : null;
+  const nodeBySource = new Map(graph.nodes.map((n) => [n.sourceId, n]));
+  const frames = graph.frames
+    .map((frame) => {
+      const members = graph.nodes.filter((n) => n.frameId === frame.id);
+      const parent = tiers.detailParent.get(frame.sourceId);
+      const via = parent ? nodeBySource.get(parent.elementId) : undefined;
+      const opener = (frame.narrative ?? "").split(/(?<=[.!?])\s/)[0].slice(0, 140);
+      return {
+        id: frame.id,
+        name: frame.name,
+        tier: tiers.frameTier.get(frame.sourceId) ?? 1,
+        ...(parent
+          ? {
+              parent: frameGraphId(parent.parentFrameId),
+              via: via ? { id: via.id, label: via.label } : null,
+            }
+          : {}),
+        ...(opener ? { narrative: opener } : {}),
+        components: members.length,
+        deeper: members
+          .filter((n) => n.detailFrameId !== null)
+          .map((n) => ({ id: n.id, label: n.label, detail: n.detailFrameId })),
+      };
+    })
+    .sort((a, b) => a.tier - b.tier || a.name.localeCompare(b.name));
+  return {
+    tiers: tiers.maxTier,
+    components: graph.nodes.length,
+    edges: graph.edges.length,
+    frameless: graph.nodes.filter((n) => n.frameId === null).length,
+    frames,
+  };
+}
+
+/** Field weights for find (D45): the author's words outrank heuristics. */
+const FIND_WEIGHTS: Record<string, number> = {
+  label: 5,
+  intents: 4,
+  note: 4,
+  tags: 3,
+  name: 3,
+  kind: 3,
+  logic: 2,
+  narrative: 2,
+  id: 1,
+};
+
+/**
+ * Keyword search across every tier (D45). Any token may match; hits are
+ * ranked by how many fields and tokens matched, weighted by field, and
+ * each carries its tier trail.
+ */
+export function findInDiagram(commands: CommandAPI, graph: SceneGraph, query: string) {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (!tokens.length) return { hits: [] };
+  const snapshot = commands.getSceneSnapshot();
+  const tiers = computeTiers(snapshot);
+  const frameBySource = new Map(graph.frames.map((f) => [f.sourceId, f]));
+  const frameById = new Map(graph.frames.map((f) => [f.id, f]));
+  // The tier path from Layer 1 down to (and including) a frame.
+  const trailOf = (frameGraphId: string | null): { id: string; name: string }[] => {
+    const trail: { id: string; name: string }[] = [];
+    let current = frameGraphId ? (frameById.get(frameGraphId)?.sourceId ?? null) : null;
+    while (current) {
+      const frame = frameBySource.get(current);
+      if (!frame) break;
+      const parent = tiers.detailParent.get(current);
+      // Only detail frames are part of a trail; a Layer-1 frame is the floor.
+      if (!parent) break;
+      trail.unshift({ id: frame.id, name: frame.name });
+      current = parent.parentFrameId;
+    }
+    return trail;
+  };
+  const score = (fields: Record<string, string[]>) => {
+    let total = 0;
+    const matched: string[] = [];
+    for (const [field, values] of Object.entries(fields)) {
+      const text = values.join(" ").toLowerCase();
+      if (!text) continue;
+      const hits = tokens.filter((t) => text.includes(t)).length;
+      if (hits > 0) {
+        total += hits * (FIND_WEIGHTS[field] ?? 1);
+        matched.push(field);
+      }
+    }
+    return { total, matched };
+  };
+  const hits: {
+    id: string;
+    type: "node" | "edge" | "frame";
+    label: string | null;
+    frame: string | null;
+    trail: { id: string; name: string }[];
+    score: number;
+    matched: string[];
+  }[] = [];
+  for (const node of graph.nodes) {
+    const facts = applyLegend(node.style, node.shape, graph.legend);
+    const { total, matched } = score({
+      label: [node.label ?? ""],
+      id: [node.id],
+      intents: node.intents,
+      tags: [...node.tags, ...facts.tags],
+      kind: [facts.kind ?? "", ...Object.values(facts.props)],
+      logic: [node.logic ?? ""],
+    });
+    if (total > 0) {
+      hits.push({
+        id: node.id,
+        type: "node",
+        label: node.label,
+        frame: node.frameId,
+        trail: trailOf(node.frameId),
+        score: total,
+        matched,
+      });
+    }
+  }
+  for (const edge of graph.edges) {
+    const facts = applyLegend(edge.style, "arrow", graph.legend);
+    const { total, matched } = score({
+      label: [edge.label ?? ""],
+      id: [edge.id],
+      intents: edge.intents,
+      tags: facts.tags,
+      kind: Object.values(facts.props),
+      logic: [edge.logic ?? ""],
+    });
+    if (total > 0) {
+      hits.push({
+        id: edge.id,
+        type: "edge",
+        label: edge.label,
+        frame: edge.frameId,
+        trail: trailOf(edge.frameId),
+        score: total,
+        matched,
+      });
+    }
+  }
+  for (const frame of graph.frames) {
+    const { total, matched } = score({
+      name: [frame.name],
+      id: [frame.id],
+      narrative: [frame.narrative ?? ""],
+    });
+    if (total > 0) {
+      hits.push({
+        id: frame.id,
+        type: "frame",
+        label: frame.name,
+        frame: null,
+        trail: trailOf(frame.id),
+        score: total,
+        matched,
+      });
+    }
+  }
+  hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  return { hits: hits.slice(0, 25) };
+}
 
 /** What the shell (App) lends the agent — navigation, never mutation. */
 export interface AgentShellHooks {
@@ -46,8 +228,22 @@ export async function execute(
   params: Record<string, unknown>,
 ): Promise<unknown> {
   switch (tool) {
-    case "get_scene_graph":
-      return commands.getSceneGraph();
+    case "get_scene_graph": {
+      // The legend-applied semantic view (D43): the sidecar's entity model
+      // — the same thing the file export and read_frame say.
+      const graph = commands.getSceneGraph();
+      if (graph.nodes.length > WALL_THRESHOLD && params.force !== true) {
+        return {
+          note: `This diagram has ${graph.nodes.length} components — read it progressively: get_outline, then read_frame on the frame in question, find({query}) to locate a part, dive/climb between tiers. Pass force: true for the whole graph anyway.`,
+          outline: buildOutline(commands, graph),
+        };
+      }
+      return JSON.parse(exportSidecar(graph));
+    }
+    case "get_outline":
+      return buildOutline(commands, commands.getSceneGraph());
+    case "find":
+      return findInDiagram(commands, commands.getSceneGraph(), String(params.query ?? ""));
     case "get_mermaid":
       return exportScene(commands.getSceneSnapshot()).mermaid;
     case "read_frame": {
@@ -103,7 +299,9 @@ export async function execute(
       };
     }
     case "focus":
-      await commands.focus(params as { id: string; padding?: number });
+      await commands.focus(
+        params as { id: string; padding?: number; context?: "neighbors" | "self" },
+      );
       return { focused: (params as { id: string }).id };
     case "dive": {
       const id = params.id as string;

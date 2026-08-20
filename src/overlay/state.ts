@@ -7,7 +7,14 @@
 export type HighlightStyle = "glow" | "spotlight" | "outline";
 
 export interface HighlightState {
+  /** Every source element lit, flat and sorted — the idempotence key. */
   ids: string[];
+  /**
+   * The same elements grouped by *target* (D39): a composite or group is
+   * one target made of many members, a plain shape a target of one. The
+   * renderer draws one effect per target, never one per stroke.
+   */
+  targets: string[][];
   style: HighlightStyle;
 }
 
@@ -48,15 +55,21 @@ export class OverlayStore {
     for (const listener of this.listeners) listener(next);
   }
 
-  /** Idempotent: same ids + style is a no-op; empty ids clears (S6). */
-  setHighlight(ids: string[], style: HighlightStyle): void {
-    if (!ids.length) {
+  /**
+   * Idempotent: same ids + style is a no-op; empty clears (S6). Accepts
+   * flat element ids (each its own target) or targets of member ids.
+   */
+  setHighlight(ids: string[] | string[][], style: HighlightStyle): void {
+    const targets: string[][] = ids
+      .map((entry) => (Array.isArray(entry) ? [...entry] : [entry]))
+      .filter((members) => members.length > 0);
+    if (!targets.length) {
       if (this.state.highlight !== null) {
         this.emit({ ...this.state, highlight: null });
       }
       return;
     }
-    const sorted = [...ids].sort();
+    const sorted = targets.flat().sort();
     const current = this.state.highlight;
     if (
       current &&
@@ -66,7 +79,7 @@ export class OverlayStore {
     ) {
       return;
     }
-    this.emit({ ...this.state, highlight: { ids: sorted, style } });
+    this.emit({ ...this.state, highlight: { ids: sorted, targets, style } });
   }
 
   setFlow(path: string[], speed: number, loop: boolean): void {

@@ -80,15 +80,16 @@ One canvas, many zoom-levels of meaning — overview → service → component �
 ### 🧭 Intent capture
 A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a box is red, what a cluster of services means lives in the author's head. Docent gives intent a place to live at authoring time, all fork-free:
 - **Legend editor** — declare your conventions as data: `dashed → async`, `red → hot-path`, `cylinder → datastore`. The exporter applies them. Authoring is point-and-click: the editor docks beside a live canvas — select any element, click the style chip that carries the meaning (color swatch, dash, shape…), and type only what it means.
-- **Element annotations** — tags and free-text notes on any element ("rate-limited at edge", "legacy — kill in Q3"), stored in Excalidraw's `customData`.
+- **Element annotations** — tags, **intents** (one per line — an arrow between two systems can mean several things), and **logic** (free-form pseudocode or rules for what a component does, imported icons included; text only, never run) on any element, stored in Excalidraw's `customData`. The intent panel says plainly when it's *Unsaved* or *Saved*, and **Save** (`⌘↩`) commits on demand.
 - **Frame narratives** — one or two sentences per frame: "what this section means." The same text is the **single source of truth** for both the semantic export and the agent's `tour` narration. Capture once, serve both audiences.
 
 ### 🤖 Agent-drivable canvas
 - An **MCP server** exposes the Command API — MCP is an open protocol, so **any agent with any MCP client** can drive the canvas; nothing vendor-specific ships in Docent. It speaks **stdio** for locally-spawned clients and **MCP streamable HTTP** at `/mcp` — on every deployment, and on the desktop app at a loopback port (**Help → Agent Endpoint…** shows the paste-ready line). Connected agents can:
   - `get_scene_graph` — read the diagram as nodes/edges/frames with stable IDs, legend meanings, refinements ("lands on" / "departs from"), tags, notes, and frame narratives
   - `get_mermaid` / `read_frame` — the compact exports: the whole diagram as Mermaid, or one frame's semantic JSON one tier deep
+  - `get_outline` / `find` — the diagram's table of contents (tiers, frames, what goes deeper) and keyword search across every tier, each hit with its tier trail — so an agent reads a big diagram progressively instead of as a wall (large diagrams answer `get_scene_graph` with the outline until asked to force it)
   - `list_projects` / `open_scene` / `get_view` — browse the portfolio, open the diagram the user asked about (refused over unsaved changes), and know where the camera stands
-  - `focus` — tween the camera to any element or frame; padding is the zoom
+  - `focus` — tween the camera to any element or frame; a component is framed with its neighbourhood and never fills the view; padding is the zoom
   - `dive` / `climb` — navigate declared detail layers, tier by tier
   - `present` — drive presentation mode: enter, next, prev, overview, exit
   - `highlight` — glow / spotlight / dim-others on any set of components

@@ -25,6 +25,10 @@ export interface GraphNode {
   groupIds: string[];
   tags: string[];
   note: string | null;
+  /** Every declared intent in order (D41); `note` is the first. */
+  intents: string[];
+  /** Declared pseudocode/rules (D42). */
+  logic: string | null;
   detailFrameId: string | null;
   /**
    * Set when this node stands for a grouped composite (D22) — a library
@@ -61,6 +65,9 @@ export interface GraphEdge {
   fromRefined: string | null;
   label: string | null;
   frameId: string | null;
+  /** Declared intents of the edge (D41) and its logic (D42). */
+  intents: string[];
+  logic: string | null;
   style: GraphNode["style"];
 }
 
@@ -396,7 +403,9 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         null;
       const detailSource = parts.find((p) => p.docent.detailFrameId !== null);
       const tags = [...new Set(parts.flatMap((p) => p.docent.tags))].sort();
-      const note = parts.map((p) => p.docent.note).find((n) => n !== null) ?? null;
+      const intents = parts.flatMap((p) => p.docent.intents);
+      const note = intents[0] ?? null;
+      const logic = parts.map((p) => p.docent.logic).find((l) => l !== null) ?? null;
       return {
         id: graphId.get(el.id)!,
         sourceId: el.id,
@@ -406,6 +415,8 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         groupIds: [...el.groupIds].sort(),
         tags,
         note,
+        intents,
+        logic,
         detailFrameId: detailSource?.docent.detailFrameId
           ? (graphId.get(detailSource.docent.detailFrameId) ?? null)
           : null,
@@ -471,6 +482,8 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         toProvenance: to.provenance,
         label: labelFor(el, byId),
         frameId: el.frameId ? (graphId.get(el.frameId) ?? null) : null,
+        intents: el.docent.intents,
+        logic: el.docent.logic,
         style: styleOf(el),
       };
     })

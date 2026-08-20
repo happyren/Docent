@@ -60,6 +60,16 @@ export function exportSidecar(graph: SceneGraph): string {
       entity.note = node.note;
       provenance.note = "declared";
     }
+    // Several intents (D41): the first is `note` above — unchanged for every
+    // file that has one — and the full ordered list rides beside it.
+    if (node.intents.length > 1) {
+      entity.intents = [...node.intents];
+      provenance.intents = "declared";
+    }
+    if (node.logic !== null) {
+      entity.logic = node.logic;
+      provenance.logic = "declared";
+    }
     if (node.detailFrameId !== null) {
       entity.detail = node.detailFrameId;
       provenance.detail = "declared";
@@ -87,6 +97,19 @@ export function exportSidecar(graph: SceneGraph): string {
       to: edge.to,
     };
     if (edge.label !== null) entity.label = edge.label;
+    // An arrow carries intents and logic exactly like a node (D41, D42).
+    if (edge.intents.length) {
+      entity.note = edge.intents[0];
+      provenance.note = "declared";
+    }
+    if (edge.intents.length > 1) {
+      entity.intents = [...edge.intents];
+      provenance.intents = "declared";
+    }
+    if (edge.logic !== null) {
+      entity.logic = edge.logic;
+      provenance.logic = "declared";
+    }
     if (edge.toRefined !== null) {
       entity.toRefined = edge.toRefined;
       provenance.toRefined = "declared";

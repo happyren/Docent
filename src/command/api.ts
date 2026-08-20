@@ -18,6 +18,7 @@ import type {
 } from "../adapter";
 import type { CameraEngine } from "../camera/engine";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
+import { computeTiers } from "../scene/tiers";
 import type { HighlightStyle, OverlayStore } from "../overlay/state";
 
 /** The read-only slice of the canvas surface commands may touch. */
@@ -35,6 +36,41 @@ export interface SceneReader {
 
 /** Scene-units per second at speed 1.0. */
 const FLOW_UNITS_PER_SECOND = 500;
+
+/**
+ * The zoom ceiling (D44): the subject may take at most this share of the
+ * framed box in either dimension, so it can never fill the view.
+ */
+const MAX_SUBJECT_SHARE = 0.4;
+
+function unionOf(a: SceneBounds, b: SceneBounds): SceneBounds {
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  };
+}
+
+/**
+ * Grow `framed` until `subject` is at most MAX_SUBJECT_SHARE of it in both
+ * dimensions, growing around the subject's centre so it stays in view.
+ */
+function withCeiling(framed: SceneBounds, subject: SceneBounds): SceneBounds {
+  const minW = subject.width / MAX_SUBJECT_SHARE;
+  const minH = subject.height / MAX_SUBJECT_SHARE;
+  const cx = subject.x + subject.width / 2;
+  const cy = subject.y + subject.height / 2;
+  const floor: SceneBounds = {
+    x: cx - minW / 2,
+    y: cy - minH / 2,
+    width: minW,
+    height: minH,
+  };
+  return unionOf(framed, floor);
+}
 
 /** Where narrate() text goes (S9) — the shell's narration panel. */
 export interface NarrationSink {
@@ -169,16 +205,51 @@ export class CommandAPI {
     );
   }
 
-  /** Tween the camera to an element's or frame's bounds. */
-  async focus(params: { id: string; padding?: number }): Promise<void> {
+  /**
+   * Tween the camera to an element's or frame's bounds. A component is
+   * framed with its **neighbourhood** by default (D44) — itself plus every
+   * component an edge connects it to within the same tier — and never
+   * fills the view: the zoom ceiling keeps it at or under 40% of the
+   * framed box. `context: "self"` drops the neighbours, ceiling kept. A
+   * frame or edge focuses as it is.
+   */
+  async focus(params: {
+    id: string;
+    padding?: number;
+    context?: "neighbors" | "self";
+  }): Promise<void> {
     const graph = this.getSceneGraph();
+    const node = graph.nodes.find((n) => n.id === params.id || n.sourceId === params.id);
+    if (node) {
+      const own = this.nodeBounds(node);
+      let bounds = own;
+      if ((params.context ?? "neighbors") === "neighbors") {
+        // Same tier, not same frame: sibling frames on one layer are one
+        // neighbourhood; a detail layer beneath is not.
+        const snapshot = this.reader.getSceneSnapshot();
+        const tiers = computeTiers(snapshot);
+        const tierOf = (n: SceneGraph["nodes"][number]) => {
+          const frame = graph.frames.find((f) => f.id === n.frameId);
+          return frame ? (tiers.frameTier.get(frame.sourceId) ?? 1) : 1;
+        };
+        const tier = tierOf(node);
+        for (const edge of graph.edges) {
+          const otherId =
+            edge.from === node.id ? edge.to : edge.to === node.id ? edge.from : null;
+          if (!otherId) continue;
+          const other = graph.nodes.find((n) => n.id === otherId);
+          if (!other || tierOf(other) !== tier) continue;
+          bounds = unionOf(bounds, this.nodeBounds(other));
+        }
+      }
+      await this.camera.flyTo(withCeiling(bounds, own), {
+        padding: params.padding ?? 0.2,
+      });
+      return;
+    }
     let info: { bounds: SceneBounds } | null;
     try {
-      const sourceId = this.resolveSourceId(graph, params.id, [
-        "frame",
-        "node",
-        "edge",
-      ]);
+      const sourceId = this.resolveSourceId(graph, params.id, ["frame", "edge"]);
       info =
         this.reader.getFrameInfo(sourceId) ?? this.reader.getElementInfo(sourceId);
     } catch (err) {
@@ -188,6 +259,19 @@ export class CommandAPI {
     }
     if (!info) throw new Error(`Element vanished: ${params.id}`);
     await this.camera.flyTo(info.bounds, { padding: params.padding ?? 0.2 });
+  }
+
+  /** A node's live bounds (composites: the union of their members). */
+  private nodeBounds(node: SceneGraph["nodes"][number]): SceneBounds {
+    if (!node.composite) {
+      return this.reader.getElementInfo(node.sourceId)?.bounds ?? node.bounds;
+    }
+    let bounds: SceneBounds | null = null;
+    for (const id of this.compositeMemberIds(node)) {
+      const info = this.reader.getElementInfo(id);
+      if (info) bounds = bounds ? unionOf(bounds, info.bounds) : info.bounds;
+    }
+    return bounds ?? node.bounds;
   }
 
   /** Union AABB of resolved effect targets; null when nothing resolves. */
@@ -245,7 +329,57 @@ export class CommandAPI {
     const graph = this.getSceneGraph();
     const bounds = this.targetBounds(graph, ids);
     if (!bounds || this.readsWell(bounds)) return;
-    await this.camera.flyTo(bounds, { padding });
+    // The same ceiling as focus (D44): what is shown never fills the view.
+    await this.camera.flyTo(withCeiling(bounds, bounds), { padding });
+  }
+
+  /**
+   * Resolve highlight targets (D39): a composite node is ONE target made of
+   * its members, a layout group is one target per member node, a plain
+   * node/edge/frame or raw element is a target of one. Same leniency and
+   * the same loudness as `resolveEffectIds` (I5).
+   */
+  private resolveEffectTargets(graph: SceneGraph, ids: string[]): string[][] {
+    const targets: string[][] = [];
+    for (const id of ids) {
+      const pools = [graph.nodes, graph.edges, graph.frames] as {
+        id: string;
+        sourceId: string;
+      }[][];
+      const match = pools
+        .flatMap((pool) => pool)
+        .find((item) => item.id === id || item.sourceId === id);
+      if (match) {
+        const node = graph.nodes.find((n) => n.id === match.id && n.composite);
+        targets.push(node ? this.compositeMemberIds(node) : [match.sourceId]);
+        continue;
+      }
+      const group = graph.groups.find((g) => g.id === id);
+      if (group) {
+        for (const memberId of group.members) {
+          const node = graph.nodes.find((n) => n.id === memberId);
+          if (node) {
+            targets.push(node.composite ? this.compositeMemberIds(node) : [node.sourceId]);
+          }
+        }
+        continue;
+      }
+      const compositeNode = graph.nodes.find(
+        (n) => n.composite && n.groupIds.includes(id),
+      );
+      if (compositeNode) {
+        targets.push(this.compositeMemberIds(compositeNode));
+        continue;
+      }
+      if (this.reader.getElementInfo(id)) {
+        targets.push([id]);
+        continue;
+      }
+      throw new Error(
+        `Unknown node/edge/frame/group id: ${id} — use ids from get_scene_graph`,
+      );
+    }
+    return targets;
   }
 
   /** Idempotent highlight; empty ids clears (S6). */
@@ -255,8 +389,8 @@ export class CommandAPI {
       return;
     }
     const graph = this.getSceneGraph();
-    const sourceIds = this.resolveEffectIds(graph, params.ids);
-    this.overlay.setHighlight(sourceIds, params.style ?? "glow");
+    const targets = this.resolveEffectTargets(graph, params.ids);
+    this.overlay.setHighlight(targets, params.style ?? "glow");
   }
 
   /**
