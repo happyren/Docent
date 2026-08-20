@@ -271,6 +271,8 @@ touring.
 
 ### Desktop app
 
+**Full install guide with copy-paste commands: [happyren.github.io/Docent](https://happyren.github.io/Docent/)**
+
 **Download and run — no installation** — from the
 [Releases tab](https://github.com/happyren/Docent/releases):
 

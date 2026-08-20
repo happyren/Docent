@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Docent — guided tours for your diagrams</title>
+<link rel="icon" href="icon.png">
+<style>
+  :root { --bg:#1b1b1f; --panel:#232329; --fg:#e8e8ea; --muted:#a0a0aa; --accent:#ffb454; --violet:#7a63c4; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); line-height:1.55; }
+  main { max-width:880px; margin:0 auto; padding:48px 24px 80px; }
+  header { text-align:center; margin-bottom:40px; }
+  header img { width:96px; height:96px; border-radius:22px; }
+  h1 { font-size:2.4rem; margin:16px 0 6px; }
+  .tagline { color:var(--muted); font-size:1.15rem; margin:0; }
+  .credit { margin-top:14px; font-size:.95rem; color:var(--muted); }
+  .credit a { color:var(--accent); }
+  a { color:var(--violet); }
+  .buttons { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin:28px 0 8px; }
+  .btn { background:var(--violet); color:#fff; text-decoration:none; padding:12px 22px; border-radius:10px; font-weight:600; }
+  .btn.alt { background:var(--panel); border:1px solid #3a3a42; }
+  section { background:var(--panel); border:1px solid #33333b; border-radius:14px; padding:22px 26px; margin:18px 0; }
+  h2 { margin:0 0 10px; font-size:1.25rem; }
+  h3 { margin:18px 0 6px; font-size:1.02rem; }
+  pre { background:#141417; border:1px solid #33333b; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.85rem; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  p code, li code { background:#141417; padding:1px 6px; border-radius:5px; }
+  .note { color:var(--muted); font-size:.92rem; }
+  footer { text-align:center; color:var(--muted); font-size:.9rem; margin-top:48px; }
+  footer a { color:var(--muted); }
+  ul { margin:8px 0; padding-left:22px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="Docent icon">
+    <h1>Docent</h1>
+    <p class="tagline">A docent walks you through the museum. This one walks humans — and AI&nbsp;agents — through your architecture diagrams.</p>
+    <p class="credit">Inspired by and built upon <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> — the canvas, the hand-drawn rendering, and the file format are Excalidraw's work. Docent is an independent project, not affiliated with or endorsed by Excalidraw.</p>
+    <div class="buttons">
+      <a class="btn" href="https://github.com/happyren/Docent/releases/latest">Download</a>
+      <a class="btn alt" href="https://github.com/happyren/Docent">GitHub</a>
+    </div>
+    <p class="note">Free &amp; open source · MIT · macOS (Apple&nbsp;Silicon&nbsp;+&nbsp;Intel) · Windows · Linux · self-hosted</p>
+  </header>
+
+  <section>
+    <h2>Install on macOS</h2>
+    <p>Docent is open-source and <strong>unsigned</strong> — we don't pay Apple's yearly developer fee, so macOS flags the download. That's a missing signature, not malware; the source is public if you'd like to check what you're running. Two ways in:</p>
+    <h3>Option A — one Terminal line (no security prompts)</h3>
+    <p class="note">Terminal downloads skip macOS quarantine entirely, so the app opens like any other:</p>
+    <pre><code>curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip &amp;&amp; ditto -x -k /tmp/Docent.zip /Applications &amp;&amp; open /Applications/Docent.app</code></pre>
+    <h3>Option B — downloaded in a browser?</h3>
+    <p>Unzip, then clear the quarantine flag once, then open normally:</p>
+    <pre><code>xattr -cr ~/Downloads/Docent.app</code></pre>
+    <p class="note">macOS will otherwise report the app as "damaged" — current macOS offers no <em>Open&nbsp;Anyway</em> for unsigned apps. One universal build covers Apple&nbsp;Silicon and Intel.</p>
+  </section>
+
+  <section>
+    <h2>Install on Windows</h2>
+    <p><a href="https://github.com/happyren/Docent/releases/latest/download/Docent_windows_portable.zip">Download the portable zip</a>, unzip, and run <code>docent.exe</code> — a single file, no installer. If SmartScreen appears: <strong>More info → Run anyway</strong> (same reason: no paid code-signing certificate).</p>
+    <p class="note">Needs Microsoft's WebView2 runtime, preinstalled on Windows&nbsp;11 and current Windows&nbsp;10. Older machine? Use the NSIS installer from the <a href="https://github.com/happyren/Docent/releases/latest">release page</a> — it fetches the runtime.</p>
+  </section>
+
+  <section>
+    <h2>Install on Linux</h2>
+    <p>Grab the AppImage from the <a href="https://github.com/happyren/Docent/releases/latest">latest release</a>, then:</p>
+    <pre><code>chmod +x Docent_*.AppImage &amp;&amp; ./Docent_*.AppImage</code></pre>
+    <p class="note"><code>.deb</code> and <code>.rpm</code> packages are attached too.</p>
+  </section>
+
+  <section>
+    <h2>Self-host (Docker)</h2>
+    <p>The same app as a shared team deployment — portfolio store and the MCP agent endpoint included:</p>
+    <pre><code>git clone https://github.com/happyren/Docent.git &amp;&amp; cd Docent &amp;&amp; docker compose up</code></pre>
+    <p class="note">Serves on port 3000 (override with <code>DOCENT_PORT</code>). See the <a href="https://github.com/happyren/Docent#readme">README</a> for the continuous-deployment installer and agent control.</p>
+  </section>
+
+  <section>
+    <h2>What it does</h2>
+    <ul>
+      <li><strong>Longtake presentations</strong> — frames become waypoints; one continuous camera glide, no slide cuts.</li>
+      <li><strong>Tiered drill-down</strong> — click a component, dive into its inner mechanism; unbounded layers on one canvas.</li>
+      <li><strong>Semantic export</strong> — deterministic Mermaid + compact JSON with provenance on every fact, built for AI readers.</li>
+      <li><strong>Agent-drivable</strong> — an open MCP endpoint lets any AI agent move the camera, highlight components, and narrate tours (self-hosted deployments).</li>
+      <li><strong>Project portfolio</strong> — projects of scenes with large previews, stored as plain <code>.excalidraw</code> files.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>MIT licensed · <a href="https://github.com/happyren/Docent/blob/master/THIRD_PARTY_NOTICES.md">third-party notices</a> · built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> ❤️</p>
+  </footer>
+</main>
+</body>
+</html>
