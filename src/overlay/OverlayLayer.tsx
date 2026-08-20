@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SceneBounds, Viewport } from "../adapter";
 import type { SceneReader } from "../command/api";
+import type { DetailBadge } from "../scene/detailBadges";
 import { edgePath, shapePath } from "./geometry";
 import type { OverlayState, OverlayStore } from "./state";
 
@@ -119,11 +120,19 @@ export function OverlayLayer({
   reader,
   store,
   revision,
+  badges = [],
+  onBadgeClick,
 }: {
   reader: SceneReader;
   store: OverlayStore;
   /** Bump when document content changes so target geometry recomputes. */
   revision: number;
+  /**
+   * Detail-layer markers (D31): static corner chips, no filters, no
+   * animation — they ride the composited stage like everything else.
+   */
+  badges?: DetailBadge[];
+  onBadgeClick?: (diveElementId: string) => void;
 }) {
   const [overlay, setOverlay] = useState<OverlayState>(() => store.get());
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -372,6 +381,50 @@ export function OverlayLayer({
               <circle ref={pulseRef} r={16} fill="url(#docent-pulse-halo)" />
             </>
           )}
+          {badges.map((b) => {
+            const s = b.size;
+            return (
+              <g
+                key={b.id}
+                className="docent-detail-badge"
+                transform={`translate(${b.bounds.x + b.bounds.width - s / 2} ${b.bounds.y - s / 2})`}
+                onClick={() => onBadgeClick?.(b.diveElementId)}
+              >
+                <title>
+                  {b.label ? `${b.label} — has a detail layer` : "Has a detail layer"}
+                </title>
+                <g className="docent-detail-badge-chip">
+                  <rect
+                    width={s}
+                    height={s}
+                    rx={s * 0.27}
+                    fill={OUTLINE_COLOR}
+                    opacity={0.92}
+                  />
+                  <rect
+                    x={s * 0.38}
+                    y={s * 0.2}
+                    width={s * 0.42}
+                    height={s * 0.3}
+                    rx={s * 0.07}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth={s * 0.08}
+                  />
+                  <rect
+                    x={s * 0.2}
+                    y={s * 0.42}
+                    width={s * 0.42}
+                    height={s * 0.3}
+                    rx={s * 0.07}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth={s * 0.08}
+                  />
+                </g>
+              </g>
+            );
+          })}
         </svg>
       </div>
     </div>

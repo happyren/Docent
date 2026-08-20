@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 
-use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
 /// The items Docent contributes to the native menu bar. Almost every one
@@ -48,6 +48,7 @@ enum MenuAction {
     Library,
     Legend,
     Arrange,
+    DetailMarkers,
     ExportMermaid,
     ExportSidecar,
     CheckUpdates,
@@ -55,7 +56,7 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 13] = [
+    const ALL: [Self; 14] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -66,6 +67,7 @@ impl MenuAction {
         Self::Library,
         Self::Legend,
         Self::Arrange,
+        Self::DetailMarkers,
         Self::ExportMermaid,
         Self::ExportSidecar,
         Self::CheckUpdates,
@@ -85,6 +87,7 @@ impl MenuAction {
             Self::Library => "library",
             Self::Legend => "legend",
             Self::Arrange => "arrange",
+            Self::DetailMarkers => "detail-markers",
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
             Self::CheckUpdates => "check-updates",
@@ -103,6 +106,7 @@ impl MenuAction {
             Self::Library => "Library",
             Self::Legend => "Legend…",
             Self::Arrange => "Arrange Detail Tiers",
+            Self::DetailMarkers => "Detail Markers",
             Self::ExportMermaid => "Mermaid…",
             Self::ExportSidecar => "Semantic JSON…",
             Self::CheckUpdates => "Check for Updates…",
@@ -124,6 +128,7 @@ impl MenuAction {
             Self::ExportFile
             | Self::Legend
             | Self::Arrange
+            | Self::DetailMarkers
             | Self::ExportMermaid
             | Self::ExportSidecar
             | Self::CheckUpdates => None,
@@ -290,6 +295,26 @@ fn item(app: &AppHandle, action: MenuAction) -> tauri::Result<MenuItem<Wry>> {
     MenuItem::with_id(app, action.id(), action.label(), true, action.accelerator())
 }
 
+/// The one stateful item: a checkbox mirroring whether the page draws
+/// detail-layer markers (D31). The menu toggles its own checkmark on click
+/// and the page state is session-scoped defaulting to on, so the two start
+/// aligned and only this item ever moves either — no page→shell channel
+/// needed (the shell deliberately has none).
+fn check_item(
+    app: &AppHandle,
+    action: MenuAction,
+    checked: bool,
+) -> tauri::Result<CheckMenuItem<Wry>> {
+    CheckMenuItem::with_id(
+        app,
+        action.id(),
+        action.label(),
+        true,
+        checked,
+        action.accelerator(),
+    )
+}
+
 /// The whole menu bar, replacing Tauri's default. Edit is load-bearing rather
 /// than decorative: the system webview takes its clipboard commands from the
 /// menu, so without those items Cmd/Ctrl+C, +X and +V do nothing in text
@@ -354,6 +379,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Legend)?,
             &item(app, MenuAction::Arrange)?,
+            &check_item(app, MenuAction::DetailMarkers, true)?,
             #[cfg(target_os = "macos")]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(target_os = "macos")]
@@ -565,7 +591,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 12] = [
+    const FRONTEND_IDS: [&str; 13] = [
         "new",
         "open",
         "import",
@@ -576,6 +602,7 @@ mod tests {
         "library",
         "legend",
         "arrange",
+        "detail-markers",
         "export-mermaid",
         "export-sidecar",
     ];

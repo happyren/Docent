@@ -17,6 +17,7 @@ import {
 import { exportSceneFile, importSceneFile } from "./desktop-files";
 import { alertDialog } from "./dialogs";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
+import { detailBadges } from "../scene/detailBadges";
 import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
 import { IntentPanel } from "./IntentPanel";
 import { PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
@@ -54,6 +55,7 @@ type DocentMenuId =
   | "library"
   | "legend"
   | "arrange"
+  | "detail-markers"
   | "export-mermaid"
   | "export-sidecar";
 
@@ -82,6 +84,10 @@ export function App() {
   } | null>(null);
   // Bumped on document changes so selection-derived UI re-reads element intent.
   const [docVersion, setDocVersion] = useState(0);
+  // Detail-layer markers (D31): session-scoped, default on. Not persisted, so
+  // the desktop menu checkbox — which starts checked and toggles itself —
+  // always agrees with the page without a page→shell channel.
+  const [detailMarkers, setDetailMarkers] = useState(true);
 
   const [narration, setNarration] = useState<string | null>(null);
   // Fake-zoom sink: scales the Excalidraw canvas elements and the overlay
@@ -626,6 +632,7 @@ export function App() {
     library: () => canvasRef.current?.toggleLibrarySidebar(),
     legend: () => setLegendOpen(true),
     arrange: arrangeTiers,
+    "detail-markers": () => setDetailMarkers((v) => !v),
     "export-mermaid": () => {
       const handle = canvasRef.current;
       if (!handle) return;
@@ -705,6 +712,9 @@ export function App() {
       downAt = null;
       if (!start || !presentationActiveRef.current) return;
       if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5) return;
+      // A click on a detail badge is the badge's own dive (D31) — handling
+      // it here too would dive twice.
+      if ((event.target as Element | null)?.closest?.(".docent-detail-badge")) return;
       const info = canvas.elementAtClient(event.clientX, event.clientY);
       if (info?.detailFrameId) {
         drillRef.current.dive(info.id);
@@ -722,6 +732,42 @@ export function App() {
     const name = fileName ?? "untitled";
     document.title = `${dirty ? "● " : ""}${name} — Docent`;
   }, [fileName, dirty]);
+
+  // Detail-layer markers (D31), recomputed with the document. Off costs
+  // nothing — the graph build is skipped entirely.
+  const badges = useMemo(
+    () =>
+      canvas && detailMarkers ? detailBadges(canvas.getSceneSnapshot()) : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canvas, detailMarkers, docVersion],
+  );
+  const onBadgeClick = useCallback((diveElementId: string) => {
+    drillRef.current.dive(diveElementId);
+  }, []);
+
+  // During a presentation, diveable components advertise themselves with the
+  // pointer cursor too — the badge says "there is more", the cursor says
+  // "click me". Hit tests are rAF-throttled and only run while presenting.
+  useEffect(() => {
+    const host = canvasHostRef.current;
+    if (!host || !canvas || !presentation.active) return;
+    let raf = 0;
+    const onPointerMove = (event: PointerEvent) => {
+      if (raf) return;
+      const { clientX, clientY } = event;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const info = canvas.elementAtClient(clientX, clientY);
+        host.style.cursor = info?.detailFrameId ? "pointer" : "";
+      });
+    };
+    host.addEventListener("pointermove", onPointerMove);
+    return () => {
+      host.removeEventListener("pointermove", onPointerMove);
+      if (raf) cancelAnimationFrame(raf);
+      host.style.cursor = "";
+    };
+  }, [canvas, presentation.active]);
 
   // Structural breadcrumb trail for the current view (debounced on viewport
   // settle). Tier computation is O(elements) — cheap even for large scenes.
@@ -783,9 +829,11 @@ export function App() {
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
+            onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
             onConnectAgent: connectAgent,
           }}
           hideDocentMenuItems={isDesktop}
+          detailMarkersVisible={detailMarkers}
         />
         {canvas && (
           <Breadcrumbs
@@ -798,7 +846,13 @@ export function App() {
         )}
         {canvas && (
           <div className="docent-zoom-stage" ref={zoomStageRef}>
-            <OverlayLayer reader={canvas} store={overlayStore} revision={docVersion} />
+            <OverlayLayer
+              reader={canvas}
+              store={overlayStore}
+              revision={docVersion}
+              badges={badges}
+              onBadgeClick={onBadgeClick}
+            />
           </div>
         )}
         {!presentation.active && selectedIds.length > 0 && canvas && commands && (
@@ -839,8 +893,8 @@ export function App() {
               </span>
             )}
             <span className="docent-hud-hint">
-              → next · ← prev · Home overview · click a component to dive · ⌫ back
-              · Esc exit
+              → next · ← prev · Home overview · click a marked component to dive
+              · ⌫ back · Esc exit
             </span>
           </div>
         )}

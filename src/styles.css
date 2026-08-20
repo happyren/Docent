@@ -159,6 +159,25 @@ body {
   overflow: visible;
 }
 
+/* Detail-layer markers (D31): the one overlay element that takes the
+   pointer — a click on the chip is a dive, in every mode. The hover grow
+   lives on an inner group so it cannot clobber the outer placement
+   transform. */
+.docent-detail-badge {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.docent-detail-badge-chip {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: transform 120ms ease;
+}
+
+.docent-detail-badge:hover .docent-detail-badge-chip {
+  transform: scale(1.2);
+}
+
 .docent-hud {
   position: absolute;
   left: 50%;

@@ -267,6 +267,7 @@ export interface SceneMenuActions {
   onExportMermaid: () => void;
   onExportSidecar: () => void;
   onArrangeTiers: () => void;
+  onToggleDetailMarkers: () => void;
   onConnectAgent: () => void;
 }
 
@@ -283,6 +284,11 @@ export interface ExcalidrawCanvasProps {
    * actions live in the native menu bar there; the web build never does.
    */
   hideDocentMenuItems?: boolean;
+  /**
+   * Whether detail-layer markers are currently drawn (D31) — only the
+   * toggle's menu label reads it.
+   */
+  detailMarkersVisible?: boolean;
 }
 
 type DocentData = {
@@ -971,6 +977,7 @@ export function ExcalidrawCanvas({
   onSelectionChange,
   menuActions,
   hideDocentMenuItems = false,
+  detailMarkersVisible = true,
 }: ExcalidrawCanvasProps) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastFingerprintRef = useRef(0);
@@ -1054,6 +1061,9 @@ export function ExcalidrawCanvas({
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
               Arrange detail tiers
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onToggleDetailMarkers}>
+              {detailMarkersVisible ? "Hide detail markers" : "Show detail markers"}
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onConnectAgent}>
               Connect agent bridge
