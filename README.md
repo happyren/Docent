@@ -271,6 +271,20 @@ touring.
 
 ### Desktop app
 
+**Download and run — no installation** — from the
+[Releases tab](https://github.com/happyren/Docent/releases):
+
+- **macOS** — `Docent_*_macos_universal_portable.zip` (Apple Silicon + Intel):
+  unzip, double-click. Unsigned for now — see the note below.
+- **Windows** — `Docent_*_windows_portable.zip`: a single `Docent` exe, no
+  installer. Needs the WebView2 runtime, preinstalled on Windows 11 and
+  current Windows 10; on older machines use the NSIS installer attached to
+  the same release.
+- **Linux** — the AppImage from the same release (`chmod +x`, run).
+
+Installers (dmg / msi / nsis / deb) are attached alongside for those who
+prefer them. A release is cut by pushing a `v*` tag.
+
 The same canvas in a native window — a [Tauri](https://v2.tauri.app) shell around
 the same SPA build, with the portfolio store running natively inside the app
 (S13). No Docker, no Node, no browser tab.

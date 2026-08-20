@@ -1,15 +1,17 @@
 name: Desktop
 
-# Installers for S13. Manual, or on a version tag. Nothing here publishes a
-# release: the bundles land as workflow artifacts and a human decides what
-# ships. Docker self-hosting is untouched by this workflow — see ci.yml.
+# Desktop packages for S13. A manual dispatch produces workflow artifacts
+# only; pushing a version tag (v*) additionally publishes a GitHub Release
+# carrying every bundle plus the download-and-run portable zips (macOS .app
+# zip, Windows bare-exe zip). Docker self-hosting is untouched by this
+# workflow — see ci.yml.
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   bundle:
@@ -69,10 +71,56 @@ jobs:
         run: cargo test
 
       - uses: tauri-apps/tauri-action@v0
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: "Docent ${{ github.ref_name }}"
+          releaseDraft: false
+          releaseBody: |
+            Download, unzip, run — no installation:
+
+            - **macOS**: `Docent_*_macos_universal_portable.zip` (Apple Silicon + Intel). The build is unsigned for now: if macOS calls it damaged or blocked, use System Settings → Privacy & Security → Open Anyway, or `xattr -cr Docent.app`.
+            - **Windows**: `Docent_*_windows_portable.zip` — a single exe; needs the WebView2 runtime, preinstalled on Windows 11 and current Windows 10. Older machines: use the NSIS installer below instead. SmartScreen: More info → Run anyway.
+            - **Linux**: the AppImage is the no-install option (`chmod +x`, run).
+
+            Installers (dmg / msi / nsis / deb) are attached for those who prefer them.
+
+            Docent is built on [Excalidraw](https://github.com/excalidraw/excalidraw) — full third-party licenses ship inside every bundle.
+
+      - uses: tauri-apps/tauri-action@v0
+        if: "!startsWith(github.ref, 'refs/tags/')"
         with:
           args: ${{ matrix.args }}
 
+      # Download-and-run zips (the release's headline assets). ditto keeps
+      # the .app's symlinks and permissions; a plain zip tool would not.
+      - name: Portable zip (macOS)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'macos-latest'
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos/Docent.app" \
+            "Docent_${VERSION}_macos_universal_portable.zip"
+          gh release upload "$GITHUB_REF_NAME" "Docent_${VERSION}_macos_universal_portable.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Portable zip (Windows)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME.TrimStart("v")
+          $zip = "Docent_${version}_windows_portable.zip"
+          Compress-Archive -Path "src-tauri/target/release/docent.exe" -DestinationPath $zip
+          gh release upload $env:GITHUB_REF_NAME $zip --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
         with:
           name: docent-${{ matrix.platform }}
           if-no-files-found: error
