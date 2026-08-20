@@ -6,7 +6,7 @@
  * Docent-written element data lives exclusively under `customData.docent.*`
  * (Decision D15); this module is the only reader/writer of that namespace.
  */
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -289,6 +289,21 @@ export interface ExcalidrawCanvasProps {
    * toggle's menu label reads it.
    */
   detailMarkersVisible?: boolean;
+  /**
+   * Frame-scoped semantic export from the right-click menu (D32). Upstream
+   * has no context-menu extension API, so when a right-click resolves to an
+   * exportable frame the adapter appends one item to the menu's DOM after it
+   * mounts — coupling that is safe only because `@excalidraw/excalidraw` is
+   * pinned exact (I7/D12); revalidate on any upgrade.
+   */
+  contextExport?: {
+    /** The frame this right-click would export, or null for none. */
+    resolveFrameAt: (
+      clientX: number,
+      clientY: number,
+    ) => { id: string; name: string } | null;
+    onCopy: (frameSourceId: string) => void;
+  };
 }
 
 type DocentData = {
@@ -978,11 +993,74 @@ export function ExcalidrawCanvas({
   menuActions,
   hideDocentMenuItems = false,
   detailMarkersVisible = true,
+  contextExport,
 }: ExcalidrawCanvasProps) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
   const lastFingerprintRef = useRef(0);
   const lastSelectionRef = useRef("");
   const lazyLibrariesRef = useRef(false);
+
+  // Right-click export (D32): let upstream open its own menu, then append
+  // one item — built by cloning an existing entry so it inherits whatever
+  // the pinned version's classes render. React removes the whole menu on
+  // close, our node with it.
+  const contextExportRef = useRef(contextExport);
+  contextExportRef.current = contextExport;
+  useEffect(() => {
+    const onContextMenu = (event: MouseEvent) => {
+      const ctx = contextExportRef.current;
+      if (!ctx) return;
+      const target = ctx.resolveFrameAt(event.clientX, event.clientY);
+      if (!target) return;
+      let tries = 0;
+      const inject = () => {
+        const menu = document.querySelector(".context-menu");
+        if (!menu) {
+          // The menu mounts through React state — give it a moment. Timeouts,
+          // not rAF: rAF is throttled to nothing in hidden/background tabs.
+          if (++tries < 12) window.setTimeout(inject, 16);
+          return;
+        }
+        if (menu.querySelector(".docent-copy-frame-json")) return;
+        const sampleItem = menu.querySelector("li:has(button)");
+        const sampleButton = menu.querySelector("button");
+        if (!sampleItem || !sampleButton) return;
+        const li = sampleItem.cloneNode(false) as HTMLElement;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `${sampleButton.className} docent-copy-frame-json`;
+        const sampleLabel = sampleButton.querySelector("div");
+        const label = document.createElement("div");
+        if (sampleLabel) label.className = sampleLabel.className;
+        const shortName =
+          target.name.length > 28 ? `${target.name.slice(0, 27)}…` : target.name;
+        label.textContent = `Copy semantic JSON — ${shortName}`;
+        button.appendChild(label);
+        button.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          contextExportRef.current?.onCopy(target.id);
+          // Close the menu the way an outside click does: upstream's popover
+          // watches its own full-viewport container for pointerdown (a
+          // window-level Escape or body click never reaches it — measured).
+          document
+            .querySelector(".excalidraw-contextMenuContainer")
+            ?.dispatchEvent(
+              new PointerEvent("pointerdown", { bubbles: true, pointerId: 1 }),
+            );
+        };
+        li.appendChild(button);
+        // First entry, right under the cursor: upstream's menu runs long
+        // (20+ items) and an appended entry can land below the fold.
+        const separator = menu.querySelector("li:has(hr)");
+        menu.insertBefore(li, menu.firstChild);
+        if (separator) menu.insertBefore(separator.cloneNode(true), li.nextSibling);
+      };
+      window.setTimeout(inject, 0);
+    };
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => window.removeEventListener("contextmenu", onContextMenu);
+  }, []);
 
   const handleApi = useCallback(
     (api: ExcalidrawImperativeAPI) => {

@@ -4,7 +4,7 @@ import type { DocentCanvasHandle } from "../adapter";
 import { connectAgentBridge, type AgentBridge } from "../agent/bridge";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
-import { exportScene } from "../export";
+import { exportFrameSidecar, exportScene } from "../export";
 import { OverlayLayer } from "../overlay/OverlayLayer";
 import { OverlayStore } from "../overlay/state";
 import {
@@ -16,6 +16,7 @@ import {
 } from "./scene-file";
 import { exportSceneFile, importSceneFile } from "./desktop-files";
 import { alertDialog } from "./dialogs";
+import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { detailBadges } from "../scene/detailBadges";
 import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
@@ -745,6 +746,47 @@ export function App() {
     drillRef.current.dive(diveElementId);
   }, []);
 
+  // Right-click semantic export (D32). Eligible targets: a frame, or a shape
+  // whose declared detail layer IS a frame — either way the export is a
+  // frame, one tier deep, never the layers nested beneath it.
+  const resolveFrameAt = useCallback((clientX: number, clientY: number) => {
+    const c = canvasRef.current;
+    if (!c) return null;
+    const info = c.elementAtClient(clientX, clientY);
+    if (!info) return null;
+    const frameId =
+      info.detailFrameId ?? (info.type === "frame" ? info.id : null);
+    if (!frameId) return null;
+    const frame = c.getFrameInfo(frameId);
+    return frame ? { id: frame.id, name: frame.name || "detail" } : null;
+  }, []);
+  const copyFrameJson = useCallback((frameSourceId: string) => {
+    const c = canvasRef.current;
+    if (!c) return;
+    void (async () => {
+      try {
+        const { name, sidecar } = exportFrameSidecar(
+          c.getSceneSnapshot(),
+          frameSourceId,
+        );
+        if (!(await copyText(sidecar))) {
+          throw new Error("the clipboard is unavailable here");
+        }
+        const note = `Semantic JSON of “${name}” copied`;
+        setNarration(note);
+        window.setTimeout(
+          () => setNarration((current) => (current === note ? null : current)),
+          2500,
+        );
+      } catch (err) {
+        console.error(err);
+        await alertDialog(
+          `Could not copy semantic JSON: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    })();
+  }, []);
+
   // During a presentation, diveable components advertise themselves with the
   // pointer cursor too — the badge says "there is more", the cursor says
   // "click me". Hit tests are rAF-throttled and only run while presenting.
@@ -834,6 +876,7 @@ export function App() {
           }}
           hideDocentMenuItems={isDesktop}
           detailMarkersVisible={detailMarkers}
+          contextExport={{ resolveFrameAt, onCopy: copyFrameJson }}
         />
         {canvas && (
           <Breadcrumbs

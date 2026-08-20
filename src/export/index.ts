@@ -23,4 +23,5 @@ export function exportScene(snapshot: SceneSnapshot): SceneExport {
 export { buildSceneGraph } from "../scene/graph";
 export { exportMermaid } from "./mermaid";
 export { exportSidecar } from "./sidecar";
+export { exportFrameSidecar } from "./frame";
 export { applyLegend, legendToRecord } from "./legend";
