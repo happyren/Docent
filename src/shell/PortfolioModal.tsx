@@ -4,16 +4,25 @@
  * both. Storage is the deployment's file tree of plain `.excalidraw`
  * files (D17) behind the same-origin store (D18); when the store isn't
  * deployed the modal says so and the file workflows stay untouched.
+ *
+ * A project may instead be bound to a GitHub repository (S14): the GitHub
+ * strip below the scene grid is where that is set up, changed, and undone, and
+ * a bound project wears a ⛓ in the list. Everything else about the modal is
+ * the same either way — the store makes a bound project look like any other.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createProject,
+  deleteBinding,
   deleteProject,
   deleteScene,
+  getBinding,
   listProjects,
   listScenes,
+  putBinding,
   saveScene,
   storeAvailable,
+  type Binding,
   type ProjectInfo,
   type SceneInfo,
 } from "../portfolio/client";
@@ -35,7 +44,10 @@ function SceneThumb({ project, scene }: { project: string; scene: SceneInfo }) {
   useEffect(() => {
     let live = true;
     setSrc(null);
-    portfolioThumbnail(project, scene.name, scene.updatedAt)
+    // The revision the thumbnail cache keys on. A bound project stamps every
+    // scene with the branch's last commit, so any change there re-renders all
+    // of them — and an unknown stamp simply never invalidates.
+    portfolioThumbnail(project, scene.name, scene.updatedAt ?? "unknown")
       .then((url) => live && setSrc(url))
       .catch(() => live && setSrc(""));
     return () => {
@@ -50,6 +62,244 @@ function SceneThumb({ project, scene }: { project: string; scene: SceneInfo }) {
   }
   return (
     <img className="docent-scene-thumb" src={src} alt={`${scene.name} preview`} />
+  );
+}
+
+/** The binding form's fields, all of them optional except owner and repo. */
+const EMPTY_FORM = {
+  owner: "",
+  repo: "",
+  path: "",
+  branch: "",
+  apiBase: "",
+  token: "",
+};
+
+/**
+ * The GitHub strip (S14) for the selected project: connect it to a repository,
+ * change where it points, replace its token, or disconnect it. The token field
+ * is write-only in both directions — the store never sends one back, so an
+ * empty field on an existing binding means "keep the one you have".
+ */
+function GitHubPanel({
+  project,
+  onChanged,
+}: {
+  project: string;
+  onChanged: () => void;
+}) {
+  const [binding, setBinding] = useState<Binding | null | undefined>(undefined);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    setBinding(undefined);
+    setOpen(false);
+    getBinding(project)
+      .then((found) => live && setBinding(found))
+      // A store that cannot answer at all is the modal's problem, not this
+      // strip's: it renders as "not connected" and the buttons still work.
+      .catch(() => live && setBinding(null));
+    return () => {
+      live = false;
+    };
+  }, [project]);
+
+  const edit = (patch: Partial<typeof EMPTY_FORM>) =>
+    setForm((current) => ({ ...current, ...patch }));
+
+  const openForm = () => {
+    setForm({
+      owner: binding?.owner ?? "",
+      repo: binding?.repo ?? "",
+      path: binding?.path ?? "",
+      branch: binding?.branch ?? "",
+      apiBase: binding?.apiBase ?? "",
+      token: "",
+    });
+    setOpen(true);
+  };
+
+  const submit = () => {
+    void (async () => {
+      setBusy(true);
+      try {
+        // A pasted "owner/repo" is the shape people copy out of GitHub's URL
+        // bar, so accept it in either field rather than making them split it.
+        let owner = form.owner.trim();
+        let repo = form.repo.trim();
+        const pasted = (repo.includes("/") ? repo : owner).split("/");
+        if (pasted.length === 2 && pasted[0] && pasted[1]) {
+          [owner, repo] = pasted;
+        }
+        await putBinding(project, {
+          owner,
+          repo,
+          path: form.path.trim(),
+          branch: form.branch.trim(),
+          apiBase: form.apiBase.trim(),
+          token: form.token.trim(),
+        });
+        setBinding(await getBinding(project));
+        setOpen(false);
+        edit({ token: "" });
+        onChanged();
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const disconnect = () => {
+    if (!binding) return;
+    if (
+      !window.confirm(
+        `Disconnect "${project}" from ${binding.owner}/${binding.repo}?\n\n` +
+          "Nothing is deleted on GitHub, and the project's local folder — which " +
+          "may still hold older scenes — comes back as its storage.",
+      )
+    ) {
+      return;
+    }
+    void (async () => {
+      setBusy(true);
+      try {
+        await deleteBinding(project);
+        setBinding(null);
+        setOpen(false);
+        onChanged();
+      } catch (err) {
+        window.alert(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  if (binding === undefined) {
+    return <div className="docent-portfolio-github">GitHub — checking…</div>;
+  }
+
+  return (
+    <div className="docent-portfolio-github">
+      <div className="docent-portfolio-github-head">
+        <span className="docent-portfolio-github-label">GitHub</span>
+        {binding ? (
+          <>
+            <code className="docent-portfolio-github-target">
+              {binding.owner}/{binding.repo}
+              {binding.path ? `/${binding.path}` : ""}@{binding.branch}
+            </code>
+            {!binding.hasToken && (
+              <span className="docent-portfolio-github-warn">
+                no token — scenes cannot be read or written
+              </span>
+            )}
+            <button disabled={busy} onClick={openForm}>
+              Update token…
+            </button>
+            <button disabled={busy} onClick={disconnect}>
+              Disconnect
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="docent-portfolio-meta">
+              Scenes live in this deployment's file tree.
+            </span>
+            <button disabled={busy} onClick={openForm}>
+              Connect to GitHub…
+            </button>
+          </>
+        )}
+      </div>
+      {open && (
+        <div className="docent-portfolio-github-form">
+          <label className="docent-field">
+            Owner
+            <input
+              autoFocus
+              placeholder="acme"
+              value={form.owner}
+              disabled={busy}
+              onChange={(e) => edit({ owner: e.target.value })}
+            />
+          </label>
+          <label className="docent-field">
+            Repository
+            <input
+              placeholder="diagrams"
+              value={form.repo}
+              disabled={busy}
+              onChange={(e) => edit({ repo: e.target.value })}
+            />
+          </label>
+          <label className="docent-field">
+            Folder in the repo
+            <input
+              placeholder="docs/diagrams (blank = repository root)"
+              value={form.path}
+              disabled={busy}
+              onChange={(e) => edit({ path: e.target.value })}
+            />
+          </label>
+          <label className="docent-field">
+            Token
+            <input
+              type="password"
+              autoComplete="off"
+              placeholder={
+                binding?.hasToken
+                  ? "leave blank to keep the current token"
+                  : "fine-grained PAT with Contents: read & write"
+              }
+              value={form.token}
+              disabled={busy}
+              onChange={(e) => edit({ token: e.target.value })}
+            />
+          </label>
+          <details className="docent-portfolio-github-advanced">
+            <summary>Advanced</summary>
+            <div className="docent-portfolio-github-form">
+              <label className="docent-field">
+                Branch
+                <input
+                  placeholder="main"
+                  value={form.branch}
+                  disabled={busy}
+                  onChange={(e) => edit({ branch: e.target.value })}
+                />
+              </label>
+              <label className="docent-field">
+                API base
+                <input
+                  placeholder="https://api.github.com"
+                  value={form.apiBase}
+                  disabled={busy}
+                  onChange={(e) => edit({ apiBase: e.target.value })}
+                />
+              </label>
+            </div>
+          </details>
+          <div className="docent-portfolio-new">
+            <button
+              className="docent-primary"
+              disabled={busy || !form.owner.trim() || !form.repo.trim()}
+              onClick={submit}
+            >
+              {binding ? "Save binding" : "Connect"}
+            </button>
+            <button disabled={busy} onClick={() => setOpen(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -114,7 +364,19 @@ export function PortfolioModal({
       setScenes([]);
       return;
     }
-    listScenes(selected).then(setScenes).catch(fail);
+    listScenes(selected)
+      .then((list) => {
+        setScenes(list);
+        // The projects listing never waits on GitHub, so a bound project's
+        // count there is whatever the store last saw. This listing *is* that —
+        // reconcile the sidebar from it rather than asking again.
+        setProjects((current) =>
+          current.map((p) =>
+            p.id === selected && p.bound ? { ...p, scenes: list.length } : p,
+          ),
+        );
+      })
+      .catch(fail);
   }, [selected]);
 
   // Opened to save: put the caret in the name field with the suggestion
@@ -149,10 +411,17 @@ export function PortfolioModal({
       setSelected(id);
     });
 
-  const removeProject = (id: string, count: number) => {
-    const detail = count ? ` and its ${count} scene${count === 1 ? "" : "s"}` : "";
-    if (!window.confirm(`Delete project "${id}"${detail}? This cannot be undone.`))
-      return;
+  const removeProject = (id: string, count: number, bound?: boolean) => {
+    // A bound project's scenes are in someone's repository, and deleting a
+    // project here must never reach into it — so the confirmation says exactly
+    // what goes and what stays.
+    const question = bound
+      ? `Delete project "${id}"?\n\nIts GitHub connection and its local folder go. ` +
+        "Nothing is deleted on GitHub."
+      : `Delete project "${id}"${
+          count ? ` and its ${count} scene${count === 1 ? "" : "s"}` : ""
+        }? This cannot be undone.`;
+    if (!window.confirm(question)) return;
     void run(async () => {
       await deleteProject(id);
       await refreshProjects();
@@ -248,6 +517,14 @@ export function PortfolioModal({
                     onClick={() => setSelected(p.id)}
                   >
                     <span className="docent-portfolio-name">{p.id}</span>
+                    {p.bound && (
+                      <span
+                        className="docent-portfolio-bound"
+                        title="Scenes live in a GitHub repository"
+                      >
+                        ⛓
+                      </span>
+                    )}
                     <span className="docent-portfolio-meta">
                       {p.scenes} scene{p.scenes === 1 ? "" : "s"}
                     </span>
@@ -257,7 +534,7 @@ export function PortfolioModal({
                       disabled={busy}
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeProject(p.id, p.scenes);
+                        removeProject(p.id, p.scenes, p.bound);
                       }}
                     >
                       ✕
@@ -346,6 +623,15 @@ export function PortfolioModal({
                       Save current scene here
                     </button>
                   </div>
+                  <GitHubPanel
+                    project={selected}
+                    onChanged={() => {
+                      // Binding or unbinding swaps where the scenes come from,
+                      // so both listings are stale the moment it lands.
+                      void refreshProjects().catch(fail);
+                      listScenes(selected).then(setScenes).catch(fail);
+                    }}
+                  />
                 </>
               )}
             </section>

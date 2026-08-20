@@ -17,6 +17,13 @@
 //! counterpart: the system webview has no File System Access API and ignores
 //! anchor downloads, so reading or writing a file outside the portfolio has to
 //! happen here, behind a native dialog.
+//!
+//! A project may be bound to a GitHub repository instead (S14, D27), in which
+//! case its scenes are read and written over GitHub's HTTP API and its local
+//! directory is left alone. The rules for that live in `github.rs`; this file
+//! only routes to them, and holds the one thing the desktop must decide for
+//! itself: where the token file goes (the app's config directory, never the
+//! portfolio).
 
 use std::fs;
 use std::io::{ErrorKind, Read};
@@ -27,6 +34,8 @@ use std::thread::{self, JoinHandle};
 use std::time::UNIX_EPOCH;
 
 use tiny_http::{Header, Method, Request, Response, Server};
+
+use crate::github::{self, Binding, Cache};
 
 const MAX_SCENE_BYTES: usize = 50 * 1024 * 1024;
 /// Import reads whatever file the user pointed at. The scene ceiling would let
@@ -44,6 +53,12 @@ const ALLOWED_ORIGINS: &[&str] = &[
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ];
+
+/// The conflict token a bound scene carries in both directions (S14). Because
+/// the desktop store is cross-origin, it has to be named twice in the CORS
+/// answer — allowed on the way in, exposed on the way out — or the page could
+/// send it and never read it back.
+const SCENE_SHA_HEADER: &str = "X-Docent-Scene-Sha";
 
 /// How the store asks the user for a path. The native implementation lives in
 /// the shell (`src/lib.rs`) rather than here, because a macOS dialog may only
@@ -95,6 +110,15 @@ impl FileDialog for StubDialog {
     }
 }
 
+/// Everything a request needs that is not the request: where the portfolio
+/// lives, where tokens live (deliberately somewhere else), and the process's
+/// GitHub caches.
+struct Context {
+    data_dir: PathBuf,
+    secrets_file: PathBuf,
+    cache: Cache,
+}
+
 /// The running store. Dropping it stops the listener and joins its thread.
 pub struct StoreHandle {
     port: u16,
@@ -123,7 +147,13 @@ impl Drop for StoreHandle {
 }
 
 /// Bind loopback on an ephemeral port and serve `data_dir` until dropped.
-pub fn spawn(data_dir: PathBuf, dialogs: Arc<dyn FileDialog>) -> std::io::Result<StoreHandle> {
+/// `secrets_file` is where GitHub tokens are kept — the caller passes a path
+/// outside `data_dir`, because D27 forbids secrets in the data tree.
+pub fn spawn(
+    data_dir: PathBuf,
+    secrets_file: PathBuf,
+    dialogs: Arc<dyn FileDialog>,
+) -> std::io::Result<StoreHandle> {
     fs::create_dir_all(&data_dir)?;
     let server = Server::http((Ipv4Addr::LOCALHOST, 0))
         .map_err(|err| std::io::Error::other(err.to_string()))?;
@@ -135,14 +165,22 @@ pub fn spawn(data_dir: PathBuf, dialogs: Arc<dyn FileDialog>) -> std::io::Result
     let server = Arc::new(server);
     let worker = {
         let server = Arc::clone(&server);
+        let context = Context {
+            data_dir,
+            secrets_file,
+            cache: Cache::new(),
+        };
         thread::spawn(move || {
             // One request at a time: every handler is a stat, a read, or a
             // rename against the local disk, and a single user's canvas never
             // queues deep enough for a pool to pay for itself. A dialog holds
             // the thread for as long as it is open, which is the point — the
             // user is answering it, and nothing else should proceed meanwhile.
+            // A bound project's handlers reach GitHub instead, which is the
+            // one case where the queue is worth knowing about: a save waits on
+            // the network, and the next request waits on the save.
             for request in server.incoming_requests() {
-                serve(&data_dir, dialogs.as_ref(), request);
+                serve(&context, dialogs.as_ref(), request);
             }
         })
     };
@@ -173,22 +211,40 @@ impl HttpError {
 
 type Result<T> = std::result::Result<T, HttpError>;
 
-/// A successful reply: a status plus a body that is already JSON text.
+/// A successful reply: a status, a body that is already JSON text, and the
+/// headers this particular route adds (only the scene sha, so far).
 struct Reply {
     status: u16,
     json: String,
+    headers: Vec<(&'static str, String)>,
 }
 
 impl Reply {
     fn ok(json: impl Into<String>) -> Self {
+        Self::new(200, json)
+    }
+
+    fn new(status: u16, json: impl Into<String>) -> Self {
         Self {
-            status: 200,
+            status,
             json: json.into(),
+            headers: Vec::new(),
         }
+    }
+
+    fn with_header(mut self, name: &'static str, value: impl Into<String>) -> Self {
+        self.headers.push((name, value.into()));
+        self
     }
 }
 
-fn serve(data_dir: &Path, dialogs: &dyn FileDialog, mut request: Request) {
+impl From<github::Failure> for HttpError {
+    fn from(failure: github::Failure) -> Self {
+        Self::new(failure.status, failure.message)
+    }
+}
+
+fn serve(context: &Context, dialogs: &dyn FileDialog, mut request: Request) {
     let origin = request
         .headers()
         .iter()
@@ -204,7 +260,10 @@ fn serve(data_dir: &Path, dialogs: &dyn FileDialog, mut request: Request) {
                 "Access-Control-Allow-Methods",
                 "GET, POST, PUT, DELETE, OPTIONS",
             ))
-            .with_header(header("Access-Control-Allow-Headers", "content-type"))
+            .with_header(header(
+                "Access-Control-Allow-Headers",
+                &format!("content-type, {SCENE_SHA_HEADER}"),
+            ))
             .with_header(header("Access-Control-Max-Age", "86400"));
         for extra in cors_headers(origin.as_deref()) {
             response = response.with_header(extra);
@@ -213,17 +272,22 @@ fn serve(data_dir: &Path, dialogs: &dyn FileDialog, mut request: Request) {
         return;
     }
 
-    let (status, body) = match dispatch(data_dir, dialogs, origin.as_deref(), &mut request) {
-        Ok(reply) => (reply.status, reply.json),
-        Err(err) => (
-            err.status,
-            serde_json::json!({ "error": err.message }).to_string(),
-        ),
-    };
+    let (status, body, extra_headers) =
+        match dispatch(context, dialogs, origin.as_deref(), &mut request) {
+            Ok(reply) => (reply.status, reply.json, reply.headers),
+            Err(err) => (
+                err.status,
+                serde_json::json!({ "error": err.message }).to_string(),
+                Vec::new(),
+            ),
+        };
 
     let mut response = Response::from_string(body)
         .with_status_code(status)
         .with_header(header("Content-Type", "application/json"));
+    for (name, value) in extra_headers {
+        response = response.with_header(header(name, &value));
+    }
     for extra in cors_headers(origin.as_deref()) {
         response = response.with_header(extra);
     }
@@ -235,6 +299,10 @@ fn cors_headers(origin: Option<&str>) -> Vec<Header> {
     if let Some(origin) = origin {
         if ALLOWED_ORIGINS.contains(&origin) {
             headers.push(header("Access-Control-Allow-Origin", origin));
+            // Without this the page can send the conflict token but never read
+            // the new one back, and every second save would be a false
+            // conflict.
+            headers.push(header("Access-Control-Expose-Headers", SCENE_SHA_HEADER));
         }
     }
     headers
@@ -246,11 +314,12 @@ fn header(name: &str, value: &str) -> Header {
 }
 
 fn dispatch(
-    data_dir: &Path,
+    context: &Context,
     dialogs: &dyn FileDialog,
     origin: Option<&str>,
     request: &mut Request,
 ) -> Result<Reply> {
+    let data_dir = context.data_dir.as_path();
     let method = request.method().clone();
     let segments = path_segments(request.url());
     let part = |i: usize| segments.get(i).map(String::as_str);
@@ -286,20 +355,25 @@ fn dispatch(
     }
 
     if segments.len() == 2 && method == Method::Get {
-        return list_projects(data_dir);
+        return list_projects(context);
     }
 
     if segments.len() == 3 {
         let project = &segments[2];
         if method == Method::Put {
             fs::create_dir_all(project_dir(data_dir, project)?).map_err(internal)?;
-            return Ok(Reply {
-                status: 201,
-                json: serde_json::json!({ "id": project }).to_string(),
-            });
+            return Ok(Reply::new(
+                201,
+                serde_json::json!({ "id": project }).to_string(),
+            ));
         }
         if method == Method::Delete {
             let dir = project_dir(data_dir, project)?;
+            // Deleting a bound project unbinds it and removes the local
+            // directory. Nothing on GitHub is touched — the repository is the
+            // user's, and a portfolio operation must never reach into it
+            // destructively.
+            remove_binding(context, project)?;
             match fs::remove_dir_all(&dir) {
                 Ok(()) => {}
                 // `force: true` in the reference store — deleting what is
@@ -311,15 +385,54 @@ fn dispatch(
         }
     }
 
+    // Binding routes (S14). Every one of them validates the project name
+    // first, so a malformed name never reaches the bindings file either.
+    if segments.len() == 4 && part(3) == Some("binding") {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        if method == Method::Get {
+            let binding = github::load_bindings(data_dir)
+                .remove(project)
+                .ok_or_else(|| {
+                    HttpError::new(404, format!("no GitHub binding for project: {project}"))
+                })?;
+            let has_token = github::token_for(&context.secrets_file, project).is_some();
+            return Ok(Reply::ok(
+                serde_json::to_string(&binding.public(has_token)).map_err(json)?,
+            ));
+        }
+        if method == Method::Put {
+            return put_binding(context, project, &read_body(request)?);
+        }
+        // Idempotent, like the project delete above: unbinding what is already
+        // unbound is a success.
+        if method == Method::Delete {
+            remove_binding(context, project)?;
+            return Ok(Reply::ok(r#"{"ok":true}"#));
+        }
+    }
+
     if segments.len() == 4 && part(3) == Some("scenes") && method == Method::Get {
-        return list_scenes(data_dir, &segments[2]);
+        let project = &segments[2];
+        if let Some((binding, token)) = bound(context, project)? {
+            let scenes = github::list(project, &binding, &token, &context.cache)?;
+            return Ok(Reply::ok(serde_json::to_string(&scenes).map_err(json)?));
+        }
+        return list_scenes(data_dir, project);
     }
 
     if segments.len() == 5 && part(3) == Some("scenes") {
         let (project, scene) = (&segments[2], &segments[4]);
         let file = scene_path(data_dir, project, scene)?;
+        // A bound project's scenes live in the repository; the local directory
+        // stays on disk but is not read, not written, and not listed.
+        let bound = bound(context, project)?;
 
         if method == Method::Get {
+            if let Some((binding, token)) = &bound {
+                let (raw, sha) = github::load(project, binding, token, &context.cache, scene)?;
+                return Ok(Reply::ok(raw).with_header(SCENE_SHA_HEADER, sha));
+            }
             return match fs::read_to_string(&file) {
                 Ok(raw) => Ok(Reply::ok(raw)),
                 Err(_) => Err(HttpError::new(
@@ -330,13 +443,32 @@ fn dispatch(
         }
 
         if method == Method::Put {
+            let header_sha = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv(SCENE_SHA_HEADER))
+                .map(|h| h.value.as_str().to_string());
             let body = read_body(request)?;
             // The store persists .excalidraw files and nothing else (D17) —
-            // reject anything that isn't one, loudly.
+            // reject anything that isn't one, loudly. Bound or not.
             let parsed: serde_json::Value =
                 serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
             if parsed.get("type").and_then(|t| t.as_str()) != Some("excalidraw") {
                 return Err(HttpError::new(400, "body is not an .excalidraw scene"));
+            }
+            if let Some((binding, token)) = &bound {
+                let sha = github::save(
+                    project,
+                    binding,
+                    token,
+                    &context.cache,
+                    scene,
+                    &body,
+                    header_sha.as_deref(),
+                )?;
+                return Ok(Reply::ok(
+                    serde_json::json!({ "ok": true, "sha": sha }).to_string(),
+                ));
             }
             let dir = project_dir(data_dir, project)?;
             if !dir.is_dir() {
@@ -352,6 +484,10 @@ fn dispatch(
         }
 
         if method == Method::Delete {
+            if let Some((binding, token)) = &bound {
+                github::delete(project, binding, token, &context.cache, scene)?;
+                return Ok(Reply::ok(r#"{"ok":true}"#));
+            }
             return match fs::remove_file(&file) {
                 Ok(()) => Ok(Reply::ok(r#"{"ok":true}"#)),
                 Err(_) => Err(HttpError::new(
@@ -363,6 +499,57 @@ fn dispatch(
     }
 
     Err(HttpError::new(404, "not found"))
+}
+
+// ---------------------------------------------------------------------------
+// bindings
+// ---------------------------------------------------------------------------
+
+/// Everything a GitHub call needs, or `None` when the project is a plain local
+/// one. A binding with no token is refused here rather than at GitHub, so the
+/// answer is the same 401 either way and no pointless request leaves the
+/// machine.
+fn bound(context: &Context, project: &str) -> Result<Option<(Binding, String)>> {
+    let Some(binding) = github::load_bindings(&context.data_dir).remove(project) else {
+        return Ok(None);
+    };
+    let token = github::token_for(&context.secrets_file, project)
+        .ok_or_else(|| HttpError::new(401, github::TOKEN_ERROR))?;
+    Ok(Some((binding, token)))
+}
+
+fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
+    let input: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
+    let binding = github::normalize_binding(&input)?;
+    let token = github::normalize_token(&input)?;
+    // A bound project still owns a local directory: it is where it came from,
+    // and where it returns to if the binding is removed.
+    fs::create_dir_all(project_dir(&context.data_dir, project)?).map_err(internal)?;
+    let mut bindings = github::load_bindings(&context.data_dir);
+    bindings.insert(project.to_string(), binding);
+    github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
+    if let Some(token) = token {
+        let mut secrets = github::load_secrets(&context.secrets_file);
+        secrets.insert(project.to_string(), token);
+        github::save_secrets(&context.secrets_file, &secrets).map_err(internal)?;
+    }
+    context.cache.forget_all(project);
+    Ok(Reply::ok(r#"{"ok":true}"#))
+}
+
+/// Unbind: metadata and token go, the local directory and GitHub both stay.
+fn remove_binding(context: &Context, project: &str) -> Result<()> {
+    let mut bindings = github::load_bindings(&context.data_dir);
+    if bindings.remove(project).is_some() {
+        github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
+    }
+    let mut secrets = github::load_secrets(&context.secrets_file);
+    if secrets.remove(project).is_some() {
+        github::save_secrets(&context.secrets_file, &secrets).map_err(internal)?;
+    }
+    context.cache.forget_all(project);
+    Ok(())
 }
 
 fn internal(err: std::io::Error) -> HttpError {
@@ -526,6 +713,14 @@ struct ProjectInfo {
     scenes: usize,
     #[serde(rename = "updatedAt")]
     updated_at: Option<String>,
+    /// Present only on bound projects (S14), so an unbound listing is
+    /// byte-identical to what this store answered before bindings existed.
+    #[serde(skip_serializing_if = "is_false")]
+    bound: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(serde::Serialize)]
@@ -536,13 +731,34 @@ struct SceneInfo {
     size: u64,
 }
 
-fn list_projects(data_dir: &Path) -> Result<Reply> {
+fn list_projects(context: &Context) -> Result<Reply> {
+    let data_dir = context.data_dir.as_path();
     // Created on demand so a fresh profile lists empty instead of erroring.
     fs::create_dir_all(data_dir).map_err(internal)?;
+    let bindings = github::load_bindings(data_dir);
     let mut projects = Vec::new();
     for entry in fs::read_dir(data_dir).map_err(internal)? {
         let entry = entry.map_err(internal)?;
         if !entry.file_type().map_err(internal)?.is_dir() {
+            continue;
+        }
+        let id = entry.file_name().to_string_lossy().into_owned();
+        // The bindings dotfile's own directory is not a project (D27).
+        if id.starts_with('.') {
+            continue;
+        }
+        if bindings.contains_key(&id) {
+            // Deliberately not a network call: the projects listing is the
+            // first thing the modal asks for and must never wait on GitHub.
+            // The count is whatever this process last saw, and zero until it
+            // has seen anything.
+            let scenes = context.cache.count(&id);
+            projects.push(ProjectInfo {
+                id,
+                scenes,
+                updated_at: None,
+                bound: true,
+            });
             continue;
         }
         let mut scenes = 0_usize;
@@ -558,9 +774,10 @@ fn list_projects(data_dir: &Path) -> Result<Reply> {
             }
         }
         projects.push(ProjectInfo {
-            id: entry.file_name().to_string_lossy().into_owned(),
+            id,
             scenes,
             updated_at: updated_at.map(iso8601),
+            bound: false,
         });
     }
     sort_by(&mut projects, |project| &project.id);
@@ -592,7 +809,7 @@ fn list_scenes(data_dir: &Path, project: &str) -> Result<Reply> {
 /// `localeCompare` order, approximated: case-insensitive first so `apples`
 /// sorts before `Bananas` as it does in the reference store, with the raw
 /// string breaking ties so the result stays deterministic (I3 habits).
-fn sort_by<T>(values: &mut [T], key: impl Fn(&T) -> &String) {
+pub(crate) fn sort_by<T>(values: &mut [T], key: impl Fn(&T) -> &String) {
     values.sort_by(|a, b| {
         let (a, b) = (key(a), key(b));
         a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b))

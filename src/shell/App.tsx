@@ -71,7 +71,14 @@ export function App() {
   const [portfolioIntent, setPortfolioIntent] = useState<PortfolioIntent>("browse");
   // When the current scene came from the portfolio, Save writes back to it
   // (S12). Any local open/save-as clears this and returns Save to file mode.
-  const portfolioSourceRef = useRef<{ project: string; scene: string } | null>(null);
+  // `sha` rides along for scenes from a GitHub-bound project (S14): it is what
+  // the scene looked like when it was read, so a save that would land on top of
+  // someone else's commit is refused instead of silently winning.
+  const portfolioSourceRef = useRef<{
+    project: string;
+    scene: string;
+    sha?: string;
+  } | null>(null);
   // Bumped on document changes so selection-derived UI re-reads element intent.
   const [docVersion, setDocVersion] = useState(0);
 
@@ -293,9 +300,19 @@ export function App() {
     const source = portfolioSourceRef.current;
     if (source) {
       try {
-        await savePortfolioScene(source.project, source.scene, prepareSceneForSave());
+        const saved = await savePortfolioScene(
+          source.project,
+          source.scene,
+          prepareSceneForSave(),
+          source.sha,
+        );
+        // The scene now looks like what was just committed, so the next save
+        // guards against that instead of what was originally loaded.
+        portfolioSourceRef.current = { ...source, sha: saved.sha ?? undefined };
         markClean(null);
       } catch (err) {
+        // A 409 lands here: the document stays dirty, deliberately, because the
+        // work is still only in this tab and the message says to reload.
         console.error(err);
         window.alert(
           `Could not save to portfolio: ${err instanceof Error ? err.message : err}`,
@@ -394,10 +411,10 @@ export function App() {
     async (project: string, scene: string) => {
       const handle = canvasRef.current;
       if (!handle) throw new Error("Canvas not ready");
-      const text = await loadPortfolioScene(project, scene);
+      const { text, sha } = await loadPortfolioScene(project, scene);
       await handle.loadSceneBlob(new Blob([text], { type: "application/json" }));
       fsHandleRef.current = null;
-      portfolioSourceRef.current = { project, scene };
+      portfolioSourceRef.current = { project, scene, sha };
       syncSceneUrl({ project, scene });
       markClean(`${project}/${scene}`);
       fitLayerOne();
@@ -406,9 +423,12 @@ export function App() {
   );
   const savePortfolioSceneAs = useCallback(
     async (project: string, scene: string) => {
-      await savePortfolioScene(project, scene, prepareSceneForSave());
+      // No sha: this is "save into that project under this name", which is a
+      // deliberate overwrite of whatever is there, not a write-back of
+      // something read. From here on the scene is tracked, sha and all.
+      const saved = await savePortfolioScene(project, scene, prepareSceneForSave());
       fsHandleRef.current = null;
-      portfolioSourceRef.current = { project, scene };
+      portfolioSourceRef.current = { project, scene, sha: saved.sha ?? undefined };
       syncSceneUrl({ project, scene });
       markClean(`${project}/${scene}`);
     },

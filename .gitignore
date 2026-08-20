@@ -5,5 +5,8 @@ src-tauri/gen/
 tsconfig.tsbuildinfo
 .env
 .deployed-sha
+# GitHub tokens for bound projects (S14) — the store's DOCENT_SECRETS default,
+# which lands here when the store is run from the repository root in dev.
+.docent-secrets.json
 *.local
 .DS_Store

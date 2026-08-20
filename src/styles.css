@@ -527,6 +527,85 @@ body {
   min-width: 0;
 }
 
+/* GitHub binding strip (S14) — one line when connected, an inline form when
+   the user is setting it up. It sits under the scene grid because it is about
+   where the scenes come from, not about any one of them. */
+.docent-portfolio-bound {
+  font-size: 11px;
+  opacity: 0.75;
+}
+
+.docent-portfolio-github {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--docent-muted);
+}
+
+.docent-portfolio-github-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.docent-portfolio-github-label {
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.docent-portfolio-github-target {
+  color: var(--docent-fg);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docent-portfolio-github-warn {
+  color: #ffb86b;
+}
+
+.docent-portfolio-github-head button,
+.docent-portfolio-github button {
+  background: #2a2a30;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.docent-portfolio-github-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.docent-portfolio-github-form input {
+  background: #26262c;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.docent-portfolio-github-advanced {
+  grid-column: 1 / -1;
+}
+
+.docent-portfolio-github-advanced summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
 .docent-portfolio-grid {
   flex: 1;
   overflow-y: auto;

@@ -33,6 +33,7 @@ const WEBVIEW_ORIGIN: &str = "tauri://localhost";
 struct Fixture {
     store: Option<StoreHandle>,
     data_dir: PathBuf,
+    secrets_file: PathBuf,
 }
 
 impl Fixture {
@@ -46,11 +47,20 @@ impl Fixture {
     /// user would have picked.
     fn with_dialog(answer: &str) -> Self {
         let data_dir = std::env::temp_dir().join(unique_name("docent-store"));
-        let store = store::spawn(data_dir.clone(), Arc::new(StubDialog::new(answer)))
-            .expect("store binds loopback");
+        // Outside the data directory, as D27 requires of every deployment.
+        let secrets_file = std::env::temp_dir()
+            .join(unique_name("docent-secrets"))
+            .with_extension("json");
+        let store = store::spawn(
+            data_dir.clone(),
+            secrets_file.clone(),
+            Arc::new(StubDialog::new(answer)),
+        )
+        .expect("store binds loopback");
         Self {
             store: Some(store),
             data_dir,
+            secrets_file,
         }
     }
 
@@ -82,6 +92,7 @@ impl Drop for Fixture {
     fn drop(&mut self) {
         drop(self.store.take());
         let _ = fs::remove_dir_all(&self.data_dir);
+        let _ = fs::remove_file(&self.secrets_file);
     }
 }
 

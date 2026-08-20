@@ -100,6 +100,14 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - Storage is a plain file tree — `data/<project>/<scene>.excalidraw` on a named volume, no database. Anything the store can do, a file manager can too.
 - The **desktop app** (macOS · Windows · Linux) keeps the identical tree under your OS app-data directory — one store contract, two thin implementations, no Docker required. See [Quick start](#quick-start).
 
+### ⛓ GitHub-backed projects
+- Any project can **bind to a GitHub repository** — the diagrams then live next to the code they describe, with the history, review and team access the repository already has.
+- Every save is a **commit** (`docent: update work/checkout`); opening fetches the current file; deleting a scene commits its removal. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
+- Writes carry the file's SHA, so a scene someone changed on GitHub since you opened it is a **loud conflict**, never a silent overwrite: *"scene changed on GitHub since it was loaded — reload it to get the latest."*
+- Works against **GitHub Enterprise** too: the binding carries its own API base (`https://<host>/api/v3`).
+- Auth is a **fine-grained personal access token** with **Contents: read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
+- Bound projects wear a ⛓ in the portfolio list. Unbound projects behave exactly as they always have; nothing reaches the network for them.
+
 ### 🧱 Architecture shapes out of the box
 - A **software-architecture shape library** ships with the app — microservice, database, cache, event bus/pipeline, documents or code, browser, mobile device — merged into Excalidraw's library sidebar at startup, served from the deployment's own origin. Nothing to download, no call out to libraries.excalidraw.com. Attribution below.
 - An **AWS architecture icon set** (249 icons — EC2, S3, Lambda, RDS, VPC, SQS/SNS, EKS, …) ships alongside it, from the same origin. It is ~3.9 MB, so it loads **on first open of the library sidebar** rather than at startup: the canvas comes up as fast as it did without it, and the icons are there the moment you go looking for them. Attribution below.
@@ -360,6 +368,55 @@ an Apple Developer ID. On Windows, SmartScreen shows **More info** →
 The MCP endpoint is deliberately absent from the desktop app — agent *driving*
 remains a self-host capability (S13). For that, run the compose stack above.
 
+### GitHub sync
+
+Bind a project to a repository from **Menu → Portfolio… → GitHub → Connect to
+GitHub…**: owner, repository, the folder inside it (blank = repository root),
+and a token. Branch and API base live under **Advanced** — the API base is what
+makes GitHub Enterprise work (`https://<your-host>/api/v3`).
+
+**The token** is a [fine-grained personal access
+token](https://github.com/settings/personal-access-tokens) scoped to the one
+repository, with exactly one permission:
+
+| Permission | Access |
+|---|---|
+| **Contents** | **Read and write** |
+
+Read-only is enough to open scenes but every save will fail; nothing else is
+needed. A classic PAT with `repo` also works, but grants far more than Docent
+uses.
+
+**Where secrets live.** Binding metadata — owner, repo, path, branch, API base —
+goes in one dotfile at the data root, `data/.docent/bindings.json`, and carries
+no credentials, so a portfolio stays copyable and rsync-able. Tokens are kept
+outside the data tree entirely:
+
+| | Token file |
+|---|---|
+| Self-host | `$DOCENT_SECRETS` (default: `.docent-secrets.json` in the store's working directory) |
+| Desktop | the app's **config** directory — e.g. `~/Library/Application Support/io.github.happyren.docent/github-tokens.json` on macOS — never the portfolio |
+
+If you run the store in Docker, point `DOCENT_SECRETS` at a path **outside** the
+data volume and mount it separately (a file mount, or a second volume), so
+backing up or copying the portfolio can never carry a credential with it:
+
+```yaml
+# in your own override file — mount the token file outside the data volume
+environment:
+  DOCENT_SECRETS: /run/secrets/docent-tokens.json
+volumes:
+  - ./docent-tokens.json:/run/secrets/docent-tokens.json
+```
+
+No API route ever returns a token — the binding endpoint answers
+`hasToken: true/false` and nothing more. Leave the token field blank when
+editing an existing binding to keep the stored one.
+
+**Disconnecting** removes the binding and its token; the repository is untouched
+and the project's local folder takes over again. **Deleting a bound project**
+removes the binding and the local folder — again, nothing on GitHub is deleted.
+
 ### Quality gates
 
 ```bash
@@ -417,6 +474,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 7. **Legend-as-data.** Declared style→meaning mappings are applied by the exporter; unmapped styling is stripped. Styling is only noise if the legend says so.
 8. **Intent is captured, never guessed.** Meaning enters through the legend, `customData` annotations, and frame narratives at authoring time — it is not recoverable from the data model afterward. Narratives are the single source for both export and tour narration.
 9. **Completeness = round-trip comprehension.** "The export carries the diagram's meaning" is defined by a scored question bank in CI (CONSTITUTION.md Q6) — measured, not asserted.
+10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and SHA-based conflict detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
 
 ---
 

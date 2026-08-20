@@ -13,6 +13,7 @@
 //! the self-hosted deployment; the desktop serves the watching and reading
 //! audiences.
 
+pub mod github;
 pub mod store;
 pub mod updates;
 
@@ -447,6 +448,12 @@ pub fn run() {
             // manager can open.
             let data_dir = handle.path().app_data_dir()?.join("portfolio");
 
+            // GitHub tokens (S14) go to the app's *config* directory instead —
+            // a different tree from the portfolio on every platform, so D27's
+            // "no secrets in the data tree" holds even when a user copies,
+            // syncs, or backs up their whole portfolio.
+            let secrets_file = handle.path().app_config_dir()?.join("github-tokens.json");
+
             // The stub exists for environments with no display at all; a real
             // run always gets the platform dialogs.
             let dialogs: Arc<dyn store::FileDialog> = match store::StubDialog::from_env() {
@@ -456,7 +463,7 @@ pub fn run() {
                 }),
             };
 
-            let api_base = match store::spawn(data_dir, dialogs) {
+            let api_base = match store::spawn(data_dir, secrets_file, dialogs) {
                 Ok(store) => {
                     let base = store.base_url();
                     // Held for the process lifetime; dropping it stops the

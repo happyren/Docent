@@ -18,13 +18,47 @@ export interface ProjectInfo {
   id: string;
   scenes: number;
   updatedAt: string | null;
+  /** Present only on projects bound to a GitHub repository (S14). */
+  bound?: boolean;
 }
 
 export interface SceneInfo {
   name: string;
-  updatedAt: string;
+  /**
+   * Null only on a bound project whose branch has no readable commit date —
+   * a local scene always has its mtime.
+   */
+  updatedAt: string | null;
   size: number;
+  /** The blob sha, on bound projects only — the conflict token for a save. */
+  sha?: string;
 }
+
+/** A project's GitHub binding as the store states it — never with the token. */
+export interface Binding {
+  owner: string;
+  repo: string;
+  path: string;
+  branch: string;
+  apiBase: string;
+  hasToken: boolean;
+}
+
+/** What the binding form sends. `token` is write-only: omitted keeps the stored one. */
+export interface BindingInput {
+  owner: string;
+  repo: string;
+  path?: string;
+  branch?: string;
+  apiBase?: string;
+  token?: string;
+}
+
+/**
+ * The header the store answers a bound scene with, and the one a save sends
+ * back to prove it is writing over what it read (S14).
+ */
+const SCENE_SHA_HEADER = "X-Docent-Scene-Sha";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(API_BASE + path, init);
@@ -74,31 +108,77 @@ export function listScenes(project: string): Promise<SceneInfo[]> {
   return request(`/api/projects/${encodeURIComponent(project)}/scenes`);
 }
 
+const bindingUrl = (project: string) =>
+  `/api/projects/${encodeURIComponent(project)}/binding`;
+
+/** The project's binding, or null when it is a plain local project. */
+export async function getBinding(project: string): Promise<Binding | null> {
+  const res = await fetch(API_BASE + bindingUrl(project));
+  if (res.status === 404) return null;
+  const text = await res.text();
+  if (!res.ok) throw new Error(errorFrom(text, res.status));
+  return JSON.parse(text) as Binding;
+}
+
+export function putBinding(
+  project: string,
+  binding: BindingInput,
+): Promise<{ ok: boolean }> {
+  return request(bindingUrl(project), {
+    method: "PUT",
+    body: JSON.stringify(binding),
+  });
+}
+
+export function deleteBinding(project: string): Promise<{ ok: boolean }> {
+  return request(bindingUrl(project), { method: "DELETE" });
+}
+
 const sceneUrl = (project: string, scene: string) =>
   `/api/projects/${encodeURIComponent(project)}/scenes/${encodeURIComponent(scene)}`;
 
-/** Raw scene JSON text (already validated as .excalidraw by the store). */
-export async function loadScene(project: string, scene: string): Promise<string> {
-  const res = await fetch(API_BASE + sceneUrl(project, scene));
-  const text = await res.text();
-  if (!res.ok) {
-    let message = `HTTP ${res.status}`;
-    try {
-      message = String((JSON.parse(text) as { error: string }).error);
-    } catch {
-      // non-JSON error body — keep the status message
-    }
-    throw new Error(message);
+/** The store's `{ error }` body, or the bare status when it sent something else. */
+function errorFrom(text: string, status: number): string {
+  try {
+    return String((JSON.parse(text) as { error: string }).error);
+  } catch {
+    return `HTTP ${status}`;
   }
-  return text;
 }
 
+/**
+ * Raw scene JSON text (already validated as .excalidraw by the store), plus the
+ * conflict token when the project is bound to GitHub. Keep the sha with the
+ * scene: the next save sends it back, and that is what turns a remote change
+ * into a loud 409 instead of a silent overwrite.
+ */
+export async function loadScene(
+  project: string,
+  scene: string,
+): Promise<{ text: string; sha?: string }> {
+  const res = await fetch(API_BASE + sceneUrl(project, scene));
+  const text = await res.text();
+  if (!res.ok) throw new Error(errorFrom(text, res.status));
+  return { text, sha: res.headers.get(SCENE_SHA_HEADER) ?? undefined };
+}
+
+/**
+ * Write the scene back. `sha` is the token `loadScene` returned; without one a
+ * bound save is last-write-wins, with one a remote change answers 409 and the
+ * message says to reload. The answer carries the scene's new sha, so the caller
+ * can keep saving without reloading.
+ */
 export function saveScene(
   project: string,
   scene: string,
   json: string,
-): Promise<{ ok: boolean }> {
-  return request(sceneUrl(project, scene), { method: "PUT", body: json });
+  sha?: string,
+): Promise<{ ok: boolean; sha?: string | null }> {
+  return request(sceneUrl(project, scene), {
+    method: "PUT",
+    body: json,
+    headers: sha ? { [SCENE_SHA_HEADER]: sha } : undefined,
+  });
 }
 
 export function deleteScene(
