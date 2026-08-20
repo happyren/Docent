@@ -1,6 +1,6 @@
 [package]
 name = "docent"
-version = "0.4.2"
+version = "0.5.0"
 description = "Presentation, semantics, and agent-control layer around Excalidraw"
 authors = ["Kaixiang Ren"]
 license = "MIT"
