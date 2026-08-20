@@ -1,6 +1,6 @@
 [package]
 name = "docent"
-version = "0.0.1"
+version = "0.1.0"
 description = "Presentation, semantics, and agent-control layer around Excalidraw"
 authors = ["Kaixiang Ren"]
 license = "MIT"
@@ -28,6 +28,16 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tiny_http = "0.12"
+
+# The update check's one HTTPS request (S13's notify tier — no self-update).
+# Blocking and synchronous, because the check already runs on a thread of its
+# own; an async stack would add a second runtime next to the one Tauri carries
+# for nothing. rustls with the bundled Mozilla roots rather than `native-tls`:
+# it keeps the Linux build to the GTK/webkit prerequisites the README already
+# lists instead of adding an OpenSSL dev package, and behaves identically on
+# all three platforms. `gzip` is dropped — the two fields parsed out of the
+# response are a tag and a URL.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 # Native open/save dialogs. macOS and Windows use their platform APIs
 # unconditionally; on Linux the GTK3 backend is chosen over the default

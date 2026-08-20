@@ -14,6 +14,7 @@
 //! audiences.
 
 pub mod store;
+pub mod updates;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -22,10 +23,14 @@ use std::sync::Arc;
 use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
 
-/// The items Docent contributes to the native menu bar. Every one carries the
-/// id the page dispatches on, so this list is one half of a contract with
-/// `window.__docentMenu` (src/shell/App.tsx) — the ids are matched literally
-/// by the test at the bottom of this file.
+/// The items Docent contributes to the native menu bar. Almost every one
+/// carries the id the page dispatches on, so this list is one half of a
+/// contract with `window.__docentMenu` (src/shell/App.tsx) — those ids are
+/// matched literally by the test at the bottom of this file.
+///
+/// The exception is `CheckUpdates`, which the shell answers itself: it has no
+/// frontend half at all, so it is listed in `RUST_ONLY_IDS` and deliberately
+/// absent from the page's union.
 ///
 /// File reads as it does in a document app, but the document store is the
 /// portfolio: Open browses it, Save writes back into it, and the two items
@@ -44,11 +49,12 @@ enum MenuAction {
     Arrange,
     ExportMermaid,
     ExportSidecar,
+    CheckUpdates,
 }
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 12] = [
+    const ALL: [Self; 13] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -61,10 +67,11 @@ impl MenuAction {
         Self::Arrange,
         Self::ExportMermaid,
         Self::ExportSidecar,
+        Self::CheckUpdates,
     ];
 
     /// Exhaustive by construction: an action cannot reach the menu without an
-    /// id, and an id the page does not know fails the contract test.
+    /// id, and a page-bound id the page does not know fails the contract test.
     const fn id(self) -> &'static str {
         match self {
             Self::New => "new",
@@ -79,6 +86,7 @@ impl MenuAction {
             Self::Arrange => "arrange",
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
+            Self::CheckUpdates => "check-updates",
         }
     }
 
@@ -96,6 +104,7 @@ impl MenuAction {
             Self::Arrange => "Arrange Detail Tiers",
             Self::ExportMermaid => "Mermaid…",
             Self::ExportSidecar => "Semantic JSON…",
+            Self::CheckUpdates => "Check for Updates…",
         }
     }
 
@@ -109,11 +118,14 @@ impl MenuAction {
             Self::SaveAs => Some("CmdOrCtrl+Shift+S"),
             Self::Present => Some("CmdOrCtrl+P"),
             Self::Library => Some("CmdOrCtrl+L"),
+            // Checking for updates is a thing you go looking for, not a thing
+            // you reach for mid-draw, so it claims no chord.
             Self::ExportFile
             | Self::Legend
             | Self::Arrange
             | Self::ExportMermaid
-            | Self::ExportSidecar => None,
+            | Self::ExportSidecar
+            | Self::CheckUpdates => None,
         }
     }
 }
@@ -161,8 +173,45 @@ impl store::FileDialog for NativeDialog {
     }
 }
 
-/// The ids the page answers to, derived from the one list above so the menu
-/// and the event guard cannot drift apart.
+/// The update check's message box, on the same main-thread hop as the file
+/// dialogs above and for the same reason.
+impl updates::MessageDialog for NativeDialog {
+    fn show(&self, outcome: &updates::Outcome) -> bool {
+        // Everything the box needs, resolved before it crosses threads.
+        let title = outcome.title().to_string();
+        let message = outcome.message();
+        let offers_download = outcome.download_url().is_some();
+        self.on_main(move || {
+            let dialog = rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title(title)
+                .set_description(message);
+            let dialog = if offers_download {
+                dialog.set_buttons(rfd::MessageButtons::OkCancelCustom(
+                    updates::OPEN_LABEL.to_string(),
+                    updates::LATER_LABEL.to_string(),
+                ))
+            } else {
+                dialog.set_buttons(rfd::MessageButtons::Ok)
+            };
+            match dialog.show() {
+                rfd::MessageDialogResult::Custom(label) => label == updates::OPEN_LABEL,
+                // Windows renders custom button labels only with rfd's
+                // `common-controls-v6` feature, which this build does not
+                // enable; without it the two-button box degrades to a plain
+                // OK/Cancel one and OK is the affirmative. Guarded on
+                // `offers_download` so the other two outcomes — whose single
+                // OK button only dismisses them — never open anything.
+                rfd::MessageDialogResult::Ok => offers_download,
+                _ => false,
+            }
+        })
+        .unwrap_or(false)
+    }
+}
+
+/// Every id Docent puts in the menu bar, derived from the one list above so the
+/// menu and the event guard cannot drift apart.
 const MENU_IDS: [&str; MenuAction::ALL.len()] = {
     let mut ids = [""; MenuAction::ALL.len()];
     let mut i = 0;
@@ -173,10 +222,25 @@ const MENU_IDS: [&str; MenuAction::ALL.len()] = {
     ids
 };
 
-/// Whether a menu click is Docent's. Predefined items (clipboard, window,
-/// quit) carry ids of their own and are the system's business, not the page's.
+/// The ids the shell answers by itself. The update check is entirely Rust —
+/// there is no page-side handler to dispatch to and none should be invented,
+/// so this id is kept out of `window.__docentMenu`'s union on purpose.
+const RUST_ONLY_IDS: [&str; 1] = [MenuAction::CheckUpdates.id()];
+
+/// Whether a menu click is Docent's at all. Predefined items (clipboard,
+/// window, quit) carry ids of their own and are the system's business.
 fn is_docent_menu_id(id: &str) -> bool {
     MENU_IDS.contains(&id)
+}
+
+fn is_rust_only_menu_id(id: &str) -> bool {
+    RUST_ONLY_IDS.contains(&id)
+}
+
+/// Whether a click is one the page handles: Docent's own ids, minus the ones
+/// the shell answers without ever reaching the webview.
+fn is_frontend_menu_id(id: &str) -> bool {
+    is_docent_menu_id(id) && !is_rust_only_menu_id(id)
 }
 
 fn item(app: &AppHandle, action: MenuAction) -> tauri::Result<MenuItem<Wry>> {
@@ -277,6 +341,22 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
+    // Help exists on every platform now, because the update check lives here.
+    // What differs is About: macOS keeps it in the application menu, so on
+    // macOS this submenu holds the one item and nothing else.
+    let help = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            #[cfg(not(target_os = "macos"))]
+            &about,
+            #[cfg(not(target_os = "macos"))]
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, MenuAction::CheckUpdates)?,
+        ],
+    )?;
+
     Menu::with_items(
         app,
         &[
@@ -303,10 +383,34 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &view,
             &export,
             &window,
-            #[cfg(not(target_os = "macos"))]
-            &Submenu::with_items(app, "Help", true, &[&about])?,
+            // Last on every platform, which is where both conventions put it.
+            &help,
         ],
     )
+}
+
+/// Run a check on a thread of its own. Every step of it is something the UI
+/// thread must not block on: a network round trip, a file write, and finally a
+/// dialog that hops back to the main thread and stays there until the user
+/// answers it.
+fn spawn_update_check(app: AppHandle, trigger: updates::Trigger) {
+    let Ok(state_dir) = app.path().app_data_dir() else {
+        eprintln!("docent: no app-data directory — skipping the update check");
+        return;
+    };
+    let current = app.package_info().version.to_string();
+    // Resolved here rather than inside the check, so the checking code holds no
+    // process-wide state of its own.
+    let endpoint = updates::endpoint();
+    // The same variable the store's file dialogs answer to: a run with no
+    // display records what would have been shown instead of raising it.
+    let dialogs: Box<dyn updates::MessageDialog> = match updates::RecordingDialog::from_env() {
+        Some(stub) => Box::new(stub),
+        None => Box::new(NativeDialog { app }),
+    };
+    std::thread::spawn(move || {
+        updates::check_and_notify(dialogs.as_ref(), &endpoint, &current, &state_dir, trigger);
+    });
 }
 
 pub fn run() {
@@ -314,7 +418,14 @@ pub fn run() {
         .menu(build_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
-            if !is_docent_menu_id(id) {
+            if is_rust_only_menu_id(id) {
+                // Answered here and nowhere else: the update check has no
+                // frontend half, so this click never becomes a `__docentMenu`
+                // call. A menu-initiated check always shows its result.
+                spawn_update_check(app.clone(), updates::Trigger::Menu);
+                return;
+            }
+            if !is_frontend_menu_id(id) {
                 return;
             }
             let Some(window) = app.get_webview_window("main") else {
@@ -380,6 +491,14 @@ pub fn run() {
                 .min_inner_size(960.0, 640.0)
                 .initialization_script(script.as_str())
                 .build()?;
+
+            // With the store up and the window built, ask GitHub whether there
+            // is a newer release — on a background thread, at most once a day,
+            // and silently unless there is one this install has not been told
+            // about. It only ever tells: S13 keeps auto-update out of v1, so
+            // nothing here installs anything. Raised after the window so a
+            // notification has the app behind it rather than an empty desktop.
+            spawn_update_check(handle, updates::Trigger::Startup);
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -388,7 +507,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_docent_menu_id, MenuAction, MENU_IDS};
+    use super::{
+        is_docent_menu_id, is_frontend_menu_id, is_rust_only_menu_id, MenuAction, MENU_IDS,
+        RUST_ONLY_IDS,
+    };
 
     /// The ids `window.__docentMenu` dispatches on (src/shell/App.tsx),
     /// written out literally in the same order as the union there. A rename on
@@ -411,17 +533,46 @@ mod tests {
 
     #[test]
     fn menu_ids_match_the_frontend_contract() {
-        assert_eq!(MENU_IDS, FRONTEND_IDS);
+        // The page's half of the contract is every menu id *except* the ones
+        // the shell answers itself; those have no handler over there by
+        // design, so holding the page to them would be asking for a stub.
+        let dispatched: Vec<&str> = MENU_IDS
+            .into_iter()
+            .filter(|id| is_frontend_menu_id(id))
+            .collect();
+        assert_eq!(dispatched, FRONTEND_IDS);
     }
 
     #[test]
-    fn every_menu_item_reaches_the_page() {
+    fn every_menu_item_is_answered_by_exactly_one_side() {
         for action in MenuAction::ALL {
+            let id = action.id();
             assert!(
-                is_docent_menu_id(action.id()),
+                is_docent_menu_id(id),
                 "{action:?} would click into the void"
             );
+            // Rust-only or page-bound, never both and never neither: an item
+            // that is both would be handled twice, and one that is neither is
+            // a menu entry that does nothing.
+            assert_ne!(
+                is_rust_only_menu_id(id),
+                is_frontend_menu_id(id),
+                "{action:?} must be answered by exactly one side"
+            );
         }
+    }
+
+    #[test]
+    fn the_update_check_never_reaches_the_page() {
+        let id = MenuAction::CheckUpdates.id();
+        assert_eq!(RUST_ONLY_IDS, [id]);
+        assert!(is_docent_menu_id(id), "it is still Docent's own item");
+        assert!(is_rust_only_menu_id(id));
+        assert!(!is_frontend_menu_id(id), "it has no `__docentMenu` handler");
+        assert!(
+            !FRONTEND_IDS.contains(&id),
+            "adding it to the page's union would invent a handler that should not exist"
+        );
     }
 
     #[test]
@@ -429,6 +580,8 @@ mod tests {
         // Predefined items get numeric ids from the menu backend.
         assert!(!is_docent_menu_id("1000"));
         assert!(!is_docent_menu_id(""));
+        assert!(!is_frontend_menu_id("1000"));
+        assert!(!is_rust_only_menu_id("1000"));
     }
 
     #[test]

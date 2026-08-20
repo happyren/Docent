@@ -295,6 +295,11 @@ touring.
 Installers (dmg / msi / nsis / deb) are attached alongside for those who
 prefer them. A release is cut by pushing a `v*` tag.
 
+The installed app checks GitHub for a newer release once a day, and on demand
+from **Help → Check for Updates…**, then points you at the
+[release page](https://github.com/happyren/Docent/releases) to download it —
+it never updates itself.
+
 The same canvas in a native window — a [Tauri](https://v2.tauri.app) shell around
 the same SPA build, with the portfolio store running natively inside the app
 (S13). No Docker, no Node, no browser tab.
