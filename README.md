@@ -274,8 +274,16 @@ touring.
 **Download and run — no installation** — from the
 [Releases tab](https://github.com/happyren/Docent/releases):
 
-- **macOS** — `Docent_*_macos_universal_portable.zip` (Apple Silicon + Intel):
-  unzip, double-click. Unsigned for now — see the note below.
+- **macOS** (Apple Silicon + Intel) — the builds are unsigned for now, and
+  current macOS blocks unsigned browser downloads with no Open Anyway offered.
+  Install from Terminal instead — quarantine is only attached by browsers, so
+  this path has no security prompts at all:
+
+  ```bash
+  curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip && ditto -x -k /tmp/Docent.zip /Applications && open /Applications/Docent.app
+  ```
+
+  (Browser-downloaded zip instead? Clear the flag once: `xattr -cr Docent.app`.)
 - **Windows** — `Docent_*_windows_portable.zip`: a single `Docent` exe, no
   installer. Needs the WebView2 runtime, preinstalled on Windows 11 and
   current Windows 10; on older machines use the NSIS installer attached to
@@ -317,17 +325,15 @@ uses, rooted in the OS app-data directory:
 | Linux | `~/.local/share/io.github.happyren.docent/portfolio` |
 
 **The builds are unsigned for now.** Recent macOS releases hard-block unsigned
-downloads — the app may even claim to be "damaged" (that's the quarantine flag,
-not actual damage) and right-click → Open no longer bypasses it. Two ways in:
-
-- attempt to open it once, then **System Settings → Privacy & Security** →
-  scroll to the *"Docent" was blocked* notice → **Open Anyway**; or
-- clear the quarantine flag in a terminal:
-  `xattr -cr /Applications/Docent.app` (adjust the path to where you put it).
-
-Building on your own machine (`pnpm desktop:build`) produces an app with no
-quarantine flag at all — it opens with a plain double-click. On Windows,
-SmartScreen shows **More info** → **Run anyway**.
+browser downloads — the app claims to be "damaged" (that's the quarantine
+flag, not actual damage), right-click → Open doesn't bypass it, and Open
+Anyway is only offered to Developer-ID-signed apps, so it never appears.
+The paths that work: the Terminal install above (curl downloads carry no
+quarantine flag), clearing the flag on a browser download with
+`xattr -cr Docent.app`, or building locally (`pnpm desktop:build`) — local
+builds are never quarantined. The permanent fix is code signing, which needs
+an Apple Developer ID. On Windows, SmartScreen shows **More info** →
+**Run anyway**.
 
 The MCP endpoint is deliberately absent from the desktop app — agent *driving*
 remains a self-host capability (S13). For that, run the compose stack above.
