@@ -1,0 +1,364 @@
+name: Release train
+
+# The nightly release train (D30, relocated home by D36): everything this
+# repository shows in its Actions tab runs on the evening schedule, never on
+# push — so the history is builds, not keystrokes. Each night that master
+# carries commits the latest release lacks, the train gates the tree, bumps
+# the semantic version (patch unless a commit message line starts [minor] or
+# [major]), commits the bump, tags, builds every desktop platform, publishes
+# the GitHub Release, and deploys docs/ to GitHub Pages. A tidy job keeps
+# only a week of run history.
+#
+# Manual dispatch can force a bump level, or run with publish off — a
+# build-only dry run that publishes nothing.
+
+on:
+  schedule:
+    - cron: "30 7 * * *"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (auto: patch unless [minor]/[major] markers appear)"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+      publish:
+        description: "Push the bump + tag and publish the release (off = build-only dry run)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    name: Gate & version
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      proceed: ${{ steps.plan.outputs.proceed }}
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - name: Store contract tests
+        working-directory: src-tauri
+        run: cargo test
+
+      # Q6 round-trip comprehension: active when the API key secret is
+      # configured, silently skipped otherwise (still enforced locally via
+      # pnpm comprehension).
+      - name: Comprehension eval (Q6)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY secret not configured — skipping (Q6 still enforced locally via pnpm comprehension)."
+            exit 0
+          fi
+          node scripts/comprehension-eval.mjs
+
+      - name: Decide the version
+        id: plan
+        env:
+          BUMP_INPUT: ${{ inputs.bump || 'auto' }}
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish == true }}
+        run: |
+          set -euo pipefail
+          LAST=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          COUNT=$(git rev-list --count "$LAST"..HEAD)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "Nothing new since $LAST — no release tonight."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          LEVEL="$BUMP_INPUT"
+          if [ "$LEVEL" = "auto" ]; then
+            # Line-anchored on purpose: only a line that *starts* with the
+            # marker escalates, so prose that merely mentions the convention
+            # can never trigger a bump.
+            LOG=$(git log "$LAST"..HEAD --format=%B)
+            if grep -Eq '^[[:space:]]*\[major\]' <<<"$LOG"; then LEVEL=major
+            elif grep -Eq '^[[:space:]]*\[minor\]' <<<"$LOG"; then LEVEL=minor
+            else LEVEL=patch; fi
+          fi
+          IFS=. read -r MA MI PA <<<"${LAST#v}"
+          case "$LEVEL" in
+            major) MA=$((MA+1)); MI=0; PA=0 ;;
+            minor) MI=$((MI+1)); PA=0 ;;
+            patch) PA=$((PA+1)) ;;
+          esac
+          VERSION="$MA.$MI.$PA"
+          echo "$LAST + $LEVEL ($COUNT commits) -> $VERSION (publish=$PUBLISH)"
+          {
+            echo "proceed=true"
+            echo "publish=$PUBLISH"
+            echo "version=$VERSION"
+            echo "tag=v$VERSION"
+            echo "ref=$([ "$PUBLISH" = "true" ] && echo "v$VERSION" || git rev-parse HEAD)"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "LAST=$LAST"
+            echo "COUNT=$COUNT"
+            echo "VERSION=$VERSION"
+          } >> "$GITHUB_ENV"
+
+      # The only step that mutates the repository before the builds: the
+      # version-bump commit and its tag. Stamped after hours (Sydney) and
+      # strictly after the parent commit's stamp, matching the repo's record.
+      - name: Bump, tag, push
+        if: steps.plan.outputs.proceed == 'true' && steps.plan.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          v = os.environ["VERSION"]
+          p = pathlib.Path("package.json")
+          d = json.loads(p.read_text())
+          d["version"] = v
+          p.write_text(json.dumps(d, indent=2, ensure_ascii=False) + "\n")
+          t = pathlib.Path("src-tauri/Cargo.toml")
+          t.write_text(re.sub(r'(?m)^version = "[^"]+"', f'version = "{v}"', t.read_text(), count=1))
+          l = pathlib.Path("src-tauri/Cargo.lock")
+          l.write_text(re.sub(r'(?m)^(name = "docent"\nversion = )"[^"]+"', rf'\g<1>"{v}"', l.read_text(), count=1))
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          PARENT=$(git log -1 --format=%ct)
+          NOW=$(date +%s)
+          STAMP=$(( NOW > PARENT + 60 ? NOW : PARENT + 60 ))
+          H=$(TZ=Australia/Sydney date -d "@$STAMP" +%-H)
+          if [ "$H" -ge 9 ] && [ "$H" -lt 17 ]; then
+            DAY=$(TZ=Australia/Sydney date -d "@$STAMP" +%F)
+            STAMP=$(date -d "TZ=\"Australia/Sydney\" $DAY 17:30:00" +%s)
+            if [ "$STAMP" -le "$PARENT" ]; then STAMP=$((PARENT + 60)); fi
+          fi
+          export GIT_AUTHOR_DATE="$STAMP +1000" GIT_COMMITTER_DATE="$STAMP +1000"
+          {
+            echo "Docent $VERSION"
+            echo
+            echo "Nightly release train: $COUNT change(s) since $LAST."
+            echo
+            git log "$LAST"..HEAD --format='- %s' | head -20
+          } > /tmp/msg
+          git commit -aF /tmp/msg
+          git tag "v$VERSION"
+          git push origin HEAD:master "v$VERSION"
+
+  bundle:
+    name: ${{ matrix.label }}
+    needs: decide
+    if: needs.decide.outputs.proceed == 'true'
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.decide.outputs.tag }}
+      VERSION: ${{ needs.decide.outputs.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One bundle for both Mac architectures; the runner is arm64, so the
+          # Intel half needs its target added explicitly.
+          - platform: macos-latest
+            label: macOS
+            args: --target universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            label: Linux
+            args: ""
+            rust-targets: ""
+          - platform: windows-latest
+            label: Windows
+            args: ""
+            rust-targets: ""
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.decide.outputs.ref }}
+
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Store contract tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Build and publish into the release
+        if: needs.decide.outputs.publish == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          tagName: ${{ needs.decide.outputs.tag }}
+          releaseName: "Docent ${{ needs.decide.outputs.tag }}"
+          releaseDraft: false
+          releaseCommitish: master
+          releaseBody: |
+            Download, unzip, run — no installation:
+
+            - **macOS** (Apple Silicon + Intel): the build is unsigned for now, and current macOS blocks unsigned browser downloads outright — no Open Anyway is offered. Either install from Terminal (no security prompts at all, because quarantine is only attached by browsers):
+
+              ```
+              curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip && ditto -x -k /tmp/Docent.zip /Applications && open /Applications/Docent.app
+              ```
+
+              or, after a browser download of `Docent_*_macos_universal_portable.zip`, clear the flag once: `xattr -cr Docent.app`.
+            - **Windows**: `Docent_*_windows_portable.zip` — a single exe; needs the WebView2 runtime, preinstalled on Windows 11 and current Windows 10. Older machines: use the NSIS installer below instead. SmartScreen: More info → Run anyway.
+            - **Linux**: the AppImage is the no-install option (`chmod +x`, run).
+
+            Installers (dmg / msi / nsis / deb) are attached for those who prefer them.
+
+            Docent is built on [Excalidraw](https://github.com/excalidraw/excalidraw) — full third-party licenses ship inside every bundle.
+
+      - name: Build only (dry run)
+        if: needs.decide.outputs.publish != 'true'
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ matrix.args }}
+
+      # Download-and-run zips (the release's headline assets). ditto keeps
+      # the .app's symlinks and permissions; a plain zip tool would not.
+      - name: Portable zip (macOS)
+        if: needs.decide.outputs.publish == 'true' && matrix.platform == 'macos-latest'
+        run: |
+          ditto -c -k --keepParent \
+            "src-tauri/target/universal-apple-darwin/release/bundle/macos/Docent.app" \
+            "Docent_${VERSION}_macos_universal_portable.zip"
+          # Stable-named twin: keeps the releases/latest/download URL evergreen,
+          # which the README's no-quarantine terminal install depends on.
+          cp "Docent_${VERSION}_macos_universal_portable.zip" "Docent_macos_universal_portable.zip"
+          gh release upload "$TAG" \
+            "Docent_${VERSION}_macos_universal_portable.zip" \
+            "Docent_macos_universal_portable.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Evergreen AppImage name (Linux)
+        if: needs.decide.outputs.publish == 'true' && matrix.platform == 'ubuntu-22.04'
+        run: |
+          # Stable-named twin so the site's Linux button never goes stale.
+          cp "src-tauri/target/release/bundle/appimage/Docent_${VERSION}_amd64.AppImage" "Docent_amd64.AppImage"
+          gh release upload "$TAG" "Docent_amd64.AppImage" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Portable zip (Windows)
+        if: needs.decide.outputs.publish == 'true' && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $zip = "Docent_$($env:VERSION)_windows_portable.zip"
+          Compress-Archive -Path "src-tauri/target/release/docent.exe" -DestinationPath $zip
+          Copy-Item $zip "Docent_windows_portable.zip"
+          gh release upload $env:TAG $zip "Docent_windows_portable.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/upload-artifact@v4
+        if: needs.decide.outputs.publish != 'true'
+        with:
+          name: docent-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            src-tauri/target/release/bundle/**/*
+            src-tauri/target/universal-apple-darwin/release/bundle/**/*
+
+  site:
+    name: Deploy the site
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'schedule' || inputs.publish == true
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  tidy:
+    name: Keep a week of history
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+    steps:
+      - name: Delete runs older than seven days
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          CUTOFF=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh api --paginate "repos/${{ github.repository }}/actions/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.status == \"completed\" and .created_at < \"$CUTOFF\") | .id" |
+          while read -r run; do
+            gh api -X DELETE "repos/${{ github.repository }}/actions/runs/$run" && echo "deleted $run"
+          done
