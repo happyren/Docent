@@ -7,7 +7,8 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
-import { layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
+import { columnsPerBand, edgeLabelSize, layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
+import { absolutePoints, polylineThroughBox, routeEdge } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
 
 const base = {
@@ -235,6 +236,126 @@ describe("no crossings (D66)", () => {
     const { findings } = lint(tangled);
     expect(findings.some((f) => f.message.includes("arrow crossing"))).toBe(true);
     expect(lint(snapshot).findings.some((f) => f.message.includes("crossing"))).toBe(false);
+  });
+});
+
+describe("an edge is as long as its words (D70)", () => {
+  it("keeps the gap after a feeder at least as wide as the edge label", () => {
+    const label = "hygiene survivors of the weekly pass";
+    const room = edgeLabelSize(label, 16).width;
+    expect(room).toBeGreaterThan(100);
+    const frame = { x: 0, y: 0, width: 1200, height: 400 };
+    const anchor = { x: 40, y: 100, width: 160, height: 80 };
+    const placed = placeInFrame(frame, [anchor], { width: 160, height: 80 }, anchor, null, room);
+    expect(placed.x - (anchor.x + anchor.width)).toBeGreaterThanOrEqual(room);
+    // Through the planner: the new node lands after its feeder by the label's width.
+    const sparse = snapshotFromRawElements(raw.filter((el) => !["orders", "orders_t", "db", "db_t", "e1", "e2"].includes(el.id as string)) as never);
+    const result = plan(
+      [
+        { op: "add_node", ref: "$n", label: "Tradeable", kind: "service", frame: "F", intents: ["x"] },
+        { op: "add_edge", from: "gateway", to: "$n", label },
+      ],
+      sparse,
+      idSource(3),
+    );
+    const node = result.write.shapes![0];
+    const gateway = sparse.elements.find((el) => el.id === "gateway")!;
+    expect(node.y).toBe(gateway.y);
+    expect(node.x - (gateway.x + gateway.width)).toBeGreaterThanOrEqual(room);
+  });
+
+  it("widens the column gap of a laid-out frame to its widest label", () => {
+    const sizes = new Map(graph.nodes.map((n) => [n.id, { width: 160, height: 80 }]));
+    const wide = layeredLayout(graph.nodes, graph.edges, sizes, { x: 0, y: 0 }, {
+      labelSize: (e) => (e.id === graph.edges[0].id ? { width: 300, height: 20 } : { width: 0, height: 0 }),
+    });
+    const ordered = [...wide.values()].sort((a, b) => a.x - b.x);
+    expect(ordered[1].x - (ordered[0].x + ordered[0].width)).toBeGreaterThanOrEqual(300);
+    expect(ordered[2].x - (ordered[1].x + ordered[1].width)).toBe(60);
+  });
+});
+
+describe("long flows turn (D71)", () => {
+  it("folds a long chain into balanced bands that alternate direction", () => {
+    expect(columnsPerBand(4)).toBe(4);
+    expect(columnsPerBand(5)).toBe(5);
+    expect(columnsPerBand(8)).toBe(4);
+    expect(columnsPerBand(10)).toBe(5);
+    const n = 8;
+    const nodes = Array.from({ length: n }, (_, i) => ({ id: `s${i}`, bounds: { x: i * 10, y: 0, width: 160, height: 80 } })) as never[];
+    const edges = Array.from({ length: n - 1 }, (_, i) => ({ id: `e${i}`, from: `s${i}`, to: `s${i + 1}`, label: null })) as never[];
+    const sizes = new Map(Array.from({ length: n }, (_, i) => [`s${i}`, { width: 160, height: 80 }]));
+    const boxes = layeredLayout(nodes, edges, sizes, { x: 0, y: 0 });
+    const at = (i: number) => boxes.get(`s${i}`)!;
+    // First band left to right, on one row.
+    for (let i = 0; i < 3; i++) expect(at(i).x).toBeLessThan(at(i + 1).x);
+    for (let i = 0; i < 4; i++) expect(at(i).y).toBe(0);
+    // Second band below, right to left, starting under the turn.
+    expect(at(4).y).toBeGreaterThan(at(3).y + 80);
+    expect(at(4).x + at(4).width).toBe(at(3).x + at(3).width);
+    for (let i = 4; i < 7; i++) expect(at(i).x).toBeGreaterThan(at(i + 1).x);
+    // Compact: about half the width of one long row.
+    const width = Math.max(...[...boxes.values()].map((b) => b.x + b.width));
+    expect(width).toBeLessThan(n * 220 * 0.6);
+  });
+
+  it("keeps a short flow on one row", () => {
+    const sizes = new Map(graph.nodes.map((n) => [n.id, { width: 160, height: 80 }]));
+    const boxes = layeredLayout(graph.nodes, graph.edges, sizes, { x: 0, y: 0 });
+    expect(new Set([...boxes.values()].map((b) => b.y)).size).toBe(1);
+  });
+});
+
+describe("an edge never cuts through a component (D72)", () => {
+  const from = { x: 0, y: 0, width: 160, height: 80 };
+  const to = { x: 600, y: 0, width: 160, height: 80 };
+  const between = { x: 300, y: -20, width: 160, height: 120 };
+
+  it("keeps a clear straight line, and routes around what is in the way", () => {
+    expect(routeEdge(from, to, [{ x: 300, y: 300, width: 160, height: 80 }])).toBeNull();
+    const via = routeEdge(from, to, [between])!;
+    expect(via).not.toBeNull();
+    expect(via.length).toBeGreaterThanOrEqual(2);
+    // Orthogonal: each leg is horizontal or vertical.
+    for (let i = 0; i + 1 < via.length; i++) expect(via[i][0] === via[i + 1][0] || via[i][1] === via[i + 1][1]).toBe(true);
+    // Outside every box, and through none of them.
+    const line = [[80, 40] as [number, number], ...via, [680, 40] as [number, number]];
+    expect(polylineThroughBox(line, between)).toBe(false);
+    for (const pt of via) {
+      expect(pt[0] < from.x || pt[0] > from.x + from.width || pt[1] < from.y || pt[1] > from.y + from.height).toBe(true);
+    }
+    // Deterministic.
+    expect(routeEdge(from, to, [between])).toEqual(via);
+  });
+
+  it("gives a planned edge its turning points, and the simulated scene is clean", () => {
+    // `gateway` and `db` have `orders` between them in the fixture.
+    const result = plan([{ op: "add_edge", from: "gateway", to: "db", label: "direct" }], snapshot, idSource(5));
+    const edge = result.write.arrows![0];
+    expect(edge.via).toBeDefined();
+    expect(edge.via!.length).toBeGreaterThanOrEqual(2);
+    expect(result.notes).toContain("1 edge routed around components");
+    const after = simulate(snapshot, result.write);
+    expect(lint(after).findings.some((f) => f.message.includes("passes through"))).toBe(false);
+    const el = after.elements.find((e) => e.id === edge.id)!;
+    const orders = snapshot.elements.find((e) => e.id === "orders")!;
+    expect(polylineThroughBox(absolutePoints(el.x, el.y, el.points!), orders, 2)).toBe(false);
+  });
+
+  it("re-routes the edges of a frame it lays out, and the lint names a pass-through", () => {
+    // A straight hand-drawn arrow from the gateway through Orders to Postgres.
+    const through = snapshotFromRawElements([
+      ...raw,
+      { ...arrow("e3", "gateway", "db"), x: 200, y: 140, width: 440, height: 0, points: [[0, 0], [440, 0]] },
+    ] as never);
+    const { findings } = lint(through);
+    expect(findings.some((f) => f.message.includes("API Gateway → Postgres passes through Orders"))).toBe(true);
+    // Laying the frame out moves its components and re-routes that edge.
+    const result = plan([{ op: "layout", frame: "F" }], through, idSource(7));
+    const viaPatch = result.write.patches!.find((p) => p.id === "e3");
+    expect(viaPatch?.via).toBeDefined();
+    const after = simulate(through, result.write);
+    expect(lint(after).findings.some((f) => f.message.includes("passes through"))).toBe(false);
   });
 });
 

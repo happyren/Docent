@@ -12,7 +12,8 @@ import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, Writ
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import { countCrossings, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
+import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
+import { absolutePoints, passesThrough, routeEdge, type Point } from "./route";
 import { DEFAULT_STYLE, freshFill, houseStyle, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
@@ -381,15 +382,19 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const style: WriteStyle = { ...look.style, ...(op.style ?? {}) };
         const size = sizeForLabel(label, style.fontSize, shape);
         let anchor: Box | null = null;
+        // The gap from the anchor is at least the words on the edge between them (D70).
+        const edgesHere = op.ref
+          ? ops.slice(i + 1).filter((o): o is AddEdge => o.op === "add_edge" && (o.to === op.ref || o.from === op.ref))
+          : [];
+        const labelRoom = edgesHere.reduce((w, o) => Math.max(w, edgeLabelSize(o.label, house.arrow.style.fontSize).width), 0);
         if (op.after) {
           const afterId = resolve(op.after, at, ["node"]);
           if (afterId) anchor = boxOf(afterId);
         } else if (op.ref) {
           // No `after`: the column after every feeder the batch names, at
           // the feeders' mean row (D66) — never merely right of the last one.
-          const feeders = ops
-            .slice(i + 1)
-            .filter((o): o is AddEdge => o.op === "add_edge" && o.to === op.ref)
+          const feeders = edgesHere
+            .filter((o) => o.to === op.ref)
             .map((o) => (o.from.startsWith("$") ? ids[o.from] : sourceOf(graph, o.from)?.sourceId))
             .map((id) => (id ? boxOf(id) : null))
             .filter((b): b is Box => b !== null);
@@ -406,6 +411,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           size,
           anchor,
           frameId === null && legendArea ? legendArea.y + legendArea.height : null,
+          labelRoom,
         );
         noteGrow(frameId, box);
         const id = nextId();
@@ -587,7 +593,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const sizes = new Map(members.map((n) => [n.id, { width: n.bounds.width, height: n.bounds.height }]));
         const fb = frameSource ? (grownFrames.get(frameSource) ?? frameBox(frameSource)) : null;
         const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: Math.min(...members.map((m) => m.bounds.x)), y: Math.min(...members.map((m) => m.bounds.y)) };
-        const boxes = layeredLayout(members, graph.edges, sizes, origin);
+        const boxes = layeredLayout(members, graph.edges, sizes, origin, { labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize) });
         for (const n of members) {
           const box = boxes.get(n.id);
           if (!box) continue;
@@ -618,11 +624,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const nodes = members.map(([id, c]) => ({ id, bounds: { x: c.x, y: c.y, width: c.width, height: c.height } })) as unknown as GraphNode[];
     const edges = write.arrows
       .filter((a) => created.has(a.from) && created.has(a.to))
-      .map((a) => ({ id: a.id, from: a.from, to: a.to })) as unknown as GraphEdge[];
+      .map((a) => ({ id: a.id, from: a.from, to: a.to, label: a.label })) as unknown as GraphEdge[];
     const sizes = new Map(members.map(([id, c]) => [id, { width: c.width, height: c.height }]));
     const fb = grownFrames.get(frameId) ?? frameBox(frameId);
     const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: 0, y: 0 };
-    const boxes = layeredLayout(nodes, edges, sizes, origin);
+    const boxes = layeredLayout(nodes, edges, sizes, origin, { labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize) });
     // Start the frame from its own origin again: what grew it is being re-placed.
     let grown: Box = fb ? { x: fb.x, y: fb.y, width: 0, height: 0 } : { x: 0, y: 0, width: 0, height: 0 };
     for (const [id, c] of members) {
@@ -665,6 +671,46 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
     write.frames.push({ id: frame.id, name: frame.name, x: frame.x, y: frame.y, width: frame.width, height: frame.height, meaning: frame.meaning });
   }
+
+  // Every edge the batch draws or moves is routed around what lies between
+  // its ends (D72): the final boxes of every component, and the legend.
+  const moved = new Set(write.patches.filter((p) => p.x !== undefined || p.y !== undefined).map((p) => p.id));
+  const finalBoxes = new Map<string, Box & { id: string }>();
+  for (const n of graph.nodes) {
+    if (removed.has(n.sourceId)) continue;
+    const patch = write.patches.find((p) => p.id === n.sourceId);
+    finalBoxes.set(n.sourceId, { id: n.sourceId, x: patch?.x ?? n.bounds.x, y: patch?.y ?? n.bounds.y, width: n.bounds.width, height: n.bounds.height });
+  }
+  for (const [id, c] of created) if (c.type !== "arrow") finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height });
+  if (legendArea) finalBoxes.set("__legend", { id: "__legend", ...legendArea });
+  const obstacles = [...finalBoxes.values()];
+  const routeBetween = (from: string, to: string): Point[] | null => {
+    const a = finalBoxes.get(from);
+    const b = finalBoxes.get(to);
+    if (!a || !b) return null;
+    return routeEdge(a, b, obstacles.filter((o) => o.id !== from && o.id !== to));
+  };
+  let routed = 0;
+  for (const arrow of write.arrows) {
+    const via = routeBetween(arrow.from, arrow.to);
+    if (via) {
+      arrow.via = via;
+      routed += 1;
+    }
+  }
+  for (const e of graph.edges) {
+    if (!e.from || !e.to || removed.has(e.sourceId)) continue;
+    const from = graph.nodes.find((n) => n.id === e.from)?.sourceId;
+    const to = graph.nodes.find((n) => n.id === e.to)?.sourceId;
+    if (!from || !to || (!moved.has(from) && !moved.has(to))) continue;
+    const via = routeBetween(from, to);
+    const patch = write.patches.find((p) => p.id === e.sourceId);
+    if (patch) patch.via = via ?? [];
+    else write.patches.push({ id: e.sourceId, via: via ?? [] });
+    if (!touched.includes(e.sourceId)) touched.push(e.sourceId);
+    if (via) routed += 1;
+  }
+  if (routed) notes.push(`${routed} edge${routed === 1 ? "" : "s"} routed around components`);
 
   if (problems.length) throw new PlanError(problems);
   const result: SceneWrite = {};
@@ -796,10 +842,7 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     const bx = b ? b.x + b.width / 2 : 0;
     const by = b ? b.y + b.height / 2 : 0;
     const el = blank(arrow.id, "arrow", { x: ax, y: ay, width: Math.abs(bx - ax), height: Math.abs(by - ay) }, arrow.style, arrow.frameId);
-    el.points = [
-      [0, 0],
-      [bx - ax, by - ay],
-    ];
+    el.points = [[0, 0], ...(arrow.via ?? []).map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
     el.startBindingId = arrow.from;
     el.endBindingId = arrow.to;
     el.docent = docentFromMeaning(arrow.meaning, el.docent);
@@ -813,6 +856,22 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     }
     for (const end of [a, b]) if (end) end.boundElements = [...end.boundElements, { id: arrow.id, type: "arrow" }];
     out.push(el);
+  }
+  // Re-routed arrows follow their ends' final places.
+  for (const patch of write.patches ?? []) {
+    if (patch.via === undefined) continue;
+    const el = byId.get(patch.id);
+    if (!el || el.type !== "arrow" || !el.startBindingId || !el.endBindingId) continue;
+    const a = byId.get(el.startBindingId);
+    const b = byId.get(el.endBindingId);
+    if (!a || !b) continue;
+    const ax = a.x + a.width / 2;
+    const ay = a.y + a.height / 2;
+    const bx = b.x + b.width / 2;
+    const by = b.y + b.height / 2;
+    el.x = ax;
+    el.y = ay;
+    el.points = [[0, 0], ...patch.via.map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
   }
   if (write.legend) {
     const carrier = out.find((el) => el.docent.legend !== null);
@@ -852,11 +911,23 @@ export function lint(snapshot: SceneSnapshot): { findings: LintFinding[]; summar
     if (!facts.kind) findings.push({ level: "warn", about: node.id, message: `${name} has no kind — its style matches no legend rule` });
     if (!node.intents.length) findings.push({ level: "warn", about: node.id, message: `${name} has no intent` });
   }
+  const nodeBoxes = graph.nodes.map((n) => ({ id: n.id, ...n.bounds }));
+  const elementOf = new Map(snapshot.elements.map((el) => [el.id, el]));
   for (const edge of graph.edges) {
     const from = edge.from ? graph.nodes.find((n) => n.id === edge.from) : null;
     const to = edge.to ? graph.nodes.find((n) => n.id === edge.to) : null;
     if (!from || !to) findings.push({ level: "warn", about: edge.id, message: `edge ${edge.id} does not join two components (${from ? clean(from.label) : "—"} → ${to ? clean(to.label) : "—"})` });
     else if (!edge.intents.length && !clean(edge.label)) findings.push({ level: "info", about: edge.id, message: `edge ${clean(from.label)} → ${clean(to.label)} has no label or intent` });
+    // An edge through a component says the component is on its path (D72).
+    const el = elementOf.get(edge.sourceId);
+    if (from && to && el?.points && el.points.length >= 2) {
+      const through = passesThrough(absolutePoints(el.x, el.y, el.points), nodeBoxes, new Set([from.id, to.id]));
+      if (through.length) {
+        const names = through.map((b) => clean(graph.nodes.find((n) => n.id === b.id)?.label) || b.id);
+        const frame = from.frameId ? `layout({frame:'${from.frameId}'})` : "layout({frame:null})";
+        findings.push({ level: "warn", about: edge.id, message: `edge ${clean(from.label)} → ${clean(to.label)} passes through ${names.join(", ")} — ${frame} re-routes it, or move what is in the way` });
+      }
+    }
   }
   const linked = new Set(graph.nodes.map((n) => n.detailFrameId).filter(Boolean));
   for (const frame of graph.frames) {

@@ -166,6 +166,8 @@ export interface WriteArrow {
   from: string;
   to: string;
   label: string | null;
+  /** Turning points in scene coordinates, all outside both ends (D72); absent = straight. */
+  via?: [number, number][];
   frameId: string | null;
   style: WriteStyle;
   startArrowhead: string | null;
@@ -195,6 +197,8 @@ export interface WritePatch {
   style?: Partial<WriteStyle>;
   /** Fields named are set (null clears); fields absent are kept. */
   meaning?: WriteMeaning;
+  /** An arrow's new turning points (D72); `[]` makes it straight between its ends. */
+  via?: [number, number][];
 }
 
 export interface SceneWrite {
@@ -1247,10 +1251,13 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       // Arrows: straight, from border to border of what they join, and
       // BOUND on both ends so the graph reads them as edges and they follow
       // their shapes when the author moves them.
+      const patchOf = new Map((write.patches ?? []).map((p) => [p.id, p]));
+      // A box where it will be once the write lands: a patch that moves it counts.
       const boxOf = (id: string): SceneBounds & { type: string } => {
         const el = createdById.get(id) ?? live.get(id);
         if (!el) throw new Error(`Unknown element: ${id}`);
-        return { x: el.x, y: el.y, width: el.width, height: el.height, type: el.type };
+        const moved = patchOf.get(id);
+        return { x: moved?.x ?? el.x, y: moved?.y ?? el.y, width: moved?.width ?? el.width, height: moved?.height ?? el.height, type: el.type };
       };
       // Where the centre line leaves the shape's own outline — a rectangle's
       // side, an ellipse's curve, a diamond's edge — so the arrow meets the
@@ -1276,33 +1283,50 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         return { x: cx + dx * t, y: cy + dy * t };
       };
       const GAP = 6;
+      // The line of an arrow: from one outline to the other, through its
+      // turning points (D72), each end backed off by the binding gap.
+      const lineOf = (a: SceneBounds & { type: string }, b: SceneBounds & { type: string }, via: readonly [number, number][]) => {
+        const centerB = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        const centerA = { x: a.x + a.width / 2, y: a.y + a.height / 2 };
+        const first = via.length ? { x: via[0][0], y: via[0][1] } : centerB;
+        const last = via.length ? { x: via[via.length - 1][0], y: via[via.length - 1][1] } : centerA;
+        const start = edgePoint(a, first);
+        const end = edgePoint(b, last);
+        const towards = via.length ? first : end;
+        const from = via.length ? last : start;
+        const l1 = Math.hypot(towards.x - start.x, towards.y - start.y) || 1;
+        const l2 = Math.hypot(end.x - from.x, end.y - from.y) || 1;
+        const pts: [number, number][] = [
+          [start.x + ((towards.x - start.x) / l1) * GAP, start.y + ((towards.y - start.y) / l1) * GAP],
+          ...via,
+          [end.x - ((end.x - from.x) / l2) * GAP, end.y - ((end.y - from.y) / l2) * GAP],
+        ];
+        // A turning point that does not turn is dropped.
+        const kept = pts.filter((p, i) => {
+          if (i === 0 || i === pts.length - 1) return true;
+          const q = pts[i - 1];
+          const r = pts[i + 1];
+          const cross = (p[0] - q[0]) * (r[1] - q[1]) - (p[1] - q[1]) * (r[0] - q[0]);
+          return Math.abs(cross) > 1e-6;
+        });
+        const [ox, oy] = kept[0];
+        const points = kept.map(([px, py]): [number, number] => [px - ox, py - oy]);
+        const xs = points.map((pt) => pt[0]);
+        const ys = points.map((pt) => pt[1]);
+        return { x: ox, y: oy, points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+      };
       const arrowElements: ExcalidrawElement[] = [];
       const boundTo = new Map<string, { id: string; type: "arrow" }[]>();
       for (const arrow of write.arrows ?? []) {
-        const a = boxOf(arrow.from);
-        const b = boxOf(arrow.to);
-        const centerB = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
-        const centerA = { x: a.x + a.width / 2, y: a.y + a.height / 2 };
-        const start = edgePoint(a, centerB);
-        const end = edgePoint(b, centerA);
-        const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-        const ux = (end.x - start.x) / len;
-        const uy = (end.y - start.y) / len;
-        const sx = start.x + ux * GAP;
-        const sy = start.y + uy * GAP;
-        const ex = end.x - ux * GAP;
-        const ey = end.y - uy * GAP;
+        const line = lineOf(boxOf(arrow.from), boxOf(arrow.to), arrow.via ?? []);
         const [made] = convertToExcalidrawElements(
           [
             {
               type: "arrow",
               id: arrow.id,
-              x: sx,
-              y: sy,
-              points: [
-                [0, 0],
-                [ex - sx, ey - sy],
-              ],
+              x: line.x,
+              y: line.y,
+              points: line.points,
               frameId: arrow.frameId,
               ...styleProps(arrow.style),
               startArrowhead: arrow.startArrowhead,
@@ -1322,9 +1346,9 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
           (el as { index?: unknown }).index = undefined;
           if (el.type === "text") Object.assign(el, { frameId: arrow.frameId });
         }
-        const line = made.find((el) => el.id === arrow.id);
-        if (!line) throw new Error("Failed to construct arrow");
-        Object.assign(line, {
+        const drawn = made.find((el) => el.id === arrow.id);
+        if (!drawn) throw new Error("Failed to construct arrow");
+        Object.assign(drawn, {
           startBinding: { elementId: arrow.from, focus: 0, gap: GAP },
           endBinding: { elementId: arrow.to, focus: 0, gap: GAP },
         });
@@ -1336,6 +1360,17 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         }
       }
 
+      // A label follows its container's move (a bound text keeps its own
+      // coordinates; Excalidraw does not re-centre it on updateScene).
+      const shifted = new Map<string, { dx: number; dy: number }>();
+      for (const p of write.patches ?? []) {
+        const el = live.get(p.id);
+        if (!el || el.type === "arrow") continue;
+        const dx = p.x !== undefined ? p.x - el.x : 0;
+        const dy = p.y !== undefined ? p.y - el.y : 0;
+        if (!dx && !dy) continue;
+        for (const b of el.boundElements ?? []) if (b.type === "text") shifted.set(b.id, { dx, dy });
+      }
       // Removals take bound labels along; patches touch what they name.
       const removing = new Set(write.remove ?? []);
       for (const el of all) {
@@ -1373,6 +1408,8 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
             boundElements: out.boundElements.filter((b) => !removing.has(b.id)),
           });
         }
+        const shift = shifted.get(el.id);
+        if (shift) out = newElementWith(out, { x: out.x + shift.dx, y: out.y + shift.dy });
         const patch = patches.get(el.id);
         if (patch) {
           const fields: Record<string, unknown> = {};
@@ -1382,6 +1419,19 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
           if (patch.width !== undefined) fields.width = patch.width;
           if (patch.height !== undefined) fields.height = patch.height;
           if (patch.name !== undefined && out.type === "frame") fields.name = patch.name;
+          // A re-routed arrow is redrawn between its ends' final places.
+          if (patch.via !== undefined && out.type === "arrow" && out.startBinding && out.endBinding) {
+            const a = createdById.get(out.startBinding.elementId) ?? live.get(out.startBinding.elementId);
+            const b = createdById.get(out.endBinding.elementId) ?? live.get(out.endBinding.elementId);
+            if (a && b) {
+              const line = lineOf(boxOf(a.id), boxOf(b.id), patch.via);
+              fields.x = line.x;
+              fields.y = line.y;
+              fields.points = line.points;
+              fields.width = line.width;
+              fields.height = line.height;
+            }
+          }
           if (patch.style) {
             const st = patch.style;
             if (st.strokeColor !== undefined) fields.strokeColor = st.strokeColor;

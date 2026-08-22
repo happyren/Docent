@@ -65,6 +65,21 @@ export function sizeForLabel(label: string | null, fontSize: number, shape: "rec
   return { width, height };
 }
 
+/** Edge labels wrap a little wider than shape labels: they sit on a line, not in a box. */
+export const EDGE_WRAP_AT = 28;
+
+/**
+ * The room an edge label takes at the edge font — what the gap it sits in
+ * must be at least (D70). Zero for no label.
+ */
+export function edgeLabelSize(label: string | null | undefined, fontSize: number): Size {
+  const text = (label ?? "").trim();
+  if (!text) return { width: 0, height: 0 };
+  const lines = wrapLabel(text, EDGE_WRAP_AT);
+  const longest = lines.reduce((n, l) => Math.max(n, l.length), 0);
+  return { width: Math.ceil(longest * fontSize * 0.72) + 24, height: Math.ceil(lines.length * fontSize * 1.25) + 12 };
+}
+
 function overlaps(a: Box, b: Box, pad = 0): boolean {
   return !(
     a.x + a.width + pad <= b.x ||
@@ -87,6 +102,8 @@ export function placeInFrame(
   anchor: Box | null,
   /** Nothing goes above this line — the legend's bottom on Layer 1 (D69). */
   floor: number | null = null,
+  /** The gap kept from the anchor — at least the label of the edge between them (D70). */
+  gapX: number = GAP_X,
 ): Box {
   const origin = frame
     ? { x: frame.x + FRAME_PAD, y: frame.y + FRAME_HEAD + FRAME_PAD }
@@ -99,10 +116,11 @@ export function placeInFrame(
 
   // Preferred: right of the anchor, same row; then below it.
   if (anchor) {
+    const gap = Math.max(GAP_X, gapX);
     const candidates: Box[] = [
-      { x: anchor.x + anchor.width + GAP_X, y: anchor.y, ...size },
+      { x: anchor.x + anchor.width + gap, y: anchor.y, ...size },
       { x: anchor.x, y: anchor.y + anchor.height + GAP_Y, ...size },
-      { x: anchor.x + anchor.width + GAP_X, y: anchor.y + anchor.height + GAP_Y, ...size },
+      { x: anchor.x + anchor.width + gap, y: anchor.y + anchor.height + GAP_Y, ...size },
     ];
     for (const c of candidates) {
       if (fits(c) && c.x + c.width <= right + size.width) return c;
@@ -158,14 +176,32 @@ export function placeFrame(existing: readonly Box[], size: Size): Box {
  * A layered layout of a frame's components by their edges: rank by the
  * longest path from a source (left to right), order within a rank by the
  * mean rank-position of what feeds it (fewer crossings), stable
- * tie-breaks by current position then id. Returns new boxes at the
- * frame's origin; the caller grows the frame.
+ * tie-breaks by current position then id. The gap between two columns is
+ * at least the widest edge label that sits in it (D70), and a flow of
+ * more than `TURN_AFTER` ranks folds into bands that alternate direction
+ * (D71). Returns new boxes at the frame's origin; the caller grows the
+ * frame.
  */
+export interface LayoutOptions {
+  /** The room an edge's label takes; nothing when absent. */
+  labelSize?: (edge: GraphEdge) => Size;
+}
+
+/** A flow longer than this many ranks turns (D71). */
+export const TURN_AFTER = 5;
+
+/** Columns per band for a flow of `ranks` ranks: the smallest balanced fold. */
+export function columnsPerBand(ranks: number): number {
+  if (ranks <= TURN_AFTER) return Math.max(1, ranks);
+  return Math.ceil(Math.sqrt(2 * ranks));
+}
+
 export function layeredLayout(
   nodes: readonly GraphNode[],
   edges: readonly GraphEdge[],
   sizes: ReadonlyMap<string, Size>,
   origin: { x: number; y: number },
+  options: LayoutOptions = {},
 ): Map<string, Box> {
   const ids = new Set(nodes.map((n) => n.id));
   const out = new Map<string, string[]>(nodes.map((n) => [n.id, []]));
@@ -217,26 +253,34 @@ export function layeredLayout(
     });
   }
   let dummies = 0;
+  // The label room each column gap must leave (D70): an edge one rank long
+  // puts its label in the gap it spans; a longer one puts it on its dummy.
+  const gapAfter = new Map<number, number>();
+  const labelOf = (e: GraphEdge): Size => options.labelSize?.(e) ?? { width: 0, height: 0 };
   for (const e of edges) {
     if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
     const rf = rank.get(e.from)!;
     const rt = rank.get(e.to)!;
+    const label = labelOf(e);
     if (rt <= rf) {
       slotOf.get(e.to)?.feeders.push(e.from);
+      if (rt === rf - 1) gapAfter.set(rt, Math.max(gapAfter.get(rt) ?? 0, label.width));
       continue;
     }
+    if (rt === rf + 1) gapAfter.set(rf, Math.max(gapAfter.get(rf) ?? 0, label.width));
     let previous = e.from;
     for (let r = rf + 1; r < rt; r++) {
       const id = `__dummy${dummies++}`;
-      push(r, { id, dummy: true, size: { width: 0, height: Math.round(MIN_H / 2) }, feeders: [previous], order: order.get(e.from)! + 0.5 });
+      push(r, { id, dummy: true, size: { width: 0, height: Math.max(Math.round(MIN_H / 2), label.height) }, feeders: [previous], order: order.get(e.from)! + 0.5 });
       previous = id;
     }
     slotOf.get(e.to)!.feeders.push(previous);
   }
   const positionIn = new Map<string, number>();
-  const result = new Map<string, Box>();
-  let x = origin.x;
-  for (const r of [...layers.keys()].sort((a, b) => a - b)) {
+  const ranks = [...layers.keys()].sort((a, b) => a - b);
+  // Order every column first: positions within a column come from the
+  // columns before it, whichever band they end up in.
+  const columns = ranks.map((r) => {
     const layer = layers.get(r)!;
     layer.sort((a, b) => {
       const bary = (slot: Slot) => {
@@ -245,15 +289,43 @@ export function layeredLayout(
       };
       return bary(a) - bary(b) || a.order - b.order;
     });
-    let y = origin.y;
-    let colW = 0;
-    layer.forEach((slot, i) => {
-      if (!slot.dummy) result.set(slot.id, { x, y, ...slot.size });
-      positionIn.set(slot.id, i);
-      y += slot.size.height + (slot.dummy ? GAP_Y / 2 : GAP_Y);
-      colW = Math.max(colW, slot.size.width);
-    });
-    x += colW + GAP_X;
+    layer.forEach((slot, i) => positionIn.set(slot.id, i));
+    const width = Math.max(0, ...layer.map((slot) => slot.size.width));
+    const height = layer.reduce((h, slot, i) => h + slot.size.height + (i ? (slot.dummy ? GAP_Y / 2 : GAP_Y) : 0), 0);
+    return { rank: r, layer, width, height, gap: Math.max(GAP_X, gapAfter.get(r) ?? 0) };
+  });
+  // Fold into bands (D71): left to right, then right to left beneath.
+  const perBand = columnsPerBand(columns.length);
+  const result = new Map<string, Box>();
+  let bandTop = origin.y;
+  // Where the previous band's last column stood: the next band starts under it.
+  let lastColumn = { left: origin.x, right: origin.x };
+  for (let b = 0; b * perBand < columns.length; b++) {
+    const band = columns.slice(b * perBand, (b + 1) * perBand);
+    const bandWidth = band.reduce((w, c, i) => w + c.width + (i ? band[i - 1].gap : 0), 0);
+    const bandHeight = Math.max(...band.map((c) => c.height));
+    const reversed = b % 2 === 1;
+    // A turned band runs right to left from under the column the flow
+    // came from, never past the frame's left edge.
+    let x = reversed ? Math.max(lastColumn.right, origin.x + bandWidth) : lastColumn.left;
+    for (let i = 0; i < band.length; i++) {
+      const column = band[i];
+      if (reversed) x -= column.width;
+      let y = bandTop;
+      for (const slot of column.layer) {
+        if (!slot.dummy) result.set(slot.id, { x, y, ...slot.size });
+        y += slot.size.height + (slot.dummy ? GAP_Y / 2 : GAP_Y);
+      }
+      lastColumn = { left: x, right: x + column.width };
+      if (reversed) x -= i + 1 < band.length ? column.gap : 0;
+      else x += column.width + (i + 1 < band.length ? column.gap : 0);
+    }
+    // Room under the band for the turning edge and its label.
+    const turning = band[band.length - 1];
+    const turnLabel = edges
+      .filter((e) => e.from && e.to && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
+      .reduce((h, e) => Math.max(h, labelOf(e).height), 0);
+    bandTop += bandHeight + Math.max(GAP_Y * 2, turnLabel + 40);
   }
   return result;
 }
