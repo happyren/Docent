@@ -29,8 +29,74 @@ export const INSTRUCTIONS = [
   "When the user asks about one part of the diagram, call find({query}) — it matches labels, tags, intents, notes, logic, narratives, and legend meanings across every tier and returns each hit with its tier trail, so the relevant layer is one dive away.",
   "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
-  "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words — and let it finish: narrate() returns when the words have been said, so narrate, then move the camera, then narrate again. For a walkthrough at your own pace use present({action:'enter', mode:'guided'}) — presentation chrome, no frame stepping, the camera yours through focus/tour — or tour(), whose steps each wait for their own speech. Numbers, units, operators and identifiers are read the way an engineer says them; you do not need to spell them out.",
+  "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
+  "For a walkthrough: script_tour({frame?}) derives the stops and the author's words from the diagram itself (frames in order, components in flow order; `declared` lines are the author's, `inferred` lines are yours to rewrite) — then present({action:'enter', mode:'guided'}) and tour({steps}). That is three calls for a whole walkthrough, and it is the same walkthrough every time. Each result carries a `next` hint.",
 ].join("\n");
+
+/**
+ * Published workflows (D58): a prompt is a fixed sequence of calls a client
+ * can offer as a command, so the flow is the server's rather than each
+ * model's improvisation. Arguments are plain text.
+ */
+export const PROMPTS = [
+  {
+    name: "walkthrough",
+    description:
+      "Narrated walkthrough of the diagram (or one frame): derived stops and words, spoken, at the diagram's pace.",
+    arguments: [
+      { name: "frame", description: "A frame id from get_outline; omit for the whole Layer 1", required: false },
+      { name: "focus", description: "What the listener cares about, to shape the inferred lines", required: false },
+    ],
+  },
+  {
+    name: "explain",
+    description: "Explain one component — what it is, what it talks to, what the author declared, and what lies beneath it.",
+    arguments: [{ name: "what", description: "A label, tag, or id to find", required: true }],
+  },
+  {
+    name: "where-is",
+    description: "Find where something lives across every tier and take the camera there.",
+    arguments: [{ name: "query", description: "Words to look for", required: true }],
+  },
+];
+
+function promptMessages(name, args = {}) {
+  const frame = args.frame ? `frame: '${args.frame}'` : "";
+  const focus = args.focus ? ` The listener cares about: ${args.focus}.` : "";
+  switch (name) {
+    case "walkthrough":
+      return [
+        `Give a spoken walkthrough of the open diagram${args.frame ? ` — the frame ${args.frame}` : ""}.${focus}`,
+        "Do exactly this, in order:",
+        "1. get_outline() — know the tiers and frames.",
+        `2. script_tour({${frame}}) — the stops and the author's words. Keep every \`declared\` line verbatim; rewrite \`inferred\` lines in one or two plain sentences each, in the author's vocabulary.`,
+        "3. present({action:'enter', mode:'guided'}).",
+        "4. tour({steps}) with the script — one call; each step waits for its own speech.",
+        "5. present({action:'exit'}) when it ends, then summarize in two sentences what was shown.",
+        "Do not call focus or narrate between steps 3 and 5; the tour paces itself.",
+      ].join("\n");
+    case "explain":
+      return [
+        `Explain '${args.what ?? ""}' in the open diagram, aloud.`,
+        "Do exactly this, in order:",
+        `1. find({query:'${args.what ?? ""}'}) — take the best hit; if it is on a deeper tier, dive to it first.`,
+        "2. read_frame on its frame — the neighbours and the declared meaning.",
+        "3. focus({id, narrate}) on it — one sentence: what it is (legend kind) and what the author declared.",
+        "4. highlight its edges' other ends with narrate — what it receives and what it sends, one sentence each.",
+        "5. If it has a detail layer: dive({id, narrate:'Beneath it…'}), read_frame, focus the inner components in flow order with narrate, climb.",
+        "Use the author's intents, notes and logic verbatim where they exist; say `inferred` facts as such.",
+      ].join("\n");
+    case "where-is":
+      return [
+        `Find '${args.query ?? ""}' in the open diagram.`,
+        `1. find({query:'${args.query ?? ""}'}).`,
+        "2. For the best hit, dive along its tier trail if needed, then focus({id, narrate}) with one sentence saying where it is and what it is.",
+        "3. List the other hits by tier, one line each, without moving the camera.",
+      ].join("\n");
+    default:
+      return "";
+  }
+}
 
 export const TOOLS = [
   {
@@ -97,6 +163,8 @@ export const TOOLS = [
       properties: {
         project: { type: "string" },
         scene: { type: "string" },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
       required: ["project", "scene"],
       additionalProperties: false,
@@ -111,7 +179,7 @@ export const TOOLS = [
   {
     name: "focus",
     description:
-      "Glide the camera to a component, edge, or frame — this is how you pan and zoom, in ids only, never pixels. A component is framed WITH its neighbourhood (the components its edges connect it to on that tier) and never fills the view: a zoom ceiling keeps it under 40% of the frame, so the context that gives it meaning stays visible. context:'self' frames the component alone (still under the ceiling); focus a frame to see a whole tier; raise `padding` to pull back wider. Unknown ids return an error — never a silent no-op.\nExample: focus({id:'n_gateway'}) — the gateway with its client and auth neighbours in view; focus({id:'f_ingress'}) — the whole ingress frame.",
+      "Glide the camera to a component, edge, or frame — this is how you pan and zoom, in ids only, never pixels. A component is framed WITH its neighbourhood (the components its edges connect it to on that tier) and never fills the view: a zoom ceiling keeps it under 40% of the frame, so the context that gives it meaning stays visible. context:'self' frames the component alone (still under the ceiling); focus a frame to see a whole tier; raise `padding` to pull back wider. Unknown ids return an error — never a silent no-op. Waits for any speech in flight before moving; `narrate` says a sentence on arrival — one call per stop.\nExample: focus({id:'n_gateway', narrate:'Requests land at the gateway first.'}); focus({id:'f_ingress'}) — the whole ingress frame.",
     inputSchema: {
       type: "object",
       properties: {
@@ -125,6 +193,8 @@ export const TOOLS = [
           enum: ["neighbors", "self"],
           description: "For a component: frame it with its edge-connected neighbours (default) or alone",
         },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
       required: ["id"],
       additionalProperties: false,
@@ -136,7 +206,11 @@ export const TOOLS = [
       "Dive the camera into a component's declared detail layer — the frame drawing its inner mechanism. Only components whose graph node carries `detail` can be dived into; depth is unbounded (components inside a detail layer may declare their own).\nExample: dive({id:'n_orders'}) — the camera portals into the Orders internals frame; read_frame or get_scene_graph to study it, climb() to come back.",
     inputSchema: {
       type: "object",
-      properties: { id: { type: "string", description: "Graph id of a node with a detail layer" } },
+      properties: {
+        id: { type: "string", description: "Graph id of a node with a detail layer" },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
+      },
       required: ["id"],
       additionalProperties: false,
     },
@@ -144,8 +218,15 @@ export const TOOLS = [
   {
     name: "climb",
     description:
-      "Climb one tier back up from the current detail layer — the inverse of dive. From Layer 1 it is a no-op with a message.\nExample: climb()",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      "Climb one tier back up from the current detail layer — the inverse of dive. From Layer 1 it is a no-op with a message.\nExample: climb({narrate:'Back on the overview.'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "present",
@@ -156,6 +237,8 @@ export const TOOLS = [
       properties: {
         action: { type: "string", enum: ["enter", "exit", "next", "prev", "overview"] },
         mode: { type: "string", enum: ["frames", "guided"] },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
       required: ["action"],
       additionalProperties: false,
@@ -170,6 +253,8 @@ export const TOOLS = [
       properties: {
         ids: { type: "array", items: { type: "string" } },
         style: { type: "string", enum: ["glow", "spotlight", "outline"] },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
       required: ["ids"],
       additionalProperties: false,
@@ -185,6 +270,8 @@ export const TOOLS = [
         path: { type: "array", items: { type: "string" }, description: "Ordered edge ids" },
         speed: { type: "number", description: "1.0 ≈ 500 scene-units/s" },
         loop: { type: "boolean" },
+        narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
+        interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
       required: ["path"],
       additionalProperties: false,
@@ -193,7 +280,7 @@ export const TOOLS = [
   {
     name: "narrate",
     description:
-      "Show text in the narration panel — and say it aloud where a voice is on. Returns when the words have been spoken (at once when nothing speaks), so narrate, then move, then narrate: the camera never leaves mid-sentence. wait:false returns immediately instead. Empty/null text hides the panel and stops the voice.\nExample: narrate({text:'Requests land at the gateway first.'}) → {narrating:true, spoken:true}",
+      "Show text in the narration panel — and say it aloud where a voice is on. Returns as soon as the voice has started: the CAMERA waits for the sentence (every focus/highlight/flow/present/dive call waits for speech in flight), never you. Prefer focus({id, narrate}) — one call per stop. wait:true stays until the words are done. Empty/null text hides the panel and stops the voice.\nExample: narrate({text:'Requests land at the gateway first.'}) → {narrating:true, spoken:false}",
     inputSchema: {
       type: "object",
       properties: {
@@ -205,9 +292,21 @@ export const TOOLS = [
     },
   },
   {
+    name: "script_tour",
+    description:
+      "Derive a walkthrough from the diagram itself — nothing authored for it: stops are the frames in declared order and, inside a frame, the components in flow order (what feeds comes before what is fed); words are the author's narrative, intents, notes and logic where declared (`provenance:'declared'` — keep verbatim) and a plain factual line from the graph and legend otherwise (`'inferred'` — yours to rewrite). Pass the steps to tour(). With `frame`, that frame only; without, every Layer 1 frame.\nExample: script_tour({frame:'f_core'}) → {steps:[{focus:'f_core', narrate:'…', provenance:'declared'}, {focus:'n_orders', highlight:['n_orders'], narrate:'Orders: retries failed charges.', provenance:'declared'}, …], declared:5}",
+    inputSchema: {
+      type: "object",
+      properties: {
+        frame: { type: "string", description: "A frame id from get_outline; omit for the whole Layer 1" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "tour",
     description:
-      "Run a narrated walkthrough. Each step may focus, highlight, pulse a flow, and narrate; when a step focuses a frame and omits narrate, the frame's author-declared narrative narrates it. Interruptible by the user; resolves with steps completed.\nExample: tour({steps:[{focus:'f_ingress'},{focus:'n_gateway',highlight:['n_gateway'],narrate:'The gateway rate-limits at the edge.'},{flow:['e_verify'],narrate:'Every request is verified.'}]})",
+      "Run a narrated walkthrough in one call — the page paces it: each step flies, highlights, pulses, and narrates, and lasts at least as long as its speech; when a step focuses a frame and omits narrate, the frame's author-declared narrative narrates it. Interruptible by the user; resolves with steps completed. script_tour() gives you the steps.\nExample: tour({steps:[{focus:'f_ingress'},{focus:'n_gateway',highlight:['n_gateway'],narrate:'The gateway rate-limits at the edge.'},{flow:['e_verify'],narrate:'Every request is verified.'}]})",
     inputSchema: {
       type: "object",
       properties: {
@@ -264,7 +363,7 @@ export async function dispatch(message, callTool) {
     case "initialize":
       return reply({
         protocolVersion: params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {} },
         serverInfo: SERVER_INFO,
         instructions: INSTRUCTIONS,
       });
@@ -275,6 +374,17 @@ export async function dispatch(message, callTool) {
       return reply({});
     case "tools/list":
       return reply({ tools: TOOLS });
+    case "prompts/list":
+      return reply({ prompts: PROMPTS });
+    case "prompts/get": {
+      const prompt = PROMPTS.find((p) => p.name === params?.name);
+      if (!prompt) return fail(-32602, `Unknown prompt: ${params?.name}`);
+      const text = promptMessages(prompt.name, params?.arguments ?? {});
+      return reply({
+        description: prompt.description,
+        messages: [{ role: "user", content: { type: "text", text } }],
+      });
+    }
     case "tools/call": {
       const tool = params?.name;
       if (!TOOLS.some((t) => t.name === tool)) {

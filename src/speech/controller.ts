@@ -95,6 +95,19 @@ export class SpeechController {
     if (this.state.speaking) this.emit({ speaking: false });
   }
 
+  /** Resolves when no utterance is in flight — at once when silent. */
+  settled(): Promise<void> {
+    if (!this.state.speaking) return Promise.resolve();
+    return new Promise((resolve) => {
+      const off = this.subscribe((state) => {
+        if (!state.speaking) {
+          off();
+          resolve();
+        }
+      });
+    });
+  }
+
   /** Whether a call to `speak` would produce sound right now. */
   get active(): boolean {
     return this.state.enabled && !this.state.muted && this.provider() !== null;

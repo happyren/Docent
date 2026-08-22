@@ -10,6 +10,7 @@ import type { HighlightStyle } from "../overlay/state";
 import type { TourStep } from "../command/api";
 import { detailBadges } from "../scene/detailBadges";
 import { computeTiers } from "../scene/tiers";
+import { scriptTour } from "./script";
 import type { SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
@@ -223,6 +224,15 @@ export interface AgentShellHooks {
   currentScene(): { project: string; scene: string } | null;
 }
 
+/**
+ * The `narrate` a camera command may carry (D57): said on arrival, never
+ * waited for — the next command's gate is what waits.
+ */
+function sayOnArrival(commands: CommandAPI, params: Record<string, unknown>): void {
+  const text = params.narrate;
+  if (typeof text === "string" && text.trim()) void commands.narrate({ text });
+}
+
 export async function execute(
   commands: CommandAPI,
   shell: AgentShellHooks,
@@ -273,8 +283,13 @@ export async function execute(
         );
       }
       const { project, scene } = params as { project: string; scene: string };
+      await commands.awaitSpeech(params.interrupt === true);
       await shell.openScene(project, scene);
-      return { opened: { project, scene } };
+      sayOnArrival(commands, params);
+      return {
+        opened: { project, scene },
+        next: "get_outline to see its tiers and frames; find({query}) to locate a part",
+      };
     }
     case "get_view": {
       // The shell speaks in source ids; agents live in graph-id space (I5).
@@ -303,9 +318,18 @@ export async function execute(
     }
     case "focus":
       await commands.focus(
-        params as { id: string; padding?: number; context?: "neighbors" | "self" },
+        params as {
+          id: string;
+          padding?: number;
+          context?: "neighbors" | "self";
+          narrate?: string;
+          interrupt?: boolean;
+        },
       );
-      return { focused: (params as { id: string }).id };
+      return {
+        focused: (params as { id: string }).id,
+        next: "focus the next stop (with narrate), highlight or flow to show a point, dive if it has detail",
+      };
     case "dive": {
       const id = params.id as string;
       const graph = commands.getSceneGraph();
@@ -323,17 +347,24 @@ export async function execute(
       const badge = detailBadges(commands.getSceneSnapshot()).find(
         (b) => b.id === node.id,
       );
+      await commands.awaitSpeech(params.interrupt === true);
       const dived = shell.drill.dive(badge?.diveElementId ?? node.sourceId);
       if (!dived) throw new Error(`Could not dive into ${id} — the detail frame is gone`);
-      return { dived: node.detailFrameId };
+      sayOnArrival(commands, params);
+      return {
+        dived: node.detailFrameId,
+        next: "read_frame this layer, then focus its components in order; climb to return",
+      };
     }
     case "climb": {
       const trail = shell.drill.trail();
       if (trail.length === 0) {
         return { climbed: false, note: "Already at Layer 1 — nothing above this tier." };
       }
+      await commands.awaitSpeech(params.interrupt === true);
       shell.drill.up();
-      return { climbed: true };
+      sayOnArrival(commands, params);
+      return { climbed: true, next: "focus the next component on this tier" };
     }
     case "present": {
       const action = params.action as "enter" | "exit" | "next" | "prev" | "overview";
@@ -341,39 +372,53 @@ export async function execute(
       if (action !== "enter" && !state.active) {
         throw new Error("Presentation mode is not active — present({action:'enter'}) first");
       }
-      if (action === "enter") {
-        const mode = (params.mode as "frames" | "guided" | undefined) ?? "frames";
-        shell.presentation.enter(mode);
-        return { presentation: action, mode };
-      }
       if ((action === "next" || action === "prev") && state.mode === "guided") {
         throw new Error(
           "This is a guided presentation — move the camera with focus or tour; there is no next frame",
         );
       }
+      await commands.awaitSpeech(params.interrupt === true);
+      if (action === "enter") {
+        const mode = (params.mode as "frames" | "guided" | undefined) ?? "frames";
+        shell.presentation.enter(mode);
+        sayOnArrival(commands, params);
+        return {
+          presentation: action,
+          mode,
+          next:
+            mode === "guided"
+              ? "focus each stop with narrate, or run a tour; present({action:'exit'}) when done"
+              : "present({action:'next'}) as you narrate each waypoint",
+        };
+      }
       shell.presentation[action]();
+      sayOnArrival(commands, params);
       return { presentation: action, mode: state.mode };
     }
     case "highlight": {
-      const p = params as { ids: string[]; style?: HighlightStyle };
+      const p = params as { ids: string[]; style?: HighlightStyle; interrupt?: boolean };
       // Content-aware (D37): an agent's highlight frames itself when its
       // targets do not already read well. The user's own toolbar highlights
       // never pass through here, so their camera stays theirs.
+      await commands.awaitSpeech(p.interrupt === true);
       if (p.ids.length) await commands.frameTargets(p.ids);
       commands.highlight(p);
-      return { highlighted: p.ids };
+      sayOnArrival(commands, params);
+      return { highlighted: p.ids, next: "narrate what is lit, or highlight({ids:[]}) to clear" };
     }
     case "flow": {
-      const p = params as { path: string[]; speed?: number; loop?: boolean };
+      const p = params as { path: string[]; speed?: number; loop?: boolean; interrupt?: boolean };
+      await commands.awaitSpeech(p.interrupt === true);
       if (p.path.length) await commands.frameTargets(p.path);
+      sayOnArrival(commands, params);
       await commands.flow(p);
       return { pulsed: p.path };
     }
     case "narrate": {
-      // Waits for the voice by default (D55): the agent is the narrator and
-      // moves on when the sentence is done. Silent shells answer at once.
+      // Returns as soon as the voice has started (D57): the camera is what
+      // waits for the sentence, not the agent. wait:true asks to stay.
       const p = params as { text: string | null; wait?: boolean };
-      const spoken = await commands.narrate({ text: p.text, wait: p.wait !== false });
+      const spoken = await commands.narrate({ text: p.text, wait: p.wait === true });
       return { narrating: true, spoken };
     }
     case "tour": {
@@ -382,9 +427,21 @@ export async function execute(
       );
       return { stepsCompleted: completed };
     }
+    case "script_tour": {
+      // Derived, never authored (D58): the diagram's own order and words.
+      const graph = commands.getSceneGraph();
+      const script = scriptTour(graph, commands.getSceneSnapshot(), {
+        frame: (params.frame as string | undefined) ?? null,
+      });
+      return {
+        ...script,
+        next:
+          "run it as is with tour({steps}) — or rewrite the `inferred` lines in your own words first, keeping the `declared` ones; for a guided walkthrough, present({action:'enter', mode:'guided'}) before the tour",
+      };
+    }
     case "clear_effects":
       commands.clearEffects();
-      commands.narrate({ text: null });
+      void commands.narrate({ text: null });
       return { cleared: true };
     default:
       throw new Error(`Unknown tool: ${tool}`);

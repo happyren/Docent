@@ -219,4 +219,41 @@ describe("tour (S8/S9, D10)", () => {
     expect(Date.now() - before).toBeLessThan(50);
     expect(spoken[spoken.length - 1]).toBe("Hello");
   });
+
+  it("focus waits for the voice in flight and speaks its narrate on arrival (D57)", async () => {
+    const log: string[] = [];
+    let speaking = true;
+    const flyTo = vi.fn(async () => {
+      log.push("fly");
+      return true;
+    });
+    const api = new CommandAPI(
+      makeReader(),
+      { flyTo, stop: vi.fn() } as unknown as CameraEngine,
+      new OverlayStore(),
+      {
+        narrate: (t) => log.push(`panel:${t}`),
+        spoken: async (t) => {
+          log.push(`say:${t}`);
+        },
+        settled: () =>
+          new Promise((r) => {
+            const tick = () => (speaking ? setTimeout(tick, 5) : r());
+            tick();
+          }),
+      },
+    );
+    const call = api.focus({ id: "f_ingress", narrate: "Here the request enters." });
+    await new Promise((r) => setTimeout(r, 40));
+    expect(log).toEqual([]); // still speaking: the camera has not moved
+    speaking = false;
+    await call;
+    expect(log).toEqual(["fly", "panel:Here the request enters.", "say:Here the request enters."]);
+    // interrupt cuts the voice (narrate(null)) and moves at once.
+    speaking = true;
+    log.length = 0;
+    await api.focus({ id: "f_ingress", interrupt: true });
+    expect(log).toEqual(["panel:null", "say:null", "fly"]);
+  });
 });
+

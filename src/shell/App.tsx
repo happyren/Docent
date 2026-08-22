@@ -169,6 +169,7 @@ export function App() {
             narrate: setNarration,
             spoken: (text) => speech.speak(text),
             speaks: () => speech.active,
+            settled: () => speech.settled(),
           })
         : null,
     [canvas, camera, overlayStore, speech],

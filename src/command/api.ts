@@ -83,6 +83,8 @@ export interface NarrationSink {
   spoken?(text: string | null): Promise<void>;
   /** Whether a voice is on right now — what `narrate` reports having waited for. */
   speaks?(): boolean;
+  /** Resolves when no speech is in flight — at once when nothing speaks. */
+  settled?(): Promise<void>;
 }
 
 export interface TourStep {
@@ -125,6 +127,21 @@ export class CommandAPI {
     private readonly overlay: OverlayStore,
     private readonly narration: NarrationSink = { narrate: () => {} },
   ) {}
+
+  /**
+   * The speech gate (D57): the picture never leaves mid-sentence. Every
+   * command that moves the camera or the overlay waits here first — the
+   * async ones inside this class, the shell-driven ones through the
+   * executor — unless the caller asked to interrupt, which cuts the voice.
+   */
+  async awaitSpeech(interrupt = false): Promise<void> {
+    if (interrupt) {
+      // Panel and voice both: the sentence is cut, not merely hidden.
+      void this.narrate({ text: null });
+      return;
+    }
+    await this.narration.settled?.();
+  }
 
   /** The agent-facing address space: nodes/edges/frames with stable ids. */
   getSceneGraph(): SceneGraph {
@@ -222,6 +239,20 @@ export class CommandAPI {
    * frame or edge focuses as it is.
    */
   async focus(params: {
+    id: string;
+    padding?: number;
+    context?: "neighbors" | "self";
+    /** Say this on arrival (D57) — one call is one stop. */
+    narrate?: string;
+    /** Cut the voice in flight instead of waiting for it. */
+    interrupt?: boolean;
+  }): Promise<void> {
+    await this.awaitSpeech(params.interrupt);
+    await this.flyFocus(params);
+    if (params.narrate) void this.narrate({ text: params.narrate });
+  }
+
+  private async flyFocus(params: {
     id: string;
     padding?: number;
     context?: "neighbors" | "self";
@@ -334,6 +365,7 @@ export class CommandAPI {
    */
   async frameTargets(ids: string[], padding = 0.35): Promise<void> {
     if (!ids.length) return;
+    await this.awaitSpeech();
     const graph = this.getSceneGraph();
     const bounds = this.targetBounds(graph, ids);
     if (!bounds || this.readsWell(bounds)) return;

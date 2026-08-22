@@ -99,8 +99,9 @@ How Docent uses it (D52): every narration reaching the person — an agent's
 reaches its frame — is spoken through the running `speech/1` provider. Speech
 is off until the person enables it (one click, because browsers need one
 gesture before audio), cancels when the narration changes, mutes with **M**
-during a presentation, and paces tours: a step lasts at least as long as its
-speech. An agent's `narrate` call never waits for audio.
+during a presentation, and paces the camera: every camera command waits for
+the speech in flight before it moves, and a tour step lasts at least as long
+as its speech. An agent's `narrate` call returns as soon as the voice starts.
 
 ## Writing one
 

@@ -428,10 +428,20 @@ manifest and every contract are specified in [docs/plugins.md](docs/plugins.md).
 into `~/.cache/pocket_tts`), switch it on, and click **Enable voice** — one
 gesture, once per session, because browsers play no sound without one. Then:
 
-- an agent's `narrate` and every `tour` step are spoken; `narrate` returns
-  when the words have been said (`wait:false` to return at once) and a tour
-  step lasts at least as long as its speech — the camera never outruns the
-  voice;
+- an agent's `narrate` and every `tour` step are spoken. **The camera waits
+  for the voice, not the agent**: `narrate` returns as soon as speech starts,
+  and every `focus`/`highlight`/`flow`/`present`/`dive` waits for the sentence
+  in flight before it moves (`interrupt:true` cuts in); camera commands take a
+  `narrate` to say on arrival, so one call is one stop — and the model thinks
+  while the voice speaks instead of after it;
+- **walkthroughs are derived, never authored**: `script_tour({frame?})`
+  compiles a tour from the diagram — frames in declared order, components in
+  flow order, the author's narratives, intents and logic verbatim
+  (`declared`), a plain factual line where nothing is declared (`inferred`) —
+  and `tour` runs it in one call. Two competent models give the same
+  walkthrough of the same diagram; the MCP server also publishes
+  `walkthrough`, `explain` and `where-is` **prompts** that fix the sequence of
+  calls;
 - an agent can present **guided**: `present({action:'enter', mode:'guided'})`
   puts the canvas in presentation mode — view-only, toolbars gone — and leaves
   the camera to the agent, which moves it with `focus` and `tour` at its own

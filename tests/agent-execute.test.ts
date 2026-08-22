@@ -59,7 +59,9 @@ function fakeCommands(): CommandAPI {
     focus: async () => {},
     highlight: () => {},
     flow: async () => {},
-    narrate: () => {},
+    narrate: async () => false,
+    awaitSpeech: async () => {},
+    frameTargets: async () => {},
     tour: async () => 0,
     clearEffects: () => {},
   } as unknown as CommandAPI;
@@ -106,7 +108,7 @@ describe("agent executor", () => {
     const { shell, calls } = fakeShell();
     const result = await execute(fakeCommands(), shell, "dive", { id: "worker" });
     expect(calls).toEqual(["dive:worker"]);
-    expect(result).toEqual({ dived: "G" });
+    expect(result).toMatchObject({ dived: "G" });
   });
 
   it("refuses to dive where no detail layer is declared", async () => {
@@ -150,7 +152,7 @@ describe("agent executor", () => {
       presentationState: { active: true, mode: "guided", index: "overview", waypoints: [] },
     });
     const entered = await execute(fakeCommands(), shell, "present", { action: "enter", mode: "guided" });
-    expect(entered).toEqual({ presentation: "enter", mode: "guided" });
+    expect(entered).toMatchObject({ presentation: "enter", mode: "guided" });
     expect(calls).toEqual(["present:enter:guided"]);
     // No frame walk: next/prev are refused with the way forward.
     await expect(
@@ -166,7 +168,7 @@ describe("agent executor", () => {
     expect(view.presentation.mode).toBe("guided");
   });
 
-  it("narrate waits for the voice by default and not with wait:false (D55)", async () => {
+  it("narrate returns at once; wait:true stays for the voice (D57)", async () => {
     const seen: { text: string | null; wait?: boolean }[] = [];
     const commands = {
       ...fakeCommands(),
@@ -178,12 +180,42 @@ describe("agent executor", () => {
     } as unknown as CommandAPI;
     const { shell } = fakeShell();
     const started = Date.now();
-    const waited = await execute(commands, shell, "narrate", { text: "Hello" });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(35);
-    expect(waited).toEqual({ narrating: true, spoken: true });
-    const quick = await execute(commands, shell, "narrate", { text: "Hello", wait: false });
+    const quick = await execute(commands, shell, "narrate", { text: "Hello" });
+    expect(Date.now() - started).toBeLessThan(30);
     expect(quick).toEqual({ narrating: true, spoken: false });
-    expect(seen.map((p) => p.wait)).toEqual([true, false]);
+    const waited = await execute(commands, shell, "narrate", { text: "Hello", wait: true });
+    expect(waited).toEqual({ narrating: true, spoken: true });
+    expect(seen.map((p) => p.wait)).toEqual([false, true]);
+  });
+
+  it("the camera waits for the voice, and says its narrate on arrival (D57)", async () => {
+    const log: string[] = [];
+    let gated = 0;
+    const commands = {
+      ...fakeCommands(),
+      awaitSpeech: async (interrupt?: boolean) => {
+        gated += 1;
+        log.push(interrupt ? "interrupt" : "gate");
+        await new Promise((r) => setTimeout(r, 20));
+      },
+      narrate: async (p: { text: string | null }) => {
+        log.push(`say:${p.text}`);
+        return false;
+      },
+    } as unknown as CommandAPI;
+    const { shell, calls } = fakeShell({
+      presentationState: { active: true, mode: "guided", index: "overview", waypoints: [] },
+    });
+    // Every picture-moving call passes the gate before acting.
+    await execute(commands, shell, "highlight", { ids: [], narrate: "Lit." });
+    await execute(commands, shell, "present", { action: "overview", narrate: "The whole tier." });
+    await execute(commands, shell, "flow", { path: [], interrupt: true });
+    expect(gated).toBe(3);
+    expect(log).toEqual(["gate", "say:Lit.", "gate", "say:The whole tier.", "interrupt"]);
+    expect(calls).toEqual(["present:overview"]);
+    // Results carry the next step.
+    const r = (await execute(commands, shell, "highlight", { ids: [] })) as { next: string };
+    expect(r.next).toMatch(/narrate/);
   });
 
   it("get_view speaks graph ids, not source ids (I5)", async () => {
