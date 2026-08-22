@@ -81,6 +81,8 @@ function withCeiling(framed: SceneBounds, subject: SceneBounds): SceneBounds {
 export interface NarrationSink {
   narrate(text: string | null): void;
   spoken?(text: string | null): Promise<void>;
+  /** Whether a voice is on right now — what `narrate` reports having waited for. */
+  speaks?(): boolean;
 }
 
 export interface TourStep {
@@ -477,13 +479,22 @@ export class CommandAPI {
 
   /**
    * Render text in the narration panel (S9) — and say it, when the shell
-   * speaks (D52). Never waits for the audio: an agent's loop is not
-   * audio-bound.
+   * speaks (D52). With `wait` (D55) the call resolves when the words have
+   * been spoken, so a narrator moves on after its sentence; without it,
+   * or when nothing speaks, at once. Resolves to whether it waited.
    */
-  narrate(params: { text: string | null }): void {
+  async narrate(params: { text: string | null; wait?: boolean }): Promise<boolean> {
     const text = params.text || null;
     this.narration.narrate(text);
-    void this.narration.spoken?.(text);
+    const spoken = this.narration.spoken?.(text);
+    if (!spoken) return false;
+    const speaking = this.narration.speaks?.() ?? true;
+    if (params.wait) {
+      await spoken;
+      return speaking;
+    }
+    void spoken;
+    return false;
   }
 
   /**

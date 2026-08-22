@@ -197,13 +197,15 @@ export function findInDiagram(commands: CommandAPI, graph: SceneGraph, query: st
 /** What the shell (App) lends the agent — navigation, never mutation. */
 export interface AgentShellHooks {
   presentation: {
-    enter(): void;
+    /** `frames` walks the author's waypoints; `guided` leaves the camera to the narrator (D54). */
+    enter(mode?: "frames" | "guided"): void;
     exit(): void;
     next(): void;
     prev(): void;
     overview(): void;
     state(): {
       active: boolean;
+      mode: "frames" | "guided" | null;
       index: number | "overview" | null;
       waypoints: { id: string; name: string; narrative: string | null }[];
     };
@@ -288,6 +290,7 @@ export async function execute(
         presentation: p.active
           ? {
               active: true,
+              mode: p.mode,
               index: p.index,
               waypoints: p.waypoints.map((w) => ({
                 id: frameGraphId(w.id),
@@ -338,8 +341,18 @@ export async function execute(
       if (action !== "enter" && !state.active) {
         throw new Error("Presentation mode is not active — present({action:'enter'}) first");
       }
+      if (action === "enter") {
+        const mode = (params.mode as "frames" | "guided" | undefined) ?? "frames";
+        shell.presentation.enter(mode);
+        return { presentation: action, mode };
+      }
+      if ((action === "next" || action === "prev") && state.mode === "guided") {
+        throw new Error(
+          "This is a guided presentation — move the camera with focus or tour; there is no next frame",
+        );
+      }
       shell.presentation[action]();
-      return { presentation: action };
+      return { presentation: action, mode: state.mode };
     }
     case "highlight": {
       const p = params as { ids: string[]; style?: HighlightStyle };
@@ -356,9 +369,13 @@ export async function execute(
       await commands.flow(p);
       return { pulsed: p.path };
     }
-    case "narrate":
-      commands.narrate(params as { text: string | null });
-      return { narrating: true };
+    case "narrate": {
+      // Waits for the voice by default (D55): the agent is the narrator and
+      // moves on when the sentence is done. Silent shells answer at once.
+      const p = params as { text: string | null; wait?: boolean };
+      const spoken = await commands.narrate({ text: p.text, wait: p.wait !== false });
+      return { narrating: true, spoken };
+    }
     case "tour": {
       const completed = await commands.tour(
         params as { steps: TourStep[]; stepMs?: number },

@@ -72,7 +72,7 @@ function fakeShell(overrides: Partial<Record<string, unknown>> = {}): {
   const calls: string[] = [];
   const shell: AgentShellHooks = {
     presentation: {
-      enter: () => calls.push("present:enter"),
+      enter: (mode) => calls.push(`present:enter:${mode ?? "frames"}`),
       exit: () => calls.push("present:exit"),
       next: () => calls.push("present:next"),
       prev: () => calls.push("present:prev"),
@@ -80,7 +80,7 @@ function fakeShell(overrides: Partial<Record<string, unknown>> = {}): {
       state: () =>
         (overrides.presentationState as ReturnType<
           AgentShellHooks["presentation"]["state"]
-        >) ?? { active: false, index: null, waypoints: [] },
+        >) ?? { active: false, mode: null, index: null, waypoints: [] },
     },
     drill: {
       dive: (elementId) => {
@@ -142,7 +142,48 @@ describe("agent executor", () => {
       execute(fakeCommands(), shell, "present", { action: "next" }),
     ).rejects.toThrow(/not active/);
     await execute(fakeCommands(), shell, "present", { action: "enter" });
-    expect(calls).toEqual(["present:enter"]);
+    expect(calls).toEqual(["present:enter:frames"]);
+  });
+
+  it("a guided presentation leaves the camera to the narrator (D54)", async () => {
+    const { shell, calls } = fakeShell({
+      presentationState: { active: true, mode: "guided", index: "overview", waypoints: [] },
+    });
+    const entered = await execute(fakeCommands(), shell, "present", { action: "enter", mode: "guided" });
+    expect(entered).toEqual({ presentation: "enter", mode: "guided" });
+    expect(calls).toEqual(["present:enter:guided"]);
+    // No frame walk: next/prev are refused with the way forward.
+    await expect(
+      execute(fakeCommands(), shell, "present", { action: "next" }),
+    ).rejects.toThrow(/focus or tour/);
+    // Overview and exit still work.
+    await execute(fakeCommands(), shell, "present", { action: "overview" });
+    await execute(fakeCommands(), shell, "present", { action: "exit" });
+    expect(calls.slice(1)).toEqual(["present:overview", "present:exit"]);
+    const view = (await execute(fakeCommands(), shell, "get_view", {})) as {
+      presentation: { mode?: string };
+    };
+    expect(view.presentation.mode).toBe("guided");
+  });
+
+  it("narrate waits for the voice by default and not with wait:false (D55)", async () => {
+    const seen: { text: string | null; wait?: boolean }[] = [];
+    const commands = {
+      ...fakeCommands(),
+      narrate: async (p: { text: string | null; wait?: boolean }) => {
+        seen.push(p);
+        if (p.wait) await new Promise((r) => setTimeout(r, 40));
+        return Boolean(p.wait);
+      },
+    } as unknown as CommandAPI;
+    const { shell } = fakeShell();
+    const started = Date.now();
+    const waited = await execute(commands, shell, "narrate", { text: "Hello" });
+    expect(Date.now() - started).toBeGreaterThanOrEqual(35);
+    expect(waited).toEqual({ narrating: true, spoken: true });
+    const quick = await execute(commands, shell, "narrate", { text: "Hello", wait: false });
+    expect(quick).toEqual({ narrating: true, spoken: false });
+    expect(seen.map((p) => p.wait)).toEqual([true, false]);
   });
 
   it("get_view speaks graph ids, not source ids (I5)", async () => {

@@ -19,31 +19,130 @@ import type { SpeechController, SpeechState } from "../speech/controller";
 import { alertDialog } from "./dialogs";
 
 const SAMPLE_LINE =
-  "Requests land at the gateway first; every order is verified before it reaches payments.";
+  "Requests land at the gateway first; every order is verified before it reaches payments, and 8,000 requests per second is the p99 budget.";
 
-function statusText(plugin: PluginInfo): string {
+const DOCS_URL = "https://github.com/happyren/Docent/blob/master/docs/plugins.md";
+const FIRST_PLUGIN_URL = "https://github.com/happyren/docent-pocket-tts";
+
+function statusOf(plugin: PluginInfo): { label: string; tone: "on" | "wait" | "off" | "bad"; detail?: string } {
   switch (plugin.status.kind) {
     case "running":
-      return "running";
+      return { label: "running", tone: "on" };
     case "starting":
-      return "starting…";
+      return { label: "starting", tone: "wait" };
     case "stopped":
-      return plugin.enabled ? "stopped" : "off";
+      return { label: plugin.enabled ? "stopped" : "off", tone: "off" };
     case "failed":
-      return `failed — ${plugin.status.detail}`;
+      return { label: "failed", tone: "bad", detail: plugin.status.detail };
     case "refused":
-      return `refused — ${plugin.status.detail}`;
+      return { label: "refused", tone: "bad", detail: plugin.status.detail };
   }
 }
 
-function licenseText(license: unknown): string {
-  if (typeof license === "string") return license;
+function licenseRows(license: unknown): [string, string][] {
+  if (typeof license === "string") return [["license", license]];
   if (license && typeof license === "object") {
-    return Object.entries(license as Record<string, unknown>)
-      .map(([k, v]) => `${k}: ${String(v)}`)
-      .join(" · ");
+    return Object.entries(license as Record<string, unknown>).map(([k, v]) => [k, String(v)]);
   }
-  return "";
+  return [];
+}
+
+function Switch({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+}) {
+  return (
+    <label className={"docent-switch" + (disabled ? " is-disabled" : "")} title={label}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={label}
+      />
+      <span className="docent-switch-track">
+        <span className="docent-switch-thumb" />
+      </span>
+    </label>
+  );
+}
+
+function PluginCard({
+  plugin,
+  busy,
+  onToggle,
+}: {
+  plugin: PluginInfo;
+  busy: boolean;
+  onToggle: (plugin: PluginInfo) => void;
+}) {
+  const status = statusOf(plugin);
+  const rows = licenseRows(plugin.license);
+  const icon = plugin.contracts.includes("speech/1") ? "🔊" : "🔌";
+  return (
+    <article className={"docent-plugin-card is-" + status.tone}>
+      <header className="docent-plugin-card-head">
+        <span className="docent-plugin-icon" aria-hidden>
+          {icon}
+        </span>
+        <div className="docent-plugin-title">
+          <strong>{plugin.name}</strong>
+          <span className="docent-plugin-chips">
+            {plugin.version && <span className="docent-chip">v{plugin.version}</span>}
+            {plugin.contracts.map((c) => (
+              <span key={c} className="docent-chip is-contract">
+                {c}
+              </span>
+            ))}
+            <span className={"docent-status is-" + status.tone}>
+              <span className="docent-status-dot" />
+              {status.label}
+            </span>
+          </span>
+        </div>
+        <Switch
+          checked={plugin.enabled}
+          disabled={busy || plugin.status.kind === "refused"}
+          onChange={() => onToggle(plugin)}
+          label={plugin.enabled ? `Switch ${plugin.name} off` : `Switch ${plugin.name} on`}
+        />
+      </header>
+      {plugin.description && <p className="docent-plugin-desc">{plugin.description}</p>}
+      {status.detail && <p className="docent-plugin-problem">{status.detail}</p>}
+      {rows.length > 0 && (
+        <dl className="docent-plugin-license">
+          {rows.map(([k, v]) => (
+            <div key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <footer className="docent-plugin-links">
+        {plugin.homepage && (
+          <a href={plugin.homepage} target="_blank" rel="noreferrer">
+            ↗ home
+          </a>
+        )}
+        {plugin.status.kind === "running" && (
+          <code title="Where the page reaches this plugin">{pluginUrl(plugin.name, "/")}</code>
+        )}
+        {plugin.log && (
+          <span className="docent-plugin-log" title={plugin.log}>
+            log · {plugin.log.replace(/^.*\/plugins\//, "plugins/")}
+          </span>
+        )}
+      </footer>
+    </article>
+  );
 }
 
 export function PluginsModal({
@@ -107,152 +206,138 @@ export function PluginsModal({
     })();
 
   const provider = plugins ? providerOf(plugins, "speech/1") : null;
+  const starting = plugins?.some((p) => p.enabled && p.status.kind === "starting") ?? false;
   const voices = provider?.voices ?? [];
+  const voiceStatus = !provider
+    ? starting
+      ? { label: "voice plugin starting…", tone: "wait" as const }
+      : { label: "no voice plugin running", tone: "off" as const }
+    : !state.enabled
+      ? { label: `ready — ${provider.name}`, tone: "wait" as const }
+      : state.muted
+        ? { label: "muted", tone: "off" as const }
+        : state.speaking
+          ? { label: "speaking", tone: "on" as const }
+          : { label: `on — ${provider.name}`, tone: "on" as const };
 
   return (
     <div className="docent-modal-backdrop" onClick={onClose}>
       <div className="docent-modal docent-plugins" onClick={(e) => e.stopPropagation()}>
-        <header className="docent-modal-header">
+        <header className="docent-modal-header docent-plugins-header">
           <span>Plugins</span>
+          <span className="docent-plugins-sub">
+            Local providers the desktop app starts and stops.{" "}
+            <a href={DOCS_URL} target="_blank" rel="noreferrer">
+              How to build one ↗
+            </a>
+          </span>
         </header>
 
-        <section className="docent-plugins-section">
-          <h3>Voice</h3>
-          {!provider ? (
-            <p className="docent-modal-hint">
-              Narration is spoken by a <code>speech/1</code> plugin. None is running —
-              install one below and switch it on.
-            </p>
-          ) : (
-            <div className="docent-plugins-voice">
-              {!state.enabled ? (
-                <button
-                  className="docent-primary"
-                  onClick={() => speech.enable()}
-                  title="One click is what the browser needs before it may play sound"
-                >
-                  🔊 Enable voice
+        <section className={"docent-voice-card is-" + voiceStatus.tone}>
+          <span className="docent-plugin-icon docent-voice-icon" aria-hidden>
+            {state.enabled && !state.muted ? "🔊" : "🔈"}
+          </span>
+          <div className="docent-voice-body">
+            <div className="docent-voice-head">
+              <strong>Voice</strong>
+              <span className={"docent-status is-" + voiceStatus.tone}>
+                <span className="docent-status-dot" />
+                {voiceStatus.label}
+              </span>
+            </div>
+            {!provider ? (
+              <p className="docent-voice-hint">
+                Narration is spoken by a <code>speech/1</code> plugin.{" "}
+                {starting
+                  ? "The engine is loading its model — a first start also downloads it."
+                  : "Switch one on below, or install one."}
+              </p>
+            ) : !state.enabled ? (
+              <div className="docent-voice-controls">
+                <button className="docent-primary" onClick={() => speech.enable()}>
+                  Enable voice
                 </button>
-              ) : (
-                <>
-                  <label className="docent-check">
-                    <input
-                      type="checkbox"
-                      checked={!state.muted}
-                      onChange={(e) => speech.setMuted(!e.target.checked)}
-                    />
-                    Speak narration (M mutes during a presentation)
+                <span className="docent-voice-hint">
+                  One click, once per session — the browser plays no sound without it.
+                </span>
+              </div>
+            ) : (
+              <div className="docent-voice-controls">
+                <label className="docent-voice-toggle">
+                  <Switch
+                    checked={!state.muted}
+                    onChange={(on) => speech.setMuted(!on)}
+                    label={state.muted ? "Unmute narration" : "Mute narration"}
+                  />
+                  <span>Speak narration</span>
+                  <span className="docent-kbd" title="During a presentation">
+                    M
+                  </span>
+                </label>
+                {voices.length > 0 && (
+                  <label className="docent-voice-pick">
+                    <span>Voice</span>
+                    <select value={voice ?? ""} onChange={(e) => onVoice(e.target.value || null)}>
+                      <option value="">provider default</option>
+                      {voices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.id}
+                          {v.license ? ` · ${v.license}` : ""}
+                        </option>
+                      ))}
+                    </select>
                   </label>
-                  {voices.length > 0 && (
-                    <label className="docent-field">
-                      Voice
-                      <select value={voice ?? ""} onChange={(e) => onVoice(e.target.value || null)}>
-                        <option value="">provider default</option>
-                        {voices.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.id}
-                            {v.license ? ` (${v.license})` : ""}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                )}
+                <span className="docent-voice-actions">
+                  {state.speaking ? (
+                    <button onClick={() => speech.cancel()}>■ Stop</button>
+                  ) : (
+                    <button disabled={state.muted} onClick={() => void speech.speak(SAMPLE_LINE)}>
+                      ▶ Try the voice
+                    </button>
                   )}
-                  <button
-                    disabled={state.muted || state.speaking}
-                    onClick={() => void speech.speak(SAMPLE_LINE)}
-                  >
-                    {state.speaking ? "Speaking…" : "Try the voice"}
-                  </button>
-                  <button disabled={!state.speaking} onClick={() => speech.cancel()}>
-                    Stop
-                  </button>
-                  <button onClick={() => speech.disable()} title="Back to silent">
+                  <button className="docent-quiet" onClick={() => speech.disable()}>
                     Turn off
                   </button>
-                </>
-              )}
-              {state.error && <span className="docent-portfolio-github-warn">{state.error}</span>}
-            </div>
-          )}
+                </span>
+              </div>
+            )}
+            {state.error && <p className="docent-plugin-problem">{state.error}</p>}
+          </div>
         </section>
 
-        <section className="docent-plugins-section">
+        <section className="docent-plugins-list">
           <h3>
-            Installed
-            <button className="docent-plugins-rescan" disabled={busy !== null} onClick={rescan}>
-              Rescan
+            <span>Installed</span>
+            <button className="docent-quiet" disabled={busy !== null} onClick={rescan}>
+              ↻ Rescan
             </button>
           </h3>
-          {error && <p className="docent-portfolio-github-warn">{error}</p>}
+          {error && <p className="docent-plugin-problem">{error}</p>}
           {plugins && plugins.length === 0 && (
-            <p className="docent-modal-hint">
-              No plugins yet. A plugin is a folder with a <code>docent-plugin.json</code>
-              {pluginsDir ? (
-                <>
-                  {" "}
-                  dropped into <code>{pluginsDir}</code>.
-                </>
-              ) : (
-                " in the app's plugins folder."
-              )}{" "}
-              The first one is{" "}
-              <a href="https://github.com/happyren/docent-pocket-tts" target="_blank" rel="noreferrer">
-                docent-pocket-tts
-              </a>
-              , a local voice.
-            </p>
-          )}
-          {plugins?.map((plugin) => (
-            <div key={plugin.name} className="docent-plugin-row">
-              <div className="docent-plugin-head">
-                <strong>{plugin.name}</strong>
-                <span className="docent-portfolio-meta">{plugin.version}</span>
-                <span className="docent-portfolio-meta">{plugin.contracts.join(", ")}</span>
-                <span
-                  className={
-                    "docent-plugin-status" +
-                    (plugin.status.kind === "running"
-                      ? " is-running"
-                      : plugin.status.kind === "failed" || plugin.status.kind === "refused"
-                        ? " is-failed"
-                        : "")
-                  }
-                >
-                  {statusText(plugin)}
-                </span>
-                <label className="docent-check docent-plugin-switch">
-                  <input
-                    type="checkbox"
-                    checked={plugin.enabled}
-                    disabled={busy !== null || plugin.status.kind === "refused"}
-                    onChange={() => toggle(plugin)}
-                  />
-                  on
-                </label>
-              </div>
-              {plugin.description && <p className="docent-plugin-text">{plugin.description}</p>}
-              {plugin.license != null && (
-                <p className="docent-plugin-text docent-portfolio-meta">
-                  License — {licenseText(plugin.license)}
-                </p>
-              )}
-              <p className="docent-plugin-text docent-portfolio-meta">
-                {plugin.homepage && (
-                  <a href={plugin.homepage} target="_blank" rel="noreferrer">
-                    home
-                  </a>
-                )}
-                {plugin.homepage && plugin.log && " · "}
-                {plugin.log && <span title={plugin.log}>log: {plugin.log}</span>}
-                {plugin.status.kind === "running" && (
-                  <>
-                    {" · "}
-                    <code>{pluginUrl(plugin.name, "/")}</code>
-                  </>
-                )}
+            <div className="docent-plugins-empty">
+              <p>
+                No plugins yet. A plugin is a folder with a <code>docent-plugin.json</code>
+                {pluginsDir ? " dropped into" : " in the app's plugins folder."}
+              </p>
+              {pluginsDir && <code className="docent-plugins-path">{pluginsDir}</code>}
+              <p>
+                The first one is{" "}
+                <a href={FIRST_PLUGIN_URL} target="_blank" rel="noreferrer">
+                  docent-pocket-tts
+                </a>{" "}
+                — a local voice for narration.
               </p>
             </div>
+          )}
+          {plugins?.map((plugin) => (
+            <PluginCard key={plugin.name} plugin={plugin} busy={busy !== null} onToggle={toggle} />
           ))}
+          {pluginsDir && plugins && plugins.length > 0 && (
+            <p className="docent-plugins-where">
+              Folder: <code className="docent-plugins-path">{pluginsDir}</code>
+            </p>
+          )}
         </section>
 
         <div className="docent-modal-actions">

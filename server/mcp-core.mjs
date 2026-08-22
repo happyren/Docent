@@ -29,6 +29,7 @@ export const INSTRUCTIONS = [
   "When the user asks about one part of the diagram, call find({query}) — it matches labels, tags, intents, notes, logic, narratives, and legend meanings across every tier and returns each hit with its tier trail, so the relevant layer is one dive away.",
   "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
+  "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words — and let it finish: narrate() returns when the words have been said, so narrate, then move the camera, then narrate again. For a walkthrough at your own pace use present({action:'enter', mode:'guided'}) — presentation chrome, no frame stepping, the camera yours through focus/tour — or tour(), whose steps each wait for their own speech. Numbers, units, operators and identifiers are read the way an engineer says them; you do not need to spell them out.",
 ].join("\n");
 
 export const TOOLS = [
@@ -149,11 +150,12 @@ export const TOOLS = [
   {
     name: "present",
     description:
-      "Drive presentation mode — the continuous-camera walkthrough over the diagram's frames, in the author's declared order with their narratives. Actions: 'enter' (start, from the overview), 'next'/'prev' (step between waypoints), 'overview' (pull back to the whole tier), 'exit'.\nExample: present({action:'enter'}) then present({action:'next'}) as you narrate each waypoint.",
+      "Drive presentation mode — view-only canvas, toolbars gone, a HUD up. Two modes on 'enter': 'frames' (default) is the author's continuous-camera walkthrough over the frames in their declared order with their narratives — 'next'/'prev' step the waypoints; 'guided' is the same chrome with the camera left to you — move it with focus and tour at your own pace, narrate as you go; next/prev do not apply. 'overview' pulls back to the whole tier, 'exit' leaves.\nExample: present({action:'enter', mode:'guided'}) then focus({id:'n_gateway'}), narrate({text:'…'}), focus({id:'n_orders'}) …; or present({action:'enter'}) then present({action:'next'}) as you narrate each waypoint.",
     inputSchema: {
       type: "object",
       properties: {
         action: { type: "string", enum: ["enter", "exit", "next", "prev", "overview"] },
+        mode: { type: "string", enum: ["frames", "guided"] },
       },
       required: ["action"],
       additionalProperties: false,
@@ -191,10 +193,13 @@ export const TOOLS = [
   {
     name: "narrate",
     description:
-      "Show text in the narration panel. Empty/null text hides the panel.\nExample: narrate({text:'Requests land at the gateway first.'})",
+      "Show text in the narration panel — and say it aloud where a voice is on. Returns when the words have been spoken (at once when nothing speaks), so narrate, then move, then narrate: the camera never leaves mid-sentence. wait:false returns immediately instead. Empty/null text hides the panel and stops the voice.\nExample: narrate({text:'Requests land at the gateway first.'}) → {narrating:true, spoken:true}",
     inputSchema: {
       type: "object",
-      properties: { text: { type: ["string", "null"] } },
+      properties: {
+        text: { type: ["string", "null"] },
+        wait: { type: "boolean" },
+      },
       required: ["text"],
       additionalProperties: false,
     },

@@ -78,7 +78,7 @@ matching it.
 
 | Field | |
 |---|---|
-| `text` | The words to say. Docent sends plain reading text (arrows already read as "to", markdown stripped) |
+| `text` | The words to say. Docent sends **verbalized** text — numbers as words, units and rates named, operators spoken, identifiers split, abbreviations expanded, arrows as "to" — so a provider never has to guess how `8,000`, `>=` or `req/s` is said |
 | `voice_url` | Optional. A voice id from `/voices` or the manifest's `voices`; absent means the provider's default. (`voice` is accepted as an alias by conforming providers; Docent sends `voice_url`) |
 
 Answers `200` with `Content-Type: audio/wav`, **streamed** (chunked

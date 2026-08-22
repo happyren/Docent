@@ -428,13 +428,23 @@ manifest and every contract are specified in [docs/plugins.md](docs/plugins.md).
 into `~/.cache/pocket_tts`), switch it on, and click **Enable voice** — one
 gesture, once per session, because browsers play no sound without one. Then:
 
-- an agent's `narrate` and every `tour` step are spoken, and a tour step lasts
-  at least as long as its speech — the camera never outruns the voice;
+- an agent's `narrate` and every `tour` step are spoken; `narrate` returns
+  when the words have been said (`wait:false` to return at once) and a tour
+  step lasts at least as long as its speech — the camera never outruns the
+  voice;
+- an agent can present **guided**: `present({action:'enter', mode:'guided'})`
+  puts the canvas in presentation mode — view-only, toolbars gone — and leaves
+  the camera to the agent, which moves it with `focus` and `tour` at its own
+  pace; `mode:'frames'` (the default) is the author's ordered walkthrough;
 - a presentation speaks the author's frame narrative as it reaches each frame;
 - **M** mutes during a presentation; the 🔊 button on the narration panel does
   the same anywhere; the panel shows the provider's failure if it has one;
-- the words are the panel's words, read plainly — arrows become "to", markdown
-  drops, `v2` is "version 2" — never a second narration source.
+- the words are the panel's words, read the way an engineer says them —
+  `8,000` is *eight thousand*, `>=` *greater than or equal to*, `200ms` *two
+  hundred milliseconds*, `500 req/s` *five hundred requests per second*, `p99`
+  *p ninety-nine*, `1.5M` *one point five million*, `retry_queue` *retry
+  queue*, `e.g.` *for example*, arrows *to* — one tested verbalization layer
+  in the shell, never a second narration source and never the engine's guess.
 
 Pick a voice in the panel; each voice shows its license (CC0, CC BY 4.0, or
 CC BY-NC 4.0 — non-commercial) because they differ. The engine and its weights

@@ -89,7 +89,8 @@ export function App() {
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
   const pluginsRef = useRef<{ list: PluginInfo[]; at: number }>({ list: [], at: 0 });
-  // Plugins (S17): the listing the voice resolves its provider from.
+  // Plugins (S17): the listing the voice resolves its provider from — a
+  // capability the shell announces before the page loads.
   useEffect(() => {
     if (!hasPlugins()) return;
     const refresh = () =>
@@ -167,6 +168,7 @@ export function App() {
         ? new CommandAPI(canvas, camera, overlayStore, {
             narrate: setNarration,
             spoken: (text) => speech.speak(text),
+            speaks: () => speech.active,
           })
         : null,
     [canvas, camera, overlayStore, speech],
@@ -527,13 +529,14 @@ export function App() {
   const agentShellRef = useRef<AgentShellHooks | null>(null);
   agentShellRef.current = {
     presentation: {
-      enter: () => presentation.enter(),
+      enter: (mode) => presentation.enter(mode),
       exit: () => presentation.exit(),
       next: () => presentation.next(),
       prev: () => presentation.prev(),
       overview: () => presentation.overview(),
       state: () => ({
         active: presentation.active,
+        mode: presentation.active ? presentation.mode : null,
         index: !presentation.active
           ? null
           : presentation.index === OVERVIEW
@@ -572,7 +575,7 @@ export function App() {
     const current = () => agentShellRef.current!;
     return {
       presentation: {
-        enter: () => current().presentation.enter(),
+        enter: (mode) => current().presentation.enter(mode),
         exit: () => current().presentation.exit(),
         next: () => current().presentation.next(),
         prev: () => current().presentation.prev(),
@@ -1095,7 +1098,16 @@ export function App() {
             </button>
           </div>
         )}
-        {presentation.active && (
+        {presentation.active && presentation.mode === "guided" && (
+          <div className="docent-hud">
+            <span className="docent-hud-title">Guided tour</span>
+            <span className="docent-hud-hint">
+              the narrator drives the camera · Home overview · click a marked
+              component to dive · ⌫ back{speechState.enabled ? " · M mute" : ""} · Esc exit
+            </span>
+          </div>
+        )}
+        {presentation.active && presentation.mode === "frames" && (
           <div className="docent-hud">
             <span className="docent-hud-title">{waypointLabel}</span>
             {currentWaypoint?.narrative && (
@@ -1105,7 +1117,7 @@ export function App() {
             )}
             <span className="docent-hud-hint">
               → next · ← prev · Home overview · click a marked component to dive
-              · ⌫ back · Esc exit
+              · ⌫ back{speechState.enabled ? " · M mute" : ""} · Esc exit
             </span>
           </div>
         )}

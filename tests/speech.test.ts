@@ -12,7 +12,7 @@ describe("readable", () => {
   it("speaks notation plainly and keeps the words", () => {
     expect(readable("Orders → Payments")).toBe("Orders to Payments");
     expect(readable("API Gateway — internals")).toBe("API Gateway, internals");
-    expect(readable("Catalog v2 retries `charge` **twice**")).toBe("Catalog version 2 retries charge twice");
+    expect(readable("Catalog v2 retries `charge` **twice**")).toBe("Catalog version two retries charge twice");
     expect(readable("## Core\n- first\n- second")).toBe("Core. first. second");
     expect(readable("  spaced   out  ")).toBe("spaced out");
     expect(readable("A <- B <-> C")).toBe("A from B and C");

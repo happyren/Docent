@@ -470,7 +470,16 @@ impl Host {
             .iter()
             .map(|a| a.replace("{port}", &port.to_string()))
             .collect();
-        let log = fs::File::create(log_file(&dir)).map_err(|e| format!("cannot open log — {e}"))?;
+        // Truncated at each start, appended to by every writer — so a
+        // previous engine's last words, written through the handle it still
+        // holds, land at the end instead of past a hole.
+        let path = log_file(&dir);
+        let _ = fs::write(&path, "");
+        let log = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("cannot open log — {e}"))?;
         let err_log = log
             .try_clone()
             .map_err(|e| format!("cannot open log — {e}"))?;

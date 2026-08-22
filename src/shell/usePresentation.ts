@@ -6,12 +6,20 @@ import { OVERVIEW, orderWaypoints, resolveWaypointTarget } from "../scene/waypoi
 
 export { OVERVIEW };
 
+/**
+ * How the presentation is driven (D54): `frames` steps the author's
+ * ordered waypoints; `guided` is the same chrome with the camera left to
+ * whoever is narrating — an agent moving it with focus and tour.
+ */
+export type PresentationMode = "frames" | "guided";
+
 export interface Presentation {
   active: boolean;
+  mode: PresentationMode;
   /** OVERVIEW (-1) or an index into `waypoints`. */
   index: number;
   waypoints: FrameInfo[];
-  enter(): void;
+  enter(mode?: PresentationMode): void;
   exit(): void;
   next(): void;
   prev(): void;
@@ -23,6 +31,7 @@ export function usePresentation(
   camera: CameraEngine | null,
 ): Presentation {
   const [active, setActive] = useState(false);
+  const [mode, setMode] = useState<PresentationMode>("frames");
   const [index, setIndex] = useState<number>(OVERVIEW);
   const [waypoints, setWaypoints] = useState<FrameInfo[]>([]);
   const savedViewportRef = useRef<Viewport | null>(null);
@@ -52,40 +61,51 @@ export function usePresentation(
     [canvas, camera, flyOverview],
   );
 
-  const enter = useCallback(() => {
-    if (!canvas || !camera) return;
-    const tiers = computeTiers(canvas.getSceneSnapshot());
-    const frames = orderWaypoints(
-      canvas.getFrames().filter((f) => (tiers.frameTier.get(f.id) ?? 1) === 1),
-    );
-    savedViewportRef.current = canvas.getViewport();
-    canvas.setViewMode(true);
-    setWaypoints(frames);
-    setActive(true);
-    setIndex(OVERVIEW);
-    flyOverview();
-  }, [canvas, camera, flyOverview]);
+  const enter = useCallback(
+    (wanted: PresentationMode = "frames") => {
+      if (!canvas || !camera) return;
+      const tiers = computeTiers(canvas.getSceneSnapshot());
+      const frames = orderWaypoints(
+        canvas.getFrames().filter((f) => (tiers.frameTier.get(f.id) ?? 1) === 1),
+      );
+      savedViewportRef.current = canvas.getViewport();
+      canvas.setViewMode(true);
+      setWaypoints(frames);
+      setMode(wanted);
+      setActive(true);
+      setIndex(OVERVIEW);
+      // A guided presentation leaves the camera where it is: the narrator
+      // is about to move it, and an overview first would be a lurch.
+      if (wanted === "frames") flyOverview();
+    },
+    [canvas, camera, flyOverview],
+  );
 
   const exit = useCallback(() => {
     if (!canvas || !camera) return;
     canvas.setViewMode(false);
     setActive(false);
+    setMode("frames");
     setIndex(OVERVIEW);
     const saved = savedViewportRef.current;
     if (saved) void camera.flyToViewport(saved, 500);
   }, [canvas, camera]);
 
+  // Stepping belongs to the frame walk; a guided presentation has no
+  // "next" — the narrator decides where the camera goes.
   const next = useCallback(() => {
+    if (mode === "guided") return;
     goTo(index === OVERVIEW ? 0 : index + 1, waypoints);
-  }, [goTo, index, waypoints]);
+  }, [goTo, index, waypoints, mode]);
 
   const prev = useCallback(() => {
+    if (mode === "guided") return;
     goTo(index <= 0 ? OVERVIEW : index - 1, waypoints);
-  }, [goTo, index, waypoints]);
+  }, [goTo, index, waypoints, mode]);
 
   const overview = useCallback(() => {
     goTo(OVERVIEW, waypoints);
   }, [goTo, waypoints]);
 
-  return { active, index, waypoints, enter, exit, next, prev, overview };
+  return { active, mode, index, waypoints, enter, exit, next, prev, overview };
 }
