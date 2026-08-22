@@ -1388,3 +1388,62 @@ body {
   font-size: 12px;
   opacity: 0.7;
 }
+
+/* Agent at work (S19, D61): the orange frame says whose turn it is. */
+.docent-agent-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 14;
+  border: 5px solid #f76707;
+  border-radius: 4px;
+  box-shadow: inset 0 0 28px rgba(247, 103, 7, 0.35);
+  animation: docent-agent-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes docent-agent-pulse {
+  50% {
+    border-color: #ffa94d;
+    box-shadow: inset 0 0 40px rgba(255, 169, 77, 0.45);
+  }
+}
+
+.docent-agent-frame-label {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #f76707;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.docent-agent-report {
+  position: absolute;
+  left: 16px;
+  bottom: 70px;
+  max-width: 520px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(27, 27, 31, 0.92);
+  border: 1px solid #f76707;
+  color: var(--docent-fg);
+  z-index: 12;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.docent-agent-report-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+}

@@ -70,7 +70,7 @@ import { ReviewPanel, type ReviewJump } from "./ReviewPanel";
 import { portfolioThumbnail } from "./sceneThumbnails";
 
 /** A brand-new scene is just an empty `.excalidraw` file (D17). */
-const EMPTY_SCENE = JSON.stringify({
+export const EMPTY_SCENE = JSON.stringify({
   type: "excalidraw",
   version: 2,
   source: "docent",

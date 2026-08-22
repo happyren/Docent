@@ -11,6 +11,7 @@ import type { TourStep } from "../command/api";
 import { detailBadges } from "../scene/detailBadges";
 import { computeTiers } from "../scene/tiers";
 import { scriptTour } from "./script";
+import type { Op } from "../authoring/ops";
 import type { SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
@@ -222,6 +223,28 @@ export interface AgentShellHooks {
   openScene(project: string, scene: string): Promise<void>;
   isDirty(): boolean;
   currentScene(): { project: string; scene: string } | null;
+  /** Authoring (S19, D65): the store's own routes, never Git beyond a branch. */
+  authoring?: {
+    /** Save the canvas back where it came from; rejects for a loose file. */
+    saveScene(): Promise<{ project: string; scene: string }>;
+    /** Create an empty scene in a project and open it. */
+    createScene(project: string, scene: string): Promise<void>;
+    /** Where the open scene's project stands with GitHub, or null when unbound. */
+    binding(project: string): Promise<{ branch: string; baseBranch: string } | null>;
+    /** Cut a branch off the active one and move the project onto it. */
+    createBranch(project: string, name: string): Promise<void>;
+  };
+}
+
+/** An edit's answer with the way forward. */
+function withNext(result: import("../command/api").EditResult) {
+  const warns = result.lint.findings.filter((f) => f.level === "warn").length;
+  return {
+    ...result,
+    next: warns
+      ? `${warns} warning${warns === 1 ? "" : "s"} remain (see lint) — update what is missing; save_scene when done`
+      : "validate is clean — save_scene when done; show the result with focus or a tour",
+  };
 }
 
 /**
@@ -297,8 +320,20 @@ export async function execute(
       const frameGraphId = (sourceId: string) =>
         graph.frames.find((f) => f.sourceId === sourceId)?.id ?? sourceId;
       const p = shell.presentation.state();
+      const scene = shell.currentScene();
+      const binding = scene && shell.authoring ? await shell.authoring.binding(scene.project).catch(() => null) : null;
       return {
-        scene: shell.currentScene(),
+        scene,
+        canEdit: commands.canEdit(),
+        ...(binding
+          ? {
+              git: {
+                branch: binding.branch,
+                baseBranch: binding.baseBranch,
+                onBase: binding.branch === binding.baseBranch,
+              },
+            }
+          : {}),
         trail: shell.drill
           .trail()
           .map((crumb) => ({ id: frameGraphId(crumb.id), name: crumb.name })),
@@ -443,6 +478,55 @@ export async function execute(
       commands.clearEffects();
       void commands.narrate({ text: null });
       return { cleared: true };
+
+    // --- authoring (S19) --------------------------------------------------
+    case "add_node":
+    case "add_edge":
+    case "update":
+    case "remove":
+    case "add_frame":
+    case "add_detail_layer":
+    case "define_kind":
+    case "layout":
+      return withNext(await commands.edit([{ ...params, op: tool } as Op]));
+    case "edit": {
+      const ops = params.ops as Op[] | undefined;
+      if (!Array.isArray(ops) || !ops.length) throw new Error("edit needs a non-empty ops list");
+      return withNext(await commands.edit(ops));
+    }
+    case "propose": {
+      const ops = params.ops as Op[] | undefined;
+      if (!Array.isArray(ops) || !ops.length) throw new Error("propose needs a non-empty ops list");
+      return { ...commands.propose(ops), next: "edit({ops}) with the same ops to apply, or revise" };
+    }
+    case "validate":
+      return { ...commands.validate(), next: "fix what is listed with update / add_detail_layer, then validate again" };
+    case "undo_edit":
+      return { undone: commands.undoAgentEdit() };
+    case "save_scene": {
+      if (!shell.authoring) throw new Error("Saving is not available here");
+      const saved = await shell.authoring.saveScene();
+      return { saved, next: "the checkpointer lands it on the branch; the person opens the pull request" };
+    }
+    case "create_scene": {
+      if (!shell.authoring) throw new Error("Creating scenes is not available here");
+      if (shell.isDirty()) {
+        throw new Error("The canvas has unsaved changes — ask the person to save or discard them first");
+      }
+      const { project, scene } = params as { project: string; scene: string };
+      await commands.awaitSpeech(params.interrupt === true);
+      await shell.authoring.createScene(project, scene);
+      return { created: { project, scene }, next: "define_kind for the kinds you will use, add_frame, then edit in batches" };
+    }
+    case "create_branch": {
+      if (!shell.authoring) throw new Error("Branches are not available here");
+      const scene = shell.currentScene();
+      if (!scene) throw new Error("No portfolio scene is open — open_scene first");
+      const name = String(params.name ?? "").trim();
+      if (!name) throw new Error("create_branch needs a name, e.g. docent/retry-queue");
+      await shell.authoring.createBranch(scene.project, name);
+      return { branch: name, project: scene.project, next: "edit; saves check point onto this branch; the person opens the pull request" };
+    }
     default:
       throw new Error(`Unknown tool: ${tool}`);
   }

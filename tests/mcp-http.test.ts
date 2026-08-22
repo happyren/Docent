@@ -70,10 +70,18 @@ describe("mcp streamable http", () => {
     const body = (await res.json()) as {
       result: { tools: { name: string; description: string }[] };
     };
-    expect(body.result.tools.map((t) => t.name).sort()).toEqual([
+    expect(body.result.tools.map((t: { name: string }) => t.name).sort()).toEqual([
+      "add_detail_layer",
+      "add_edge",
+      "add_frame",
+      "add_node",
       "clear_effects",
       "climb",
+      "create_branch",
+      "create_scene",
+      "define_kind",
       "dive",
+      "edit",
       "find",
       "flow",
       "focus",
@@ -82,13 +90,20 @@ describe("mcp streamable http", () => {
       "get_scene_graph",
       "get_view",
       "highlight",
+      "layout",
       "list_projects",
       "narrate",
       "open_scene",
       "present",
+      "propose",
       "read_frame",
+      "remove",
+      "save_scene",
       "script_tour",
       "tour",
+      "undo_edit",
+      "update",
+      "validate",
     ]);
     for (const tool of body.result.tools) {
       expect(tool.description, tool.name).toContain("Example:");
@@ -186,7 +201,7 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(18);
+    expect(tools.result.tools).toHaveLength(33);
   });
 
   it("relays tool calls, including their errors", async () => {

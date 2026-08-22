@@ -53,6 +53,7 @@ enum MenuAction {
     Arrange,
     DetailMarkers,
     Plugins,
+    AgentEdit,
     ExportMermaid,
     ExportSidecar,
     CheckUpdates,
@@ -61,7 +62,7 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 16] = [
+    const ALL: [Self; 17] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -74,6 +75,7 @@ impl MenuAction {
         Self::Arrange,
         Self::DetailMarkers,
         Self::Plugins,
+        Self::AgentEdit,
         Self::ExportMermaid,
         Self::ExportSidecar,
         Self::CheckUpdates,
@@ -96,6 +98,7 @@ impl MenuAction {
             Self::Arrange => "arrange",
             Self::DetailMarkers => "detail-markers",
             Self::Plugins => "plugins",
+            Self::AgentEdit => "agent-edit",
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
             Self::CheckUpdates => "check-updates",
@@ -117,6 +120,7 @@ impl MenuAction {
             Self::Arrange => "Arrange Detail Tiers",
             Self::DetailMarkers => "Detail Markers",
             Self::Plugins => "Plugins…",
+            Self::AgentEdit => "Agent Can Edit",
             Self::ExportMermaid => "Mermaid…",
             Self::ExportSidecar => "Semantic JSON…",
             Self::CheckUpdates => "Check for Updates…",
@@ -141,6 +145,7 @@ impl MenuAction {
             | Self::Arrange
             | Self::DetailMarkers
             | Self::Plugins
+            | Self::AgentEdit
             | Self::ExportMermaid
             | Self::ExportSidecar
             | Self::CheckUpdates
@@ -429,6 +434,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &check_item(app, MenuAction::DetailMarkers, true)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Plugins)?,
+            &check_item(app, MenuAction::AgentEdit, true)?,
             #[cfg(target_os = "macos")]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(target_os = "macos")]
@@ -709,7 +715,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 14] = [
+    const FRONTEND_IDS: [&str; 15] = [
         "new",
         "open",
         "import",
@@ -722,6 +728,7 @@ mod tests {
         "arrange",
         "detail-markers",
         "plugins",
+        "agent-edit",
         "export-mermaid",
         "export-sidecar",
     ];

@@ -20,6 +20,9 @@ import type { CameraEngine } from "../camera/engine";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
 import type { HighlightStyle, OverlayStore } from "../overlay/state";
+import type { SceneWrite } from "../adapter/excalidraw";
+import { idSource, lint, plan, PlanError, simulate, type LintFinding, type Op } from "../authoring/ops";
+import { describeChange } from "../scene/diff";
 
 /** The read-only slice of the canvas surface commands may touch. */
 export interface SceneReader {
@@ -32,6 +35,33 @@ export interface SceneReader {
   getViewport(): Viewport;
   getViewportSize(): { width: number; height: number };
   onViewportChange(callback: (viewport: Viewport) => void): () => void;
+}
+
+/**
+ * The write slice of the canvas surface (S19, B4): one write lands as one
+ * undo step; capture/restore is the agent's own Undo; `canEdit` is the
+ * person's switch; `working` and `report` are the shell's chrome — the
+ * orange frame and the panel line (D61).
+ */
+export interface SceneWriter {
+  applyWrite(write: SceneWrite): void;
+  captureScene(): unknown;
+  restoreScene(captured: unknown): void;
+  canEdit(): boolean;
+  working?(on: boolean): void;
+  report?(line: string, undo: (() => void) | null): void;
+}
+
+/** What an edit or a proposal answers (D62). */
+export interface EditResult {
+  applied: boolean;
+  changelog: string;
+  /** Caller refs and new ids → graph ids (what every other tool addresses). */
+  ids: Record<string, string>;
+  notes: string[];
+  /** Graph ids of what was created or changed. */
+  touched: string[];
+  lint: { findings: LintFinding[]; summary: string };
 }
 
 /** Scene-units per second at speed 1.0. */
@@ -121,12 +151,149 @@ export class CommandAPI {
     });
   }
 
+  private readonly undoStack: unknown[] = [];
+  private workingTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(
     private readonly reader: SceneReader,
     private readonly camera: CameraEngine,
     private readonly overlay: OverlayStore,
     private readonly narration: NarrationSink = { narrate: () => {} },
+    private readonly writer: SceneWriter | null = null,
   ) {}
+
+  // -------------------------------------------------------------------------
+  // authoring (S19)
+  // -------------------------------------------------------------------------
+
+  /** Whether writes are possible here and allowed now. */
+  canEdit(): boolean {
+    return this.writer !== null && this.writer.canEdit();
+  }
+
+  private requireWriter(): SceneWriter {
+    if (!this.writer) throw new Error("This canvas cannot be edited by an agent");
+    if (!this.writer.canEdit()) {
+      throw new Error("Agent editing is switched off — the person can turn it on under View → Agent can edit");
+    }
+    return this.writer;
+  }
+
+  /** Graph ids for the source ids a plan assigned, once the graph exists. */
+  private graphIds(ids: Record<string, string>, graph: SceneGraph): Record<string, string> {
+    const toGraph = (sourceId: string) =>
+      graph.nodes.find((n) => n.sourceId === sourceId)?.id ??
+      graph.edges.find((e) => e.sourceId === sourceId)?.id ??
+      graph.frames.find((f) => f.sourceId === sourceId)?.id ??
+      sourceId;
+    const out: Record<string, string> = {};
+    for (const [handle, sourceId] of Object.entries(ids)) {
+      if (handle.startsWith("$")) out[handle] = toGraph(sourceId);
+    }
+    return out;
+  }
+
+  private planOrExplain(ops: Op[]) {
+    try {
+      return plan(ops, this.reader.getSceneSnapshot(), idSource());
+    } catch (err) {
+      if (err instanceof PlanError) {
+        throw new Error(`Nothing applied — ${err.problems.length} problem${err.problems.length === 1 ? "" : "s"}:\n- ${err.problems.join("\n- ")}`);
+      }
+      throw err;
+    }
+  }
+
+  /** The batch's dry run (D62): the changelog it would produce, nothing touched. */
+  propose(ops: Op[]): EditResult {
+    const before = this.reader.getSceneSnapshot();
+    const planned = this.planOrExplain(ops);
+    const after = simulate(before, planned.write);
+    const { changelog } = describeChange(before, after);
+    const graph = buildSceneGraph(after);
+    return {
+      applied: false,
+      changelog,
+      ids: this.graphIds(planned.ids, graph),
+      notes: planned.notes,
+      touched: planned.touched.map((id) => this.graphIds({ $x: id }, graph).$x ?? id),
+      lint: lint(after),
+    };
+  }
+
+  /**
+   * Apply a batch (D62): validated whole, landed as one undo step, shown,
+   * reported, and answered with what actually changed.
+   */
+  async edit(ops: Op[]): Promise<EditResult> {
+    const writer = this.requireWriter();
+    const before = this.reader.getSceneSnapshot();
+    const planned = this.planOrExplain(ops);
+    const captured = writer.captureScene();
+    this.setWorking(true);
+    try {
+      writer.applyWrite(planned.write);
+    } catch (err) {
+      this.setWorking(false);
+      throw err;
+    }
+    this.undoStack.push(captured);
+    if (this.undoStack.length > 20) this.undoStack.shift();
+    const after = this.reader.getSceneSnapshot();
+    const { changelog } = describeChange(before, after);
+    const graph = buildSceneGraph(after);
+    const ids = this.graphIds(planned.ids, graph);
+    const touched = planned.touched.map((id) => this.graphIds({ $x: id }, graph).$x ?? id);
+    // Show the work: fly to what changed, outline it (I2 — overlay only).
+    const present = planned.touched.filter((id) => this.reader.getElementInfo(id) || this.reader.getFrameInfo(id));
+    if (present.length) {
+      try {
+        await this.frameTargets(present, 0.25);
+        this.overlay.setHighlight(this.resolveEffectTargets(graph, present), "outline");
+      } catch {
+        // Showing is a courtesy; the edit already landed.
+      }
+    }
+    const summary = changelog || planned.notes.join("; ") || "no semantic change";
+    writer.report?.(summary, () => this.undoAgentEdit());
+    this.setWorking(false);
+    return { applied: true, changelog, ids, notes: planned.notes, touched, lint: lint(after) };
+  }
+
+  /** Put the scene back to before the last agent edit — itself undoable. */
+  undoAgentEdit(): boolean {
+    const writer = this.requireWriter();
+    const captured = this.undoStack.pop();
+    if (captured === undefined) return false;
+    writer.restoreScene(captured);
+    this.overlay.setHighlight([], "outline");
+    return true;
+  }
+
+  /** The craft check (D62). */
+  validate(): { findings: LintFinding[]; summary: string } {
+    return lint(this.reader.getSceneSnapshot());
+  }
+
+  /**
+   * The agent-at-work frame (D61): on while a write runs and for a short
+   * linger after, so consecutive calls read as one session.
+   */
+  private setWorking(on: boolean): void {
+    if (!this.writer?.working) return;
+    if (this.workingTimer) {
+      clearTimeout(this.workingTimer);
+      this.workingTimer = null;
+    }
+    if (on) {
+      this.writer.working(true);
+      return;
+    }
+    this.workingTimer = setTimeout(() => {
+      this.writer?.working?.(false);
+      this.workingTimer = null;
+    }, 4000);
+  }
 
   /**
    * The speech gate (D57): the picture never leaves mid-sentence. Every

@@ -91,6 +91,24 @@ export interface SnapshotElement {
   name: string | null;
   link: string | null;
   docent: DocentElementData;
+  /**
+   * The look beyond what the legend reads (D59): what a new element of the
+   * same kind or type inherits so an agent's drawing matches the author's.
+   */
+  look: ElementLook;
+}
+
+export interface ElementLook {
+  roughness: number;
+  /** Excalidraw's roundness type, or null for sharp corners. */
+  roundness: number | null;
+  fontFamily: number | null;
+  fontSize: number | null;
+  textAlign: string | null;
+  startArrowhead: string | null;
+  endArrowhead: string | null;
+  /** Arrow routing: `elbow`, `round` (curved), or `sharp`. */
+  arrowType: string | null;
 }
 
 export interface SceneSnapshot {
@@ -268,6 +286,26 @@ export function snapshotFromRawElements(raw: readonly unknown[]): SceneSnapshot 
       endBindingId: binding(el.endBinding),
       name: asString(el.name),
       link: asString(el.link),
+      look: {
+        roughness: asNumber(el.roughness, 1),
+        roundness:
+          typeof el.roundness === "object" && el.roundness !== null
+            ? asNumber((el.roundness as Record<string, unknown>).type, 3)
+            : null,
+        fontFamily: typeof el.fontFamily === "number" ? el.fontFamily : null,
+        fontSize: typeof el.fontSize === "number" ? el.fontSize : null,
+        textAlign: asString(el.textAlign),
+        startArrowhead: asString(el.startArrowhead),
+        endArrowhead: asString(el.endArrowhead),
+        arrowType:
+          type === "arrow"
+            ? el.elbowed === true
+              ? "elbow"
+              : typeof el.roundness === "object" && el.roundness !== null
+                ? "round"
+                : "sharp"
+            : null,
+      },
       docent: parseDocent(el.customData),
     });
   }

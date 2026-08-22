@@ -103,6 +103,112 @@ export interface ElementInfo {
 
 
 /** Typed surface the shell drives the canvas through. */
+/**
+ * The adapter's write vocabulary (S19, D59, B1): what the Command API's
+ * semantic layer asks for once meaning has become geometry and style. Ids
+ * are the caller's — assigned before the write, so the answer needs no
+ * mapping. One `SceneWrite` lands as ONE undo step.
+ */
+export interface WriteStyle {
+  strokeColor: string;
+  backgroundColor: string;
+  fillStyle: string;
+  strokeWidth: number;
+  strokeStyle: string;
+  roughness: number;
+  /** Excalidraw roundness type, or null for sharp. */
+  roundness: number | null;
+  opacity: number;
+  fontFamily: number;
+  fontSize: number;
+}
+
+/**
+ * The meaning a write carries, in the author's terms (S10). The adapter
+ * stores it the way the intent panel does (D41: `note` is the first
+ * intent, the list appears at two or more) — one writer, one format.
+ */
+export interface WriteMeaning {
+  tags?: string[];
+  intents?: string[];
+  logic?: string | null;
+  narrative?: string | null;
+  order?: number | null;
+  detailFrameId?: string | null;
+}
+
+export interface WriteShape {
+  id: string;
+  type: "rectangle" | "ellipse" | "diamond";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string | null;
+  frameId: string | null;
+  style: WriteStyle;
+  meaning: WriteMeaning | null;
+}
+
+export interface WriteText {
+  id: string;
+  type: "text";
+  x: number;
+  y: number;
+  text: string;
+  frameId: string | null;
+  style: WriteStyle;
+  meaning: WriteMeaning | null;
+}
+
+export interface WriteArrow {
+  id: string;
+  from: string;
+  to: string;
+  label: string | null;
+  frameId: string | null;
+  style: WriteStyle;
+  startArrowhead: string | null;
+  endArrowhead: string | null;
+  meaning: WriteMeaning | null;
+}
+
+export interface WriteFrame {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  meaning: WriteMeaning | null;
+}
+
+export interface WritePatch {
+  id: string;
+  label?: string | null;
+  name?: string;
+  frameId?: string | null;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  style?: Partial<WriteStyle>;
+  /** Fields named are set (null clears); fields absent are kept. */
+  meaning?: WriteMeaning;
+}
+
+export interface SceneWrite {
+  shapes?: WriteShape[];
+  texts?: WriteText[];
+  frames?: WriteFrame[];
+  arrows?: WriteArrow[];
+  patches?: WritePatch[];
+  /** Element ids to delete; bound labels go with their container. */
+  remove?: string[];
+  /** Replace the legend in the same step (the carrier is rewritten). */
+  legend?: LegendRule[];
+}
+
 export interface DocentCanvasHandle {
   /** Canonical `.excalidraw` JSON for the current scene. */
   serializeScene(): string;
@@ -219,6 +325,18 @@ export interface DocentCanvasHandle {
    * the legend travels inside the `.excalidraw` file (D9, B6).
    */
   setLegend(rules: LegendRule[]): void;
+
+  /**
+   * Apply one write to the scene as one undo step (S19, D61). Shapes get
+   * bound labels, arrows are bound to the shapes they join, frames own
+   * what lies inside them, and patches touch exactly the fields named.
+   * Unknown ids throw before anything changes.
+   */
+  applyWrite(write: SceneWrite): void;
+  /** The scene as it is, opaque — what `restoreScene` puts back (D61 Undo). */
+  captureScene(): unknown;
+  /** Put a captured scene back, as one undo step of its own. */
+  restoreScene(captured: unknown): void;
 }
 
 /**
@@ -404,6 +522,9 @@ export interface SceneMenuActions {
   onConnectAgent: () => void;
   /** Present only where the shell hosts plugins (S17) — the web build never does. */
   onOpenPlugins?: () => void;
+  /** The agent-can-edit switch (S19, D61), with its current state for the label. */
+  onToggleAgentEdit?: () => void;
+  agentCanEdit?: boolean;
 }
 
 
@@ -481,6 +602,61 @@ function stringField(v: unknown): string | null {
 }
 
 /** Merge a patch into an element's `customData.docent`, dropping null keys. */
+/**
+ * The legend as scene elements (D9): a locked text carrier whose
+ * customData holds the rules. Returns the element list with the old
+ * carrier deleted and the new one appended, ready for one updateScene.
+ */
+function legendWrite(
+  all: readonly ExcalidrawElement[],
+  rules: LegendRule[],
+): { elements: ExcalidrawElement[]; carrier: ExcalidrawElement } {
+  const carrier = all.find(
+    (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
+  );
+  const legendText = rules.length
+    ? `Legend\n${rules
+        .map((r) => {
+          const conditions = [
+            `${r.attr} ${r.value}`,
+            ...(r.also ?? []).map((c) => `${c.attr} ${c.value}`),
+          ].join(" + ");
+          return `${conditions} → ${r.key}: ${r.meaning}`;
+        })
+        .join("\n")}`
+    : "Legend (empty)";
+  // Recreate the carrier so text metrics stay correct; keep its position.
+  const live = all.filter((el) => !el.isDeleted && el !== carrier);
+  let x: number;
+  let y: number;
+  if (carrier) {
+    x = carrier.x;
+    y = carrier.y;
+  } else if (live.length) {
+    const [minX, minY] = getCommonBounds(live);
+    x = minX;
+    y = minY - 40 - 20 * (rules.length + 1);
+  } else {
+    x = 0;
+    y = 0;
+  }
+  const [textEl] = convertToExcalidrawElements(
+    [{ type: "text", text: legendText, x, y, fontSize: 14, locked: true }],
+    { regenerateIds: true },
+  );
+  (textEl as { index?: unknown }).index = undefined;
+  const nextCarrier = newElementWith(textEl, {
+    customData: { docent: { legend: rules } },
+  });
+  return {
+    elements: [
+      ...all.map((el) => (el === carrier ? newElementWith(el, { isDeleted: true }) : el)),
+      nextCarrier,
+    ],
+    carrier: nextCarrier,
+  };
+}
+
 function withDocentPatch(
   element: ExcalidrawElement,
   patch: Record<string, unknown>,
@@ -835,6 +1011,346 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       return { frameId: frame.id, bounds };
     },
 
+    captureScene: () => api.getSceneElementsIncludingDeleted().map((el) => el),
+
+    restoreScene: (captured) => {
+      if (!Array.isArray(captured)) throw new Error("Nothing to restore");
+      api.updateScene({
+        elements: captured as ExcalidrawElement[],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    applyWrite: (write) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      const live = new Map(all.filter((el) => !el.isDeleted).map((el) => [el.id, el]));
+      const known = new Set<string>(live.keys());
+      for (const shape of write.shapes ?? []) known.add(shape.id);
+      for (const text of write.texts ?? []) known.add(text.id);
+      for (const frame of write.frames ?? []) known.add(frame.id);
+      const need = (id: string, what: string) => {
+        if (!known.has(id)) throw new Error(`Unknown ${what}: ${id}`);
+      };
+      for (const arrow of write.arrows ?? []) {
+        need(arrow.from, "arrow source");
+        need(arrow.to, "arrow target");
+      }
+      for (const patch of write.patches ?? []) need(patch.id, "element");
+      for (const id of write.remove ?? []) need(id, "element");
+
+      const styleProps = (style: WriteStyle) => ({
+        strokeColor: style.strokeColor,
+        backgroundColor: style.backgroundColor,
+        fillStyle: style.fillStyle as "solid" | "hachure" | "cross-hatch" | "zigzag",
+        strokeWidth: style.strokeWidth,
+        strokeStyle: style.strokeStyle as "solid" | "dashed" | "dotted",
+        roughness: style.roughness,
+        roundness: style.roundness === null ? null : { type: style.roundness },
+        opacity: style.opacity,
+      });
+      // The stored form of meaning (D41): what setElementIntent writes.
+      const storedMeaning = (meaning: WriteMeaning | null | undefined, base: DocentData = {}) => {
+        const next: Record<string, unknown> = { ...base };
+        const set = (key: string, value: unknown) => {
+          if (value === null || value === undefined) delete next[key];
+          else next[key] = value;
+        };
+        if (!meaning) return next;
+        if (meaning.tags !== undefined) set("tags", meaning.tags.length ? meaning.tags : null);
+        if (meaning.intents !== undefined) {
+          set("note", meaning.intents[0] || null);
+          set("intents", meaning.intents.length > 1 ? meaning.intents : null);
+        }
+        if (meaning.logic !== undefined) set("logic", meaning.logic || null);
+        if (meaning.narrative !== undefined) set("narrative", meaning.narrative || null);
+        if (meaning.order !== undefined) set("order", meaning.order);
+        if (meaning.detailFrameId !== undefined) {
+          set("detail", meaning.detailFrameId ? { frameId: meaning.detailFrameId } : null);
+        }
+        return next;
+      };
+      const docentData = (meaning: WriteMeaning | null) => {
+        const stored = storedMeaning(meaning);
+        return Object.keys(stored).length ? { customData: { docent: stored } } : {};
+      };
+
+      // New shapes, texts, and frames come from the skeleton converter —
+      // the upstream-sanctioned way to make elements with bound labels.
+      const skeletons: Parameters<typeof convertToExcalidrawElements>[0] = [];
+      for (const shape of write.shapes ?? []) {
+        skeletons.push({
+          type: shape.type,
+          id: shape.id,
+          x: shape.x,
+          y: shape.y,
+          width: shape.width,
+          height: shape.height,
+          frameId: shape.frameId,
+          ...styleProps(shape.style),
+          ...docentData(shape.meaning),
+          ...(shape.label
+            ? {
+                label: {
+                  text: shape.label,
+                  fontSize: shape.style.fontSize,
+                  fontFamily: shape.style.fontFamily as never,
+                  textAlign: "center",
+                  verticalAlign: "middle",
+                },
+              }
+            : {}),
+        } as never);
+      }
+      for (const text of write.texts ?? []) {
+        skeletons.push({
+          type: "text",
+          id: text.id,
+          x: text.x,
+          y: text.y,
+          text: text.text,
+          fontSize: text.style.fontSize,
+          fontFamily: text.style.fontFamily,
+          strokeColor: text.style.strokeColor,
+          opacity: text.style.opacity,
+          frameId: text.frameId,
+          ...docentData(text.meaning),
+        } as never);
+      }
+      for (const frame of write.frames ?? []) {
+        // The converter sizes a frame to its children and dereferences the
+        // list unconditionally; the bounds are overridden below either way.
+        const children = [
+          ...(write.shapes ?? []).filter((sh) => sh.frameId === frame.id).map((sh) => sh.id),
+          ...(write.texts ?? []).filter((t) => t.frameId === frame.id).map((t) => t.id),
+        ];
+        skeletons.push({
+          type: "frame",
+          id: frame.id,
+          name: frame.name,
+          x: frame.x,
+          y: frame.y,
+          width: frame.width,
+          height: frame.height,
+          children,
+          ...docentData(frame.meaning),
+        } as never);
+      }
+      const created = skeletons.length
+        ? convertToExcalidrawElements(skeletons, { regenerateIds: false })
+        : [];
+      // A frame skeleton without children keeps the bounds it was given.
+      for (const frame of write.frames ?? []) {
+        const el = created.find((c) => c.id === frame.id);
+        if (el) Object.assign(el, { x: frame.x, y: frame.y, width: frame.width, height: frame.height });
+      }
+      // Converter-assigned fractional indices would collide with the scene's.
+      for (const el of created) {
+        (el as { index?: unknown }).index = undefined;
+      }
+      // Bound labels inherit their container's frame.
+      const createdById = new Map(created.map((el) => [el.id, el]));
+      for (const el of created) {
+        if (el.type === "text" && el.containerId) {
+          const container = createdById.get(el.containerId);
+          if (container && container.frameId !== el.frameId) {
+            Object.assign(el, { frameId: container.frameId });
+          }
+        }
+      }
+
+      // Arrows: straight, from border to border of what they join, and
+      // BOUND on both ends so the graph reads them as edges and they follow
+      // their shapes when the author moves them.
+      const boxOf = (id: string): SceneBounds & { type: string } => {
+        const el = createdById.get(id) ?? live.get(id);
+        if (!el) throw new Error(`Unknown element: ${id}`);
+        return { x: el.x, y: el.y, width: el.width, height: el.height, type: el.type };
+      };
+      // Where the centre line leaves the shape's own outline — a rectangle's
+      // side, an ellipse's curve, a diamond's edge — so the arrow meets the
+      // drawing, not its bounding box.
+      const edgePoint = (box: SceneBounds & { type: string }, towards: { x: number; y: number }) => {
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+        const dx = towards.x - cx;
+        const dy = towards.y - cy;
+        if (dx === 0 && dy === 0) return { x: cx, y: cy };
+        const a = box.width / 2;
+        const b = box.height / 2;
+        let t: number;
+        if (box.type === "ellipse") {
+          t = 1 / Math.sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b));
+        } else if (box.type === "diamond") {
+          t = 1 / (Math.abs(dx) / a + Math.abs(dy) / b);
+        } else {
+          const sx = dx !== 0 ? a / Math.abs(dx) : Infinity;
+          const sy = dy !== 0 ? b / Math.abs(dy) : Infinity;
+          t = Math.min(sx, sy);
+        }
+        return { x: cx + dx * t, y: cy + dy * t };
+      };
+      const GAP = 6;
+      const arrowElements: ExcalidrawElement[] = [];
+      const boundTo = new Map<string, { id: string; type: "arrow" }[]>();
+      for (const arrow of write.arrows ?? []) {
+        const a = boxOf(arrow.from);
+        const b = boxOf(arrow.to);
+        const centerB = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+        const centerA = { x: a.x + a.width / 2, y: a.y + a.height / 2 };
+        const start = edgePoint(a, centerB);
+        const end = edgePoint(b, centerA);
+        const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+        const ux = (end.x - start.x) / len;
+        const uy = (end.y - start.y) / len;
+        const sx = start.x + ux * GAP;
+        const sy = start.y + uy * GAP;
+        const ex = end.x - ux * GAP;
+        const ey = end.y - uy * GAP;
+        const [made] = convertToExcalidrawElements(
+          [
+            {
+              type: "arrow",
+              id: arrow.id,
+              x: sx,
+              y: sy,
+              points: [
+                [0, 0],
+                [ex - sx, ey - sy],
+              ],
+              frameId: arrow.frameId,
+              ...styleProps(arrow.style),
+              startArrowhead: arrow.startArrowhead,
+              endArrowhead: arrow.endArrowhead,
+              ...docentData(arrow.meaning),
+              ...(arrow.label
+                ? { label: { text: arrow.label, fontSize: Math.max(12, arrow.style.fontSize - 2), fontFamily: arrow.style.fontFamily } }
+                : {}),
+            } as never,
+          ],
+          { regenerateIds: false },
+        ).reduce<ExcalidrawElement[][]>((acc, el) => {
+          acc[0].push(el);
+          return acc;
+        }, [[]]);
+        for (const el of made) {
+          (el as { index?: unknown }).index = undefined;
+          if (el.type === "text") Object.assign(el, { frameId: arrow.frameId });
+        }
+        const line = made.find((el) => el.id === arrow.id);
+        if (!line) throw new Error("Failed to construct arrow");
+        Object.assign(line, {
+          startBinding: { elementId: arrow.from, focus: 0, gap: GAP },
+          endBinding: { elementId: arrow.to, focus: 0, gap: GAP },
+        });
+        arrowElements.push(...made);
+        for (const endId of [arrow.from, arrow.to]) {
+          const list = boundTo.get(endId) ?? [];
+          list.push({ id: arrow.id, type: "arrow" });
+          boundTo.set(endId, list);
+        }
+      }
+
+      // Removals take bound labels along; patches touch what they name.
+      const removing = new Set(write.remove ?? []);
+      for (const el of all) {
+        if (el.type === "text" && el.containerId && removing.has(el.containerId)) removing.add(el.id);
+      }
+      const patches = new Map((write.patches ?? []).map((p) => [p.id, p]));
+
+      const next: ExcalidrawElement[] = [];
+      for (const el of all) {
+        if (removing.has(el.id)) {
+          next.push(newElementWith(el, { isDeleted: true }));
+          continue;
+        }
+        let out = el;
+        const bound = boundTo.get(el.id);
+        if (bound) {
+          out = newElementWith(out, {
+            boundElements: [...(out.boundElements ?? []), ...bound],
+          });
+        }
+        // An arrow losing an end is unbound from it rather than left
+        // pointing at a ghost.
+        if (out.type === "arrow") {
+          const sb = out.startBinding?.elementId;
+          const eb = out.endBinding?.elementId;
+          if ((sb && removing.has(sb)) || (eb && removing.has(eb))) {
+            out = newElementWith(out, {
+              startBinding: sb && removing.has(sb) ? null : out.startBinding,
+              endBinding: eb && removing.has(eb) ? null : out.endBinding,
+            });
+          }
+        }
+        if (out.boundElements?.some((b) => removing.has(b.id))) {
+          out = newElementWith(out, {
+            boundElements: out.boundElements.filter((b) => !removing.has(b.id)),
+          });
+        }
+        const patch = patches.get(el.id);
+        if (patch) {
+          const fields: Record<string, unknown> = {};
+          if (patch.frameId !== undefined) fields.frameId = patch.frameId;
+          if (patch.x !== undefined) fields.x = patch.x;
+          if (patch.y !== undefined) fields.y = patch.y;
+          if (patch.width !== undefined) fields.width = patch.width;
+          if (patch.height !== undefined) fields.height = patch.height;
+          if (patch.name !== undefined && out.type === "frame") fields.name = patch.name;
+          if (patch.style) {
+            const st = patch.style;
+            if (st.strokeColor !== undefined) fields.strokeColor = st.strokeColor;
+            if (st.backgroundColor !== undefined) fields.backgroundColor = st.backgroundColor;
+            if (st.fillStyle !== undefined) fields.fillStyle = st.fillStyle;
+            if (st.strokeWidth !== undefined) fields.strokeWidth = st.strokeWidth;
+            if (st.strokeStyle !== undefined) fields.strokeStyle = st.strokeStyle;
+            if (st.roughness !== undefined) fields.roughness = st.roughness;
+            if (st.roundness !== undefined) fields.roundness = st.roundness === null ? null : { type: st.roundness };
+            if (st.opacity !== undefined) fields.opacity = st.opacity;
+          }
+          if (patch.meaning !== undefined) {
+            fields.customData = {
+              ...(out.customData ?? {}),
+              docent: storedMeaning(patch.meaning, docentDataOf(out)),
+            };
+          }
+          if (Object.keys(fields).length) out = newElementWith(out, fields as never);
+          // A bound label follows its container's frame.
+          if (patch.frameId !== undefined) {
+            for (const b of out.boundElements ?? []) {
+              if (b.type === "text") patches.set(b.id, { id: b.id, frameId: patch.frameId });
+            }
+          }
+        }
+        next.push(out);
+      }
+      // Label patches: the bound text's content changes in place (and a
+      // container without one gains nothing here — a label needs the
+      // converter, so the semantic layer recreates such a shape).
+      for (let i = 0; i < next.length; i++) {
+        const el = next[i];
+        if (el.type !== "text" || !el.containerId) continue;
+        const patch = patches.get(el.containerId);
+        if (patch && typeof patch.label === "string") {
+          next[i] = newElementWith(el, { text: patch.label, originalText: patch.label } as never);
+        }
+      }
+      // Patches that arrived through the container loop above (label frame).
+      for (let i = 0; i < next.length; i++) {
+        const el = next[i];
+        const late = patches.get(el.id);
+        if (late && late.frameId !== undefined && el.frameId !== late.frameId && el.type === "text") {
+          next[i] = newElementWith(el, { frameId: late.frameId });
+        }
+      }
+
+      let elements: ExcalidrawElement[] = [...next, ...created, ...arrowElements];
+      if (write.legend) elements = legendWrite(elements, write.legend).elements;
+      api.updateScene({
+        elements,
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
     getSceneSnapshot: () =>
       snapshotFromRawElements(api.getSceneElementsIncludingDeleted()),
 
@@ -947,51 +1463,9 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
 
     setLegend: (rules) => {
       const all = api.getSceneElementsIncludingDeleted();
-      const carrier = all.find(
-        (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
-      );
-      const legendText = rules.length
-        ? `Legend\n${rules
-            .map((r) => {
-              const conditions = [
-                `${r.attr} ${r.value}`,
-                ...(r.also ?? []).map((c) => `${c.attr} ${c.value}`),
-              ].join(" + ");
-              return `${conditions} → ${r.key}: ${r.meaning}`;
-            })
-            .join("\n")}`
-        : "Legend (empty)";
-
-      // Recreate the carrier so text metrics stay correct; keep its position.
-      const live = all.filter((el) => !el.isDeleted && el !== carrier);
-      let x: number;
-      let y: number;
-      if (carrier) {
-        x = carrier.x;
-        y = carrier.y;
-      } else if (live.length) {
-        const [minX, minY] = getCommonBounds(live);
-        x = minX;
-        y = minY - 40 - 20 * (rules.length + 1);
-      } else {
-        x = 0;
-        y = 0;
-      }
-      const [textEl] = convertToExcalidrawElements(
-        [{ type: "text", text: legendText, x, y, fontSize: 14, locked: true }],
-        { regenerateIds: true },
-      );
-      (textEl as { index?: unknown }).index = undefined;
-      const nextCarrier = newElementWith(textEl, {
-        customData: { docent: { legend: rules } },
-      });
+      const { elements } = legendWrite(all, rules);
       api.updateScene({
-        elements: [
-          ...all.map((el) =>
-            el === carrier ? newElementWith(el, { isDeleted: true }) : el,
-          ),
-          nextCarrier,
-        ],
+        elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
     },
@@ -1305,6 +1779,11 @@ export function ExcalidrawCanvas({
             </MainMenu.Item>
             {menuActions.onOpenPlugins && (
               <MainMenu.Item onSelect={menuActions.onOpenPlugins}>Plugins…</MainMenu.Item>
+            )}
+            {menuActions.onToggleAgentEdit && (
+              <MainMenu.Item onSelect={menuActions.onToggleAgentEdit}>
+                {menuActions.agentCanEdit ? "Agent can edit ✓" : "Agent can edit"}
+              </MainMenu.Item>
             )}
             <MainMenu.Separator />
           </>

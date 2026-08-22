@@ -95,8 +95,15 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
   - `highlight` — glow / spotlight / dim-others on any set of components
   - `flow` — animate a light pulse along one arrow or a chained multi-hop path
   - `tour` — run a full narrated sequence of the above
-- The agent surface is **read-only**: camera, overlay, narration, and navigation — the document is never mutated, undo history stays clean.
 - Agents operate purely in **ID-space**. They never address pixels, never touch Excalidraw internals.
+
+### ✍️ Agent authoring *(v2)*
+- Agents **create and modify diagrams** with a person's reach, in the diagram's own terms: **agents author meaning; Docent draws.** `add_node({label, kind, frame, intents, logic})`, `add_edge`, `update`, `remove`, `add_frame`, `add_detail_layer`, `define_kind`, `layout` — or many at once with **`edit({ops})`**: validated whole (unknown ids, duplicate labels, missing refs — nothing applied if anything is wrong), laid out once, **one undo step**, answered with the semantic changelog and the new ids. `propose` is the dry run; `validate` is the lint.
+- **In your style.** The look comes from the **legend** (a kind whose rule maps a style gets that style; `define_kind` writes the rule) and then from the diagram's **own conventions** — the prevailing stroke, fill, roughness, font, arrow heads, and the shape you draw each kind as. An agent's component looks like one of yours, so the two of you can work on one canvas.
+- **Placed politely.** New components go to free space in their frame next to what feeds them; frames grow to fit; detail layers go to the tier below. Hand-placed work is never moved unless `layout` is asked for.
+- **Visible, undoable, reviewable.** While an agent writes, the canvas wears an **orange "Agent is drawing" frame** and is view-only; afterwards the camera shows what changed with it outlined, a panel line says what happened with **Undo** beside it, and A9's review covers it like any edit. **View → Agent Can Edit** is the switch.
+- **Agents know the craft**: every component a kind and an intent, rules as logic, narratives on frames, inner mechanism as a detail layer (≤12 per frame), a **branch first** on a bound project (`create_branch`). Prompts publish the workflows: `draw`, `extend`, `annotate` (fill in the meaning an existing diagram lacks), `tier` (split a crowded frame). Scenes are created and saved through the store; pushing, pull requests, and binding stay yours.
+- Not yet: inserting the bundled **icon libraries** by name — that needs a library-import funnel (named, id'd, lookup-able items), a later decision.
 - **The camera follows the narration**: agent highlights, flows, and tour steps frame their own targets whenever those wouldn't read at the current zoom — a walkthrough can't talk about something you can't see.
 
 ### 🗂 Project portfolio
@@ -636,9 +643,9 @@ budget belongs to Excalidraw's canvas rendering.
 | **M3 — Overlay FX** | Highlight + flow | Viewport-synced overlay; glow/spotlight/dim; flow pulse on straight + curved arrows; elbow-arrow path parity |
 | **M4 — Agent control** | MCP server | Full Command API over MCP; narrated `tour`; the end-to-end demo |
 
-**v2 (explicitly deferred):** agent *authoring* — creating and mutating diagram elements via the
-Command API. v1 agents read and drive; they don't draw. The scene graph is designed so `add_node`
-/ `add_edge` slot in without rework.
+**v2 — agent authoring (A13)** is in: agents create and modify diagrams over MCP in the diagram's
+own terms and style (`edit`, `propose`, `validate`, …). The ID model kept for it from M2 is what
+made it a feature rather than a rewrite. Still ahead: library-shape authoring (an icon funnel).
 
 ## Non-goals
 
@@ -668,6 +675,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and blob-SHA change detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
 11. **Bound projects are local-first.** A binding does not move a project's scenes onto the network: the folder stays the working copy, so opens and saves never wait on GitHub and work offline. Synchronization is explicit — pull, resolve, push — and file-granular, because a drawing has no meaningful line-merge. Docent never pushes to the base branch; drafts on a branch check point themselves.
 12. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
+15. **Agents author meaning; Docent draws.** A write names a kind, a label, intents, and what it connects to — never a coordinate or a colour. The look comes from the legend and the diagram's own conventions, placement from a polite layout, and every write is one undo step shown under an orange frame, reported as a changelog, and reviewable. Scenes go through the store; Git stays the person's beyond a branch.
 14. **A plugin is a manifest and a process, never page code.** The desktop core starts, health-checks, proxies (on its own pooled loopback listener), and stops providers declared by a manifest; contracts are versioned and documented, loopback only, and a contract major the core does not know is refused. Speech follows the narration choke points and paces tours; the engine and its weights are a plugin's, never the app's.
 13. **Diffs are semantic before they are visual.** A change is described by diffing the scene graph — by stable id, with the declared meaning on every entity — and that changelog rides the commit and the PR. Pictures are rendered for the author in the app at one rectangle, before and after; on GitHub they are opt-in, quarantined on a prunable orphan branch, and never part of the diagram folder.
 

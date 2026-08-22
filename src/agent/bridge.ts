@@ -52,6 +52,9 @@ export function connectAgentBridge(
         const result = await execute(commands, shell, command.tool, command.params);
         body = { id: command.id, ok: true, result };
       } catch (err) {
+        // The agent hears the message; the console keeps the stack — an
+        // agent's failure is the person's to debug too.
+        console.warn("Docent: agent tool failed", command.tool, err);
         body = {
           id: command.id,
           ok: false,

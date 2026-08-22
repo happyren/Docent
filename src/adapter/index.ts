@@ -3,6 +3,14 @@ export type {
   CropMark,
   CropRect,
   DocentCanvasHandle,
+  SceneWrite,
+  WriteArrow,
+  WriteFrame,
+  WriteMeaning,
+  WritePatch,
+  WriteShape,
+  WriteStyle,
+  WriteText,
   EdgeGeometry,
   ElementInfo,
   ExcalidrawCanvasProps,
@@ -14,6 +22,7 @@ export type {
 export { snapshotFromRawElements, snapshotFromSceneJSON } from "./snapshot";
 export type {
   DocentElementData,
+  ElementLook,
   LegendRule,
   SceneSnapshot,
   SnapshotElement,

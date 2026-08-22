@@ -31,6 +31,7 @@ export const INSTRUCTIONS = [
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
   "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
   "For a walkthrough: script_tour({frame?}) derives the stops and the author's words from the diagram itself (frames in order, components in flow order; `declared` lines are the author's, `inferred` lines are yours to rewrite) — then present({action:'enter', mode:'guided'}) and tour({steps}). That is three calls for a whole walkthrough, and it is the same walkthrough every time. Each result carries a `next` hint.",
+  "You may also AUTHOR: add_node / add_edge / update / remove / add_frame / add_detail_layer / define_kind / layout, or many at once with edit({ops}) — one validated, all-or-nothing batch, one undo step, answered with the semantic changelog; propose({ops}) is the same batch as a dry run. You author MEANING, never pixels: a component is a label + a `kind` (from the legend — define_kind adds one) + intents; Docent picks the shape, the style (the diagram's own), and the place. The craft: every component gets a kind and at least one intent; rules and conditions become `logic`; every frame gets a narrative; anything with an inner mechanism gets add_detail_layer rather than a crowded frame (≤12 per frame); reuse existing kinds before defining new ones; refs like `$orders` name things created earlier in the same batch. Work in batches of a frame at a time, then validate() and fix what it lists, then save_scene(). On a project bound to GitHub and sitting on its base branch (get_view().git.onBase), create_branch({name:'docent/<topic>'}) BEFORE the first edit. While you edit the person sees an orange frame; keep batches short and tell them what you changed.",
 ].join("\n");
 
 /**
@@ -57,6 +58,30 @@ export const PROMPTS = [
     name: "where-is",
     description: "Find where something lives across every tier and take the camera there.",
     arguments: [{ name: "query", description: "Words to look for", required: true }],
+  },
+  {
+    name: "draw",
+    description: "Draw a new diagram from a description — kinds, frames, components with intents, edges, detail layers — in batches, validated, saved.",
+    arguments: [
+      { name: "brief", description: "What the diagram should show, in a paragraph or a list", required: true },
+      { name: "project", description: "Portfolio project to create the scene in", required: false },
+      { name: "scene", description: "Scene name", required: false },
+    ],
+  },
+  {
+    name: "extend",
+    description: "Add a part to the open diagram, in its own style, wired to what is there.",
+    arguments: [{ name: "brief", description: "What to add and where it connects", required: true }],
+  },
+  {
+    name: "annotate",
+    description: "Fill in the meaning an existing diagram lacks: kinds, intents, logic, narratives — from its structure and what the person tells you.",
+    arguments: [{ name: "notes", description: "Anything the person knows that the drawing does not say", required: false }],
+  },
+  {
+    name: "tier",
+    description: "Split a crowded frame into detail layers so each tier reads at a glance.",
+    arguments: [{ name: "frame", description: "A frame id from get_outline", required: true }],
   },
 ];
 
@@ -85,6 +110,45 @@ function promptMessages(name, args = {}) {
         "4. highlight its edges' other ends with narrate — what it receives and what it sends, one sentence each.",
         "5. If it has a detail layer: dive({id, narrate:'Beneath it…'}), read_frame, focus the inner components in flow order with narrate, climb.",
         "Use the author's intents, notes and logic verbatim where they exist; say `inferred` facts as such.",
+      ].join("\n");
+    case "draw":
+      return [
+        `Draw a Docent diagram for: ${args.brief ?? ""}`,
+        "Do this, in order:",
+        args.project && args.scene ? `1. create_scene({project:'${args.project}', scene:'${args.scene}'}).` : "1. If no scene is open (get_view), ask which project to create it in, then create_scene.",
+        "2. Decide the kinds (service, datastore, queue, client, external…); get_scene_graph().legend first — reuse existing kinds; define_kind for each new one (shape optional).",
+        "3. One Layer 1 frame per area (add_frame with a narrative); ≤12 components per frame.",
+        "4. edit({ops}) per frame: add_node with label, kind, frame, intents (what it does, in the person's words), logic for rules; add_edge with a label or intents; use refs ($name) inside the batch.",
+        "5. add_detail_layer for anything with an inner mechanism, then edit its components into that layer.",
+        "6. validate(); fix warnings with update; propose before any large change.",
+        "7. save_scene(); then focus the first frame with a one-sentence narrate of what was drawn.",
+        "Never specify coordinates or colours; the legend and the house style decide. Keep the person informed: one line per batch.",
+      ].join("\n");
+    case "extend":
+      return [
+        `Extend the open diagram: ${args.brief ?? ""}`,
+        "1. get_outline(), then read_frame on the frame it belongs to; find() what it connects to.",
+        "2. If the project is bound and on its base branch (get_view().git.onBase), create_branch({name:'docent/<topic>'}).",
+        "3. propose({ops}) — add_node with the existing kinds, add_edge to what it talks to, intents on both; read the changelog.",
+        "4. edit({ops}) with the same ops; validate(); save_scene().",
+        "5. focus the new component with a narrate saying what was added.",
+      ].join("\n");
+    case "annotate":
+      return [
+        `Annotate the open diagram with the meaning it lacks.${args.notes ? ` The person says: ${args.notes}` : ""}`,
+        "1. validate() — the list of what is missing. get_scene_graph() for the structure.",
+        "2. For each component without a kind: pick from the legend's kinds by shape and role, or define_kind once per new kind; update({id, kind}).",
+        "3. For each component without an intent: update({id, intents:[…]}) — one short declared statement of what it does, from its label, its edges, and the person's notes; logic where a rule is evident.",
+        "4. For each frame without a narrative: update({id, narrative}) — two sentences on what the frame means.",
+        "5. Do it in one edit({ops}) per frame; validate() again; save_scene(). Say `inferred` where you guessed, so the person can correct it.",
+      ].join("\n");
+    case "tier":
+      return [
+        `Split the frame ${args.frame ?? ""} into detail layers.`,
+        "1. read_frame({id}) — its components and edges.",
+        "2. Group what belongs together by its edges and labels; each group with an inner mechanism becomes one component in the frame plus a detail layer beneath it.",
+        "3. propose, then edit: add_detail_layer on the representative component, update({id, frame:$layer}) to move the inner components into it, add_edge for what crosses.",
+        "4. validate(); the frame must end at or under 12 components; save_scene().",
       ].join("\n");
     case "where-is":
       return [
@@ -333,6 +397,197 @@ export const TOOLS = [
         },
       },
       required: ["steps"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_node",
+    description:
+      "Add a component: a label, a `kind` (from the legend — get_scene_graph().legend; define_kind adds one), the frame it lives in, intents (declared statements of what it does), logic (rules). Docent chooses the shape, the style (the diagram's own), and the place — `after` puts it right of a component. Lands as one undo step; the answer is the semantic changelog and the new id.\nExample: add_node({label:'Retry queue', kind:'queue', frame:'f_core', intents:['retries failed charges'], after:'n_orders'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        label: { type: "string" },
+        kind: { type: "string" },
+        frame: { type: ["string", "null"], description: "Frame id; null or absent = Layer 1, unframed" },
+        shape: { type: "string", enum: ["rectangle", "ellipse", "diamond"], description: "Only to override the legend's shape" },
+        tags: { type: "array", items: { type: "string" } },
+        intents: { type: "array", items: { type: "string" } },
+        logic: { type: "string" },
+        after: { type: "string", description: "Place it right of this component" },
+      },
+      required: ["label"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_edge",
+    description:
+      "Connect two components with a bound arrow, in the diagram's arrow style. Give it a label or intents so the relation is stated.\nExample: add_edge({from:'n_orders', to:'n_retry', label:'park', intents:['only after three failures']})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        from: { type: "string" },
+        to: { type: "string" },
+        label: { type: "string" },
+        intents: { type: "array", items: { type: "string" } },
+        logic: { type: "string" },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update",
+    description:
+      "Change a component, edge, or frame: label, kind (re-styled through the legend), tags, intents, logic; a frame's name, narrative, order; or move a component into a frame (frame:null takes it out). Only the fields named change; `intents`/`tags` replace, `addIntents`/`addTags` add to the author's.\nExample: update({id:'n_orders', addIntents:['retries failed charges'], logic:'if charge fails: retry 3x then park'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        label: { type: "string" },
+        kind: { type: "string" },
+        tags: { type: "array", items: { type: "string" }, description: "Replaces the tags" },
+        intents: { type: "array", items: { type: "string" }, description: "Replaces the intents — prefer addIntents on a person's diagram" },
+        addTags: { type: "array", items: { type: "string" } },
+        addIntents: { type: "array", items: { type: "string" }, description: "Adds to what is declared, keeping the author's words" },
+        logic: { type: ["string", "null"] },
+        narrative: { type: ["string", "null"] },
+        name: { type: "string" },
+        order: { type: ["number", "null"] },
+        frame: { type: ["string", "null"] },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "remove",
+    description:
+      "Remove a component (with its edges and label), an edge, or a frame (with its contents). A component with a detail layer needs cascade:true — the layer and everything in it go too. Explicit ids only; never a whole scene.\nExample: remove({id:'n_legacy'})",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, cascade: { type: "boolean" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_frame",
+    description:
+      "Add a Layer 1 frame — an area of the diagram with a name and a narrative (what it means, two sentences) — placed in free canvas space. Add components into it with add_node({frame}).\nExample: add_frame({name:'03 Data Plane', narrative:'Every durable fact lives here; nothing else writes to disk.'})",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string" }, narrative: { type: "string" }, order: { type: "number" } },
+      required: ["name"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_detail_layer",
+    description:
+      "Give a component a detail layer: a frame on the tier below drawing its inner mechanism, linked so dive() reaches it. Then add_node({frame:<the new frame>}) into it. Use it instead of crowding a frame past 12 components.\nExample: add_detail_layer({node:'n_orders', narrative:'How an order moves from accepted to fulfilled.'}) → {ids:{…}, …}",
+    inputSchema: {
+      type: "object",
+      properties: { node: { type: "string" }, name: { type: "string" }, narrative: { type: "string" } },
+      required: ["node"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "define_kind",
+    description:
+      "Add a kind to the legend — the meaning a style carries. Without a style, Docent picks a distinct fill; with a shape, that shape. Reuse existing kinds before defining new ones.\nExample: define_kind({kind:'queue', shape:'diamond'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        shape: { type: "string", enum: ["rectangle", "ellipse", "diamond"] },
+        style: {
+          type: "object",
+          properties: {
+            backgroundColor: { type: "string" },
+            strokeColor: { type: "string" },
+            strokeStyle: { type: "string", enum: ["solid", "dashed", "dotted"] },
+            fillStyle: { type: "string", enum: ["solid", "hachure", "cross-hatch", "zigzag"] },
+            strokeWidth: { type: "number" },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "layout",
+    description:
+      "Re-flow a frame's components by their edges (what feeds comes left of what is fed). The only thing that moves hand-placed work — use it on frames you are building, not on the person's arrangement.\nExample: layout({frame:'f_core'})",
+    inputSchema: {
+      type: "object",
+      properties: { frame: { type: ["string", "null"], description: "Frame id, or null for the unframed Layer 1 components" } },
+      required: ["frame"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "edit",
+    description:
+      "Apply many authoring operations as ONE batch: validated whole (unknown ids, duplicate labels, missing refs — nothing applied if anything is wrong), laid out once, one undo step, answered with the semantic changelog, the ids for your refs, and the lint. Each op is one of add_node, add_edge, update, remove, add_frame, add_detail_layer, define_kind, layout with that tool's fields plus `op` and an optional `ref` ($name) later ops can use. Prefer this over one call per component.\nExample: edit({ops:[{op:'add_frame', ref:'$core', name:'02 Core'}, {op:'add_node', ref:'$orders', label:'Orders', kind:'service', frame:'$core', intents:['owns the order state']}, {op:'add_node', ref:'$pay', label:'Payments', kind:'service', frame:'$core', intents:['charges the card']}, {op:'add_edge', from:'$orders', to:'$pay', label:'charge'}]})",
+    inputSchema: {
+      type: "object",
+      properties: { ops: { type: "array", items: { type: "object", additionalProperties: true } } },
+      required: ["ops"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "propose",
+    description:
+      "The dry run of edit: the same ops, validated and simulated, answered with the changelog they WOULD produce and the lint of the result — nothing is applied. Use before a large change.\nExample: propose({ops:[…]}) → {applied:false, changelog:'02 Core: +Retry queue; +edge Orders → Retry queue', …}",
+    inputSchema: {
+      type: "object",
+      properties: { ops: { type: "array", items: { type: "object", additionalProperties: true } } },
+      required: ["ops"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "validate",
+    description:
+      "The craft check: components without a kind or an intent, edges without a label or intent, frames without a narrative or over 12 components, dangling edges, unlinked detail frames.\nExample: validate() → {findings:[{level:'warn', about:'n_db', message:'Postgres has no intent'}], summary:'3 warnings, 1 note'}",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "undo_edit",
+    description: "Put the scene back to before your last edit (the person can do the same from the panel).\nExample: undo_edit()",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "save_scene",
+    description:
+      "Save the open scene back to the portfolio project it came from — the same save the person makes. On a bound project the checkpointer commits it to the branch; opening a pull request stays the person's.\nExample: save_scene()",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "create_scene",
+    description:
+      "Create an empty scene in a portfolio project and open it (refused while the canvas holds unsaved changes).\nExample: create_scene({project:'work', scene:'payments-platform'})",
+    inputSchema: {
+      type: "object",
+      properties: { project: { type: "string" }, scene: { type: "string" } },
+      required: ["project", "scene"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_branch",
+    description:
+      "On a GitHub-bound project, cut a branch off the active one and move the project onto it — do this before the first edit when get_view().git.onBase is true, so the work lands where a pull request can review it.\nExample: create_branch({name:'docent/retry-queue'})",
+    inputSchema: {
+      type: "object",
+      properties: { name: { type: "string" } },
+      required: ["name"],
       additionalProperties: false,
     },
   },

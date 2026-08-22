@@ -1,0 +1,218 @@
+/**
+ * Agent authoring (S19): meaning in, one write out — in the diagram's own
+ * style, placed politely, validated whole, simulated for the diff, linted.
+ */
+import { describe, expect, it } from "vitest";
+import { snapshotFromRawElements } from "../src/adapter/snapshot";
+import { buildSceneGraph } from "../src/scene/graph";
+import { describeChange } from "../src/scene/diff";
+import { houseStyle, resolveLook } from "../src/authoring/style";
+import { layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
+import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
+
+const base = {
+  angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
+  fillStyle: "solid", strokeWidth: 2, roughness: 1, roundness: { type: 3 }, opacity: 100,
+  groupIds: [], frameId: null, isDeleted: false, locked: false,
+};
+const box = (id: string, x: number, y: number, label: string, extra: Record<string, unknown> = {}) => [
+  { ...base, id, type: "rectangle", x, y, width: 160, height: 80, frameId: "F", boundElements: [{ id: `${id}_t`, type: "text" }], ...extra },
+  { ...base, id: `${id}_t`, type: "text", x: x + 10, y: y + 20, width: 140, height: 20, text: label, containerId: id, frameId: "F", fontFamily: 5, fontSize: 20 },
+];
+const arrow = (id: string, from: string, to: string) => ({
+  ...base, id, type: "arrow", x: 0, y: 0, width: 10, height: 10, frameId: "F", roundness: { type: 2 },
+  points: [[0, 0], [10, 10]], startBinding: { elementId: from }, endBinding: { elementId: to }, endArrowhead: "arrow",
+});
+const legend = [
+  { attr: "backgroundColor", value: "#a5d8ff", also: [{ attr: "shape", value: "ellipse" }], key: "kind", meaning: "datastore" },
+  { attr: "backgroundColor", value: "#ffec99", key: "kind", meaning: "service" },
+];
+const raw = [
+  { ...base, id: "F", type: "frame", name: "02 Core Services", x: 0, y: 0, width: 900, height: 400, customData: { docent: { narrative: "Orders pass through here." } } },
+  { ...base, id: "legend", type: "text", x: 0, y: -120, width: 200, height: 40, text: "Legend", locked: true, customData: { docent: { legend } } },
+  ...box("gateway", 40, 100, "API Gateway", { backgroundColor: "#ffec99", customData: { docent: { note: "rate-limits at the edge" } } }),
+  ...box("orders", 340, 100, "Orders", { backgroundColor: "#ffec99", strokeWidth: 2, customData: { docent: { note: "owns order state" } } }),
+  { ...base, id: "db", type: "ellipse", x: 640, y: 100, width: 180, height: 90, frameId: "F", backgroundColor: "#a5d8ff", boundElements: [{ id: "db_t", type: "text" }] },
+  { ...base, id: "db_t", type: "text", x: 660, y: 130, width: 140, height: 20, text: "Postgres", containerId: "db", frameId: "F", fontFamily: 5, fontSize: 20 },
+  arrow("e1", "gateway", "orders"),
+  arrow("e2", "orders", "db"),
+];
+const snapshot = snapshotFromRawElements(raw as never);
+const graph = buildSceneGraph(snapshot);
+
+describe("house style (D59)", () => {
+  it("reads the author's conventions and the legend's kinds", () => {
+    const house = houseStyle(snapshot, graph);
+    expect(house.shape.strokeColor).toBe("#1e1e1e");
+    expect(house.shape.fontFamily).toBe(5);
+    expect(house.shape.roundness).toBe(3);
+    expect(house.arrow.endArrowhead).toBe("arrow");
+    expect(house.defaultShape).toBe("rectangle");
+    // A legend kind resolves through the legend: datastore = blue ellipse.
+    const ds = resolveLook("datastore", house, graph.legend);
+    expect(ds).toMatchObject({ shape: "ellipse", source: "legend" });
+    expect(ds.style.backgroundColor).toBe("#a5d8ff");
+    // A kind drawn but not in the legend resolves from what the author drew.
+    expect(resolveLook("nope", house, graph.legend).source).toBe("house");
+  });
+});
+
+describe("layout (D60)", () => {
+  it("sizes to the label and places after the anchor on free space", () => {
+    const size = sizeForLabel("Retry queue", 20, "rectangle");
+    expect(size.width).toBeGreaterThanOrEqual(150);
+    const frame = { x: 0, y: 0, width: 900, height: 400 };
+    const occupied = [{ x: 40, y: 100, width: 160, height: 80 }];
+    const placed = placeInFrame(frame, occupied, size, occupied[0]);
+    expect(placed.x).toBe(40 + 160 + 60);
+    expect(placed.y).toBe(100);
+    // No anchor: first free spot in the first row.
+    const free = placeInFrame(frame, occupied, size, null);
+    expect(free.y).toBeLessThanOrEqual(100 + 80 + 50);
+  });
+
+  it("layers by flow, feeders left of what they feed", () => {
+    const sizes = new Map(graph.nodes.map((n) => [n.id, { width: 160, height: 80 }]));
+    const boxes = layeredLayout(graph.nodes, graph.edges, sizes, { x: 0, y: 0 });
+    const x = (label: string) => boxes.get(graph.nodes.find((n) => n.label === label)!.id)!.x;
+    expect(x("API Gateway")).toBeLessThan(x("Orders"));
+    expect(x("Orders")).toBeLessThan(x("Postgres"));
+  });
+});
+
+describe("plan (D59, D62)", () => {
+  it("compiles a batch into one write, in the house style, with refs resolved", () => {
+    const result = plan(
+      [
+        { op: "add_node", ref: "$retry", label: "Retry queue", kind: "service", frame: "F", intents: ["retries failed charges"], logic: "if charge fails: retry 3x then park", after: "orders" },
+        { op: "add_edge", from: "orders", to: "$retry", label: "park", intents: ["only after three failures"] },
+        { op: "update", id: "gateway", intents: ["rate-limits at the edge", "terminates TLS"] },
+      ],
+      snapshot,
+      idSource(7),
+    );
+    const retry = result.write.shapes![0];
+    expect(retry.label).toBe("Retry queue");
+    expect(retry.type).toBe("rectangle");
+    expect(retry.style.backgroundColor).toBe("#ffec99"); // service, from the legend
+    expect(retry.frameId).toBe("F");
+    // Right of Orders is Postgres, so it goes below Orders — never on top of anything.
+    expect(retry.x).toBe(340);
+    expect(retry.y).toBe(100 + 80 + 50);
+    expect(retry.meaning).toEqual({ intents: ["retries failed charges"], logic: "if charge fails: retry 3x then park" });
+    expect(result.ids["$retry"]).toBe(retry.id);
+    const edge = result.write.arrows![0];
+    expect(edge.from).toBe("orders");
+    expect(edge.to).toBe(retry.id);
+    expect(edge.frameId).toBe("F");
+    expect(edge.endArrowhead).toBe("arrow");
+    expect(result.write.patches).toEqual([{ id: "gateway", meaning: { intents: ["rate-limits at the edge", "terminates TLS"] } }]);
+    expect(result.touched).toContain("gateway");
+  });
+
+  it("adds to an author's intents rather than replacing them, and sits new nodes next to their feeder", () => {
+    const result = plan(
+      [
+        { op: "update", id: "gateway", addIntents: ["terminates TLS"], addTags: ["edge"] },
+        { op: "add_node", ref: "$ledger", label: "Ledger", kind: "datastore", frame: "F" },
+        { op: "add_edge", from: "db", to: "$ledger" },
+      ],
+      snapshot,
+      idSource(5),
+    );
+    expect(result.write.patches![0].meaning).toEqual({ tags: ["edge"], intents: ["rate-limits at the edge", "terminates TLS"] });
+    // Postgres feeds the ledger, so the ledger goes below Postgres (right of it is outside the frame's row).
+    const ledger = result.write.shapes![0];
+    expect(ledger.x).toBe(640);
+    expect(ledger.y).toBe(100 + 90 + 50);
+  });
+
+  it("refuses a bad batch whole, naming every problem", () => {
+    expect(() =>
+      plan(
+        [
+          { op: "add_node", label: "Orders", frame: "F" },
+          { op: "add_edge", from: "orders", to: "$nope" },
+          { op: "remove", id: "db" },
+          { op: "update", id: "F", label: "x" },
+        ],
+        snapshot,
+      ),
+    ).toThrow(PlanError);
+    try {
+      plan([{ op: "add_node", label: "Orders", frame: "F" }, { op: "add_edge", from: "orders", to: "$nope" }], snapshot);
+    } catch (err) {
+      const problems = (err as PlanError).problems;
+      expect(problems).toHaveLength(2);
+      expect(problems[0]).toMatch(/already exists/);
+      expect(problems[1]).toMatch(/unknown ref/);
+    }
+  });
+
+  it("grows a frame to hold what it gains, and defines kinds into the legend", () => {
+    const result = plan(
+      [
+        { op: "define_kind", kind: "queue", shape: "diamond" },
+        { op: "add_node", label: "A very long component label indeed", kind: "queue", frame: "F" },
+        { op: "add_node", label: "Second", kind: "queue", frame: "F" },
+        { op: "add_node", label: "Third", kind: "queue", frame: "F" },
+      ],
+      snapshot,
+      idSource(1),
+    );
+    expect(result.write.legend!.some((r) => r.key === "kind" && r.meaning === "queue" && r.also?.[0].value === "diamond")).toBe(true);
+    expect(result.write.shapes!.every((s) => s.type === "diamond")).toBe(true);
+    const fill = result.write.legend!.find((r) => r.meaning === "queue")!.value;
+    expect(result.write.shapes![0].style.backgroundColor).toBe(fill);
+    // Three more boxes did not fit the first row: the frame grew.
+    const grown = result.write.patches!.find((p) => p.id === "F");
+    expect(grown).toBeDefined();
+    expect(grown!.height!).toBeGreaterThan(400);
+  });
+
+  it("removes with its edges and labels; a detail layer needs cascade", () => {
+    const withDetail = snapshotFromRawElements([
+      ...raw,
+      { ...base, id: "D", type: "frame", name: "Orders — detail", x: 0, y: 21000, width: 700, height: 300 },
+      ...box("inner", 40, 21100, "State machine").map((el) => ({ ...el, frameId: "D" })),
+    ].map((el) => (el.id === "orders" ? { ...el, customData: { docent: { note: "owns order state", detail: { frameId: "D" } } } } : el)) as never);
+    expect(() => plan([{ op: "remove", id: "orders" }], withDetail)).toThrow(/cascade/);
+    const result = plan([{ op: "remove", id: "orders", cascade: true }], withDetail);
+    expect(new Set(result.write.remove)).toEqual(new Set(["orders", "e1", "e2", "D", "inner", "inner_t"]));
+  });
+});
+
+describe("simulate + diff (D46, D62)", () => {
+  it("predicts the changelog of a batch without touching anything", () => {
+    const result = plan(
+      [
+        { op: "add_node", ref: "$retry", label: "Retry queue", kind: "service", frame: "F" },
+        { op: "add_edge", from: "orders", to: "$retry" },
+        { op: "remove", id: "db" },
+      ],
+      snapshot,
+      idSource(3),
+    );
+    const after = simulate(snapshot, result.write);
+    const { changelog } = describeChange(snapshot, after);
+    expect(changelog).toContain("+Retry queue");
+    expect(changelog).toContain("−Postgres");
+    expect(changelog).toContain("+edge Orders → Retry queue");
+    expect(changelog).toContain("−edge Orders → Postgres");
+    // The new node is a real graph node with its kind and frame.
+    const g = buildSceneGraph(after);
+    const retry = g.nodes.find((n) => n.label === "Retry queue")!;
+    expect(retry.frameId).toBe(g.frames[0].id);
+  });
+});
+
+describe("lint (D62, D63)", () => {
+  it("says what a reviewer would", () => {
+    const { findings, summary } = lint(snapshot);
+    const messages = findings.map((f) => f.message);
+    expect(messages).toContain("Postgres has no intent");
+    expect(messages.some((m) => m.includes("has no label or intent"))).toBe(true);
+    expect(messages.every((m) => !m.includes("no narrative"))).toBe(true);
+    expect(summary).toMatch(/warning/);
+  });
+});

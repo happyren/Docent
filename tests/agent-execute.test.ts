@@ -61,6 +61,11 @@ function fakeCommands(): CommandAPI {
     flow: async () => {},
     narrate: async () => false,
     awaitSpeech: async () => {},
+    canEdit: () => true,
+    edit: async (ops: unknown[]) => ({ applied: true, changelog: `${ops.length} op(s)`, ids: {}, notes: [], touched: [], lint: { findings: [], summary: "clean" } }),
+    propose: (ops: unknown[]) => ({ applied: false, changelog: `${ops.length} op(s)`, ids: {}, notes: [], touched: [], lint: { findings: [{ level: "warn", about: null, message: "x" }], summary: "1 warning" } }),
+    validate: () => ({ findings: [], summary: "clean" }),
+    undoAgentEdit: () => true,
     frameTargets: async () => {},
     tour: async () => 0,
     clearEffects: () => {},
@@ -331,4 +336,52 @@ describe("agent reading (D43, D45)", () => {
     };
     expect(forced.nodes).toHaveLength(WALL_THRESHOLD + 1);
   });
+
+  it("authoring tools batch through edit, answer with next, and stay off Git (S19, D62, D65)", async () => {
+    const { shell, calls } = fakeShell();
+    const single = (await execute(fakeCommands(), shell, "add_node", { label: "Retry queue", kind: "queue" })) as { applied: boolean; changelog: string; next: string };
+    expect(single.applied).toBe(true);
+    expect(single.changelog).toBe("1 op(s)");
+    expect(single.next).toMatch(/save_scene/);
+    const batch = (await execute(fakeCommands(), shell, "edit", { ops: [{ op: "add_frame", name: "A" }, { op: "add_node", label: "B" }] })) as { changelog: string };
+    expect(batch.changelog).toBe("2 op(s)");
+    await expect(execute(fakeCommands(), shell, "edit", { ops: [] })).rejects.toThrow(/non-empty/);
+    const dry = (await execute(fakeCommands(), shell, "propose", { ops: [{ op: "add_node", label: "B" }] })) as { applied: boolean; next: string };
+    expect(dry.applied).toBe(false);
+    expect(dry.next).toMatch(/edit\(\{ops\}\)/);
+    expect(await execute(fakeCommands(), shell, "validate", {})).toMatchObject({ summary: "clean" });
+    expect(await execute(fakeCommands(), shell, "undo_edit", {})).toEqual({ undone: true });
+    // No Git beyond a branch: there is no push, no pull request, no switch.
+    await expect(execute(fakeCommands(), shell, "push", {})).rejects.toThrow(/Unknown tool/);
+    await expect(execute(fakeCommands(), shell, "open_pull_request", {})).rejects.toThrow(/Unknown tool/);
+    // Scenes go through the store; a branch needs an open portfolio scene.
+    await expect(execute(fakeCommands(), shell, "create_branch", { name: "docent/x" })).rejects.toThrow(/available here|No portfolio scene/);
+    expect(calls).toEqual([]);
+  });
+
+  it("create_scene, save_scene and create_branch go through the shell's store routes", async () => {
+    const log: string[] = [];
+    const { shell } = fakeShell({ scene: { project: "work", scene: "payments" } });
+    shell.authoring = {
+      saveScene: async () => {
+        log.push("save");
+        return { project: "work", scene: "payments" };
+      },
+      createScene: async (project, scene) => {
+        log.push(`create:${project}/${scene}`);
+      },
+      binding: async () => ({ branch: "main", baseBranch: "main" }),
+      createBranch: async (project, name) => {
+        log.push(`branch:${project}:${name}`);
+      },
+    };
+    expect(await execute(fakeCommands(), shell, "save_scene", {})).toMatchObject({ saved: { project: "work", scene: "payments" } });
+    expect(await execute(fakeCommands(), shell, "create_branch", { name: "docent/retry" })).toMatchObject({ branch: "docent/retry" });
+    await execute(fakeCommands(), shell, "create_scene", { project: "work", scene: "new" });
+    expect(log).toEqual(["save", "branch:work:docent/retry", "create:work/new"]);
+    const view = (await execute(fakeCommands(), shell, "get_view", {})) as { canEdit: boolean; git: { onBase: boolean } };
+    expect(view.canEdit).toBe(true);
+    expect(view.git).toEqual({ branch: "main", baseBranch: "main", onBase: true });
+  });
 });
+

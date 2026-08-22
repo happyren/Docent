@@ -21,10 +21,15 @@ import { alertDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { detailBadges, logicMarks } from "../scene/detailBadges";
-import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from "../portfolio/client";
+import {
+  createBranch as createPortfolioBranch,
+  getBinding as getPortfolioBinding,
+  loadScene as loadPortfolioScene,
+  saveScene as savePortfolioScene,
+} from "../portfolio/client";
 import { notePortfolioSave } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
-import { PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
+import { EMPTY_SCENE, PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
 import { PluginsModal } from "./PluginsModal";
 import { hasPlugins, listPlugins, pluginUrl, providerOf, type PluginInfo } from "../plugins/client";
 import { SpeechController, WebAudioSink } from "../speech/controller";
@@ -65,6 +70,7 @@ type DocentMenuId =
   | "arrange"
   | "detail-markers"
   | "plugins"
+  | "agent-edit"
   | "export-mermaid"
   | "export-sidecar";
 
@@ -80,6 +86,13 @@ export function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  // Agent authoring (S19, D61): the person's switch, the orange frame, and
+  // the last edit's line with its Undo.
+  const [agentCanEdit, setAgentCanEdit] = useState(true);
+  const agentCanEditRef = useRef(agentCanEdit);
+  agentCanEditRef.current = agentCanEdit;
+  const [agentWorking, setAgentWorking] = useState(false);
+  const [agentReport, setAgentReport] = useState<{ line: string; undo: (() => void) | null } | null>(null);
   // Spoken narration (S18, D52): one controller, fed by the narration sink
   // and the presentation's waypoint. Only a shell with plugins can speak.
   const speech = useMemo(() => new SpeechController(new WebAudioSink()), []);
@@ -165,12 +178,30 @@ export function App() {
   const commands = useMemo(
     () =>
       canvas && camera
-        ? new CommandAPI(canvas, camera, overlayStore, {
-            narrate: setNarration,
-            spoken: (text) => speech.speak(text),
-            speaks: () => speech.active,
-            settled: () => speech.settled(),
-          })
+        ? new CommandAPI(
+            canvas,
+            camera,
+            overlayStore,
+            {
+              narrate: setNarration,
+              spoken: (text) => speech.speak(text),
+              speaks: () => speech.active,
+              settled: () => speech.settled(),
+            },
+            {
+              applyWrite: (write) => canvas.applyWrite(write),
+              captureScene: () => canvas.captureScene(),
+              restoreScene: (captured) => canvas.restoreScene(captured),
+              canEdit: () => agentCanEditRef.current,
+              // The orange frame (D61): view-only while a batch runs, so the
+              // two never edit the same element at once.
+              working: (on) => {
+                setAgentWorking(on);
+                canvas.setViewMode(on);
+              },
+              report: (line, undo) => setAgentReport({ line, undo }),
+            },
+          )
         : null,
     [canvas, camera, overlayStore, speech],
   );
@@ -571,6 +602,27 @@ export function App() {
             scene: portfolioSourceRef.current.scene,
           }
         : null,
+    authoring: {
+      saveScene: async () => {
+        const source = portfolioSourceRef.current;
+        if (!source) throw new Error("This scene is a loose file — the person saves it; create_scene to work in the portfolio");
+        await savePortfolioScene(source.project, source.scene, prepareSceneForSave());
+        markClean(null);
+        notePortfolioSave(source.project);
+        return { ...source };
+      },
+      createScene: async (project, scene) => {
+        await savePortfolioScene(project, scene, EMPTY_SCENE);
+        await openPortfolioScene(project, scene);
+      },
+      binding: async (project) => {
+        const binding = await getPortfolioBinding(project);
+        return binding ? { branch: binding.branch, baseBranch: binding.baseBranch } : null;
+      },
+      createBranch: async (project, name) => {
+        await createPortfolioBranch(project, name);
+      },
+    },
   };
   const agentShell = useMemo<AgentShellHooks>(() => {
     const current = () => agentShellRef.current!;
@@ -591,6 +643,12 @@ export function App() {
       openScene: (project, scene) => current().openScene(project, scene),
       isDirty: () => current().isDirty(),
       currentScene: () => current().currentScene(),
+      authoring: {
+        saveScene: () => current().authoring!.saveScene(),
+        createScene: (project, scene) => current().authoring!.createScene(project, scene),
+        binding: (project) => current().authoring!.binding(project),
+        createBranch: (project, name) => current().authoring!.createBranch(project, name),
+      },
     };
   }, []);
 
@@ -770,6 +828,7 @@ export function App() {
     library: () => canvasRef.current?.toggleLibrarySidebar(),
     legend: () => setLegendOpen(true),
     plugins: () => setPluginsOpen(true),
+    "agent-edit": () => setAgentCanEdit((v) => !v),
     arrange: arrangeTiers,
     "detail-markers": () => setDetailMarkers((v) => !v),
     "export-mermaid": () => {
@@ -1035,6 +1094,8 @@ export function App() {
             onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
             onConnectAgent: connectAgent,
             onOpenPlugins: hasPlugins() ? () => setPluginsOpen(true) : undefined,
+            onToggleAgentEdit: () => setAgentCanEdit((v) => !v),
+            agentCanEdit,
           }}
           hideDocentMenuItems={isDesktop}
           detailMarkersVisible={detailMarkers}
@@ -1077,6 +1138,29 @@ export function App() {
             canvas={canvas}
             selection={singleSelected}
           />
+        )}
+        {agentWorking && (
+          <div className="docent-agent-frame" aria-live="polite">
+            <span className="docent-agent-frame-label">Agent is drawing — hold on</span>
+          </div>
+        )}
+        {agentReport && !agentWorking && (
+          <div className="docent-agent-report">
+            <span className="docent-agent-report-text">Agent edited: {agentReport.line}</span>
+            {agentReport.undo && (
+              <button
+                onClick={() => {
+                  agentReport.undo?.();
+                  setAgentReport(null);
+                }}
+              >
+                Undo
+              </button>
+            )}
+            <button className="docent-narration-close" title="Dismiss" onClick={() => setAgentReport(null)}>
+              ✕
+            </button>
+          </div>
         )}
         {narration && (
           <div className="docent-narration">
