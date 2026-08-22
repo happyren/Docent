@@ -402,6 +402,8 @@ export interface SceneMenuActions {
   onArrangeTiers: () => void;
   onToggleDetailMarkers: () => void;
   onConnectAgent: () => void;
+  /** Present only where the shell hosts plugins (S17) — the web build never does. */
+  onOpenPlugins?: () => void;
 }
 
 
@@ -1301,6 +1303,9 @@ export function ExcalidrawCanvas({
             <MainMenu.Item onSelect={menuActions.onConnectAgent}>
               Connect agent bridge
             </MainMenu.Item>
+            {menuActions.onOpenPlugins && (
+              <MainMenu.Item onSelect={menuActions.onOpenPlugins}>Plugins…</MainMenu.Item>
+            )}
             <MainMenu.Separator />
           </>
         )}

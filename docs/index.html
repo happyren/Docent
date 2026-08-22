@@ -31,6 +31,10 @@
   h3 { margin:18px 0 6px; font-size:1.02rem; }
   pre { background:#141417; border:1px solid #33333b; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.85rem; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .badge { display:inline-block; vertical-align:middle; margin-left:8px; padding:2px 9px; border-radius:999px; background:var(--violet); color:#fff; font-size:.7rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
+  .plugin-card { display:flex; align-items:center; justify-content:space-between; gap:18px; background:#141417; border:1px solid #33333b; border-radius:10px; padding:14px 16px; margin:12px 0; }
+  .plugin-card .muted { color:var(--muted); font-size:.92rem; }
+  @media (max-width:640px) { .plugin-card { flex-direction:column; align-items:flex-start; } }
   p code, li code { background:#141417; padding:1px 6px; border-radius:5px; }
   .note { color:var(--muted); font-size:.92rem; }
   .cta { display:inline-block; background:var(--violet); color:#fff; text-decoration:none; padding:12px 22px; border-radius:10px; font-weight:600; border:none; font-size:1rem; cursor:pointer; }
@@ -106,7 +110,22 @@
       <li><strong>Semantic export</strong> — deterministic Mermaid + compact JSON with provenance on every fact, built for AI readers.</li>
       <li><strong>Agent-drivable</strong> — an open MCP endpoint lets any AI agent move the camera, highlight components, and narrate tours (self-hosted deployments).</li>
       <li><strong>Project portfolio</strong> — projects of scenes with large previews, stored as plain <code>.excalidraw</code> files.</li>
+      <li><strong>Visual review</strong> — every push carries a semantic changelog in the diagram's own words, and the app shows each changed frame before and after at the same rectangle.</li>
+      <li><strong>Plugins</strong> — the desktop app hosts out-of-process providers behind versioned contracts; nothing runs inside the canvas.</li>
     </ul>
+  </section>
+
+  <section id="plugins">
+    <h2>Plugins <span class="badge">new</span></h2>
+    <p>Extend the desktop app without touching it: a plugin is a folder with a manifest and a program Docent starts, stops, and proxies on its own loopback origin. Plugin code never runs in the page, so the canvas stays exactly as fast and as safe as it is. Anyone can build one against the <a href="https://github.com/happyren/Docent/blob/master/docs/plugins.md">documented contracts</a>, in any language.</p>
+    <div class="plugin-card">
+      <div>
+        <strong>🔊 docent-pocket-tts</strong> — <em>spoken narration</em><br>
+        <span class="muted">Every narration an agent gives, every tour step, and your own frame narratives during a presentation — spoken aloud by <a href="https://github.com/kyutai-labs/pocket-tts">Kyutai's Pocket TTS</a>, a 100M-parameter voice that runs on two CPU cores on your machine. No account, no key, nothing leaves the laptop. The tour waits for the voice.</span>
+      </div>
+      <a class="cta small" href="https://github.com/happyren/docent-pocket-tts">Get the plugin</a>
+    </div>
+    <p class="note">Requires the desktop app and <a href="https://docs.astral.sh/uv/">uv</a>. Install: clone, run <code>install.sh</code>, then <em>View → Plugins…</em> in Docent.</p>
   </section>
 
   <footer>

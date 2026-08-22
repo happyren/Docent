@@ -15,6 +15,7 @@
 
 pub mod github;
 pub mod mcp;
+pub mod plugins;
 pub mod store;
 pub mod sync;
 pub mod updates;
@@ -24,7 +25,7 @@ use std::sync::mpsc;
 use std::sync::Arc;
 
 use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
 
 /// The items Docent contributes to the native menu bar. Almost every one
 /// carries the id the page dispatches on, so this list is one half of a
@@ -51,6 +52,7 @@ enum MenuAction {
     Legend,
     Arrange,
     DetailMarkers,
+    Plugins,
     ExportMermaid,
     ExportSidecar,
     CheckUpdates,
@@ -59,7 +61,7 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 15] = [
+    const ALL: [Self; 16] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -71,6 +73,7 @@ impl MenuAction {
         Self::Legend,
         Self::Arrange,
         Self::DetailMarkers,
+        Self::Plugins,
         Self::ExportMermaid,
         Self::ExportSidecar,
         Self::CheckUpdates,
@@ -92,6 +95,7 @@ impl MenuAction {
             Self::Legend => "legend",
             Self::Arrange => "arrange",
             Self::DetailMarkers => "detail-markers",
+            Self::Plugins => "plugins",
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
             Self::CheckUpdates => "check-updates",
@@ -112,6 +116,7 @@ impl MenuAction {
             Self::Legend => "Legend…",
             Self::Arrange => "Arrange Detail Tiers",
             Self::DetailMarkers => "Detail Markers",
+            Self::Plugins => "Plugins…",
             Self::ExportMermaid => "Mermaid…",
             Self::ExportSidecar => "Semantic JSON…",
             Self::CheckUpdates => "Check for Updates…",
@@ -135,6 +140,7 @@ impl MenuAction {
             | Self::Legend
             | Self::Arrange
             | Self::DetailMarkers
+            | Self::Plugins
             | Self::ExportMermaid
             | Self::ExportSidecar
             | Self::CheckUpdates
@@ -421,6 +427,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item(app, MenuAction::Legend)?,
             &item(app, MenuAction::Arrange)?,
             &check_item(app, MenuAction::DetailMarkers, true)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, MenuAction::Plugins)?,
             #[cfg(target_os = "macos")]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(target_os = "macos")]
@@ -613,6 +621,28 @@ pub fn run() {
                 }
             };
 
+            // Plugins (S17, D50): the provider host lives beside the tokens,
+            // in the config directory — a plugin is the person's installation,
+            // not portfolio data. Failing to bind degrades like the rest.
+            let plugins_base = match handle.path().app_config_dir() {
+                Ok(config_dir) => match plugins::spawn(plugins::Host::new(config_dir)) {
+                    Ok(endpoint) => {
+                        let base = endpoint.base_url();
+                        let dir = endpoint.host().dir().to_string_lossy().into_owned();
+                        handle.manage(endpoint);
+                        Some((base, dir))
+                    }
+                    Err(err) => {
+                        eprintln!("docent: plugins unavailable — {err}");
+                        None
+                    }
+                },
+                Err(err) => {
+                    eprintln!("docent: plugins unavailable — {err}");
+                    None
+                }
+            };
+
             // These facts have to be in place before the SPA's first script
             // runs: the flag decides what chrome the app renders, and the base
             // URLs are read at module load. Absent — i.e. on the web — the app
@@ -628,6 +658,13 @@ pub fn run() {
                 script.push_str(&format!(
                     "window.__DOCENT_MCP_BASE__ = {};",
                     serde_json::to_string(&base)?
+                ));
+            }
+            if let Some((base, dir)) = plugins_base {
+                script.push_str(&format!(
+                    "window.__DOCENT_PLUGINS_BASE__ = {};window.__DOCENT_PLUGINS_DIR__ = {};window.__DOCENT_CAPABILITIES__ = [\"plugins\"];",
+                    serde_json::to_string(&base)?,
+                    serde_json::to_string(&dir)?
                 ));
             }
 
@@ -647,8 +684,18 @@ pub fn run() {
             spawn_update_check(handle, updates::Trigger::Startup);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("docent: failed to start the desktop shell");
+        .build(tauri::generate_context!())
+        .expect("docent: failed to start the desktop shell")
+        .run(|app, event| {
+            // The shell exits without unwinding its managed state, so what
+            // plugins started is stopped here, on the way out (D50). A kill
+            // that never reaches this is swept at the next launch.
+            if let RunEvent::Exit = event {
+                if let Some(plugins) = app.try_state::<plugins::PluginsHandle>() {
+                    plugins.host().stop_all();
+                }
+            }
+        });
 }
 
 #[cfg(test)]
@@ -662,7 +709,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 13] = [
+    const FRONTEND_IDS: [&str; 14] = [
         "new",
         "open",
         "import",
@@ -674,6 +721,7 @@ mod tests {
         "legend",
         "arrange",
         "detail-markers",
+        "plugins",
         "export-mermaid",
         "export-sidecar",
     ];

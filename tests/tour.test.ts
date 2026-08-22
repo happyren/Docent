@@ -187,4 +187,36 @@ describe("tour (S8/S9, D10)", () => {
     expect(narrations[narrations.length - 1]).toBeNull();
     expect(store.get().highlight).toBeNull();
   });
+
+  it("waits for the voice: a spoken step lasts at least as long as its speech (D52)", async () => {
+    const spoken: (string | null)[] = [];
+    const store = new OverlayStore();
+    const api = new CommandAPI(
+      makeReader(),
+      { flyTo: vi.fn().mockResolvedValue(true), stop: vi.fn() } as unknown as CameraEngine,
+      store,
+      {
+        narrate: () => {},
+        spoken: (text) => {
+          spoken.push(text);
+          // The voice takes longer than the dwell.
+          return new Promise((r) => setTimeout(r, 120));
+        },
+      },
+    );
+    const started = Date.now();
+    const completed = await api.tour({
+      steps: [{ focus: "f_ingress" }, { focus: "f_core" }],
+      stepMs: 10,
+    });
+    expect(completed).toBe(2);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(230);
+    expect(spoken.length).toBe(2);
+    expect(spoken.every((t) => typeof t === "string" && t.length > 0)).toBe(true);
+    // narrate() speaks too, and never waits for it.
+    const before = Date.now();
+    api.narrate({ text: "Hello" });
+    expect(Date.now() - before).toBeLessThan(50);
+    expect(spoken[spoken.length - 1]).toBe("Hello");
+  });
 });

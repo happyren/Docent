@@ -72,9 +72,15 @@ function withCeiling(framed: SceneBounds, subject: SceneBounds): SceneBounds {
   return unionOf(framed, floor);
 }
 
-/** Where narrate() text goes (S9) — the shell's narration panel. */
+/**
+ * Where narrate() text goes (S9) — the shell's narration panel, and, when
+ * the shell speaks (S18, D52), the voice. `spoken` resolves when the words
+ * have finished being said — at once when nothing is spoken — so a tour can
+ * wait for them; `narrate` itself never waits on audio.
+ */
 export interface NarrationSink {
   narrate(text: string | null): void;
+  spoken?(text: string | null): Promise<void>;
 }
 
 export interface TourStep {
@@ -469,9 +475,15 @@ export class CommandAPI {
     await this.camera.flyTo(params.rect, { padding: 0.15 });
   }
 
-  /** Render text in the narration panel (S9). Null/empty hides it. */
+  /**
+   * Render text in the narration panel (S9) — and say it, when the shell
+   * speaks (D52). Never waits for the audio: an agent's loop is not
+   * audio-bound.
+   */
   narrate(params: { text: string | null }): void {
-    this.narration.narrate(params.text || null);
+    const text = params.text || null;
+    this.narration.narrate(text);
+    void this.narration.spoken?.(text);
   }
 
   /**
@@ -507,7 +519,11 @@ export class CommandAPI {
           ]);
         }
         if (generation !== this.tourGeneration) break;
-        if (narration !== null) this.narration.narrate(narration);
+        let speech: Promise<void> = Promise.resolve();
+        if (narration !== null) {
+          this.narration.narrate(narration);
+          speech = this.narration.spoken?.(narration) ?? Promise.resolve();
+        }
         if (step.highlight) {
           this.highlight({ ids: step.highlight, style: step.highlightStyle });
         }
@@ -516,9 +532,11 @@ export class CommandAPI {
         }
         if (generation !== this.tourGeneration) break;
         // Reading time scales with narration length; always interruptible.
+        // When the words are spoken, the step lasts at least as long as the
+        // voice (D52): the camera never outruns the narration.
         const readMs =
           params.stepMs ?? Math.min(1200 + (narration?.length ?? 0) * 35, 8000);
-        await this.dwell(readMs);
+        await Promise.all([this.dwell(readMs), speech]);
         if (generation !== this.tourGeneration) break;
         completed += 1;
       }

@@ -25,6 +25,9 @@ import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from
 import { notePortfolioSave } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
 import { PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
+import { PluginsModal } from "./PluginsModal";
+import { hasPlugins, listPlugins, pluginUrl, providerOf, type PluginInfo } from "../plugins/client";
+import { SpeechController, WebAudioSink } from "../speech/controller";
 import type { ReviewJump } from "./ReviewPanel";
 import { LegendEditor } from "./LegendEditor";
 import { Breadcrumbs } from "./Breadcrumbs";
@@ -61,6 +64,7 @@ type DocentMenuId =
   | "legend"
   | "arrange"
   | "detail-markers"
+  | "plugins"
   | "export-mermaid"
   | "export-sidecar";
 
@@ -75,6 +79,37 @@ export function App() {
   const [dirty, setDirty] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
+  const [pluginsOpen, setPluginsOpen] = useState(false);
+  // Spoken narration (S18, D52): one controller, fed by the narration sink
+  // and the presentation's waypoint. Only a shell with plugins can speak.
+  const speech = useMemo(() => new SpeechController(new WebAudioSink()), []);
+  const [voice, setVoice] = useState<string | null>(
+    () => (typeof localStorage === "undefined" ? null : localStorage.getItem("docent.speech.voice")) || null,
+  );
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const pluginsRef = useRef<{ list: PluginInfo[]; at: number }>({ list: [], at: 0 });
+  // Plugins (S17): the listing the voice resolves its provider from.
+  useEffect(() => {
+    if (!hasPlugins()) return;
+    const refresh = () =>
+      void listPlugins()
+        .then((list) => {
+          pluginsRef.current = { list, at: Date.now() };
+        })
+        .catch(() => {});
+    refresh();
+    // The provider is resolved per utterance from a listing at most a few
+    // seconds old: a plugin switched on mid-session counts, and speaking
+    // never waits on a round trip.
+    speech.setProvider(() => {
+      if (Date.now() - pluginsRef.current.at > 5000) refresh();
+      const provider = providerOf(pluginsRef.current.list, "speech/1");
+      return provider ? { ttsUrl: pluginUrl(provider.name, "/tts"), voice: voiceRef.current } : null;
+    });
+  }, [speech]);
+  const [speechState, setSpeechState] = useState(() => speech.get());
+  useEffect(() => speech.subscribe(setSpeechState), [speech]);
   const [portfolioOpen, setPortfolioOpen] = useState(false);
   const [portfolioIntent, setPortfolioIntent] = useState<PortfolioIntent>("browse");
   // When the current scene came from the portfolio, Save writes back to it
@@ -129,9 +164,12 @@ export function App() {
   const commands = useMemo(
     () =>
       canvas && camera
-        ? new CommandAPI(canvas, camera, overlayStore, { narrate: setNarration })
+        ? new CommandAPI(canvas, camera, overlayStore, {
+            narrate: setNarration,
+            spoken: (text) => speech.speak(text),
+          })
         : null,
-    [canvas, camera, overlayStore],
+    [canvas, camera, overlayStore, speech],
   );
   const commandsRef = useRef<CommandAPI | null>(null);
   commandsRef.current = commands;
@@ -727,6 +765,7 @@ export function App() {
     present: () => presentation.enter(),
     library: () => canvasRef.current?.toggleLibrarySidebar(),
     legend: () => setLegendOpen(true),
+    plugins: () => setPluginsOpen(true),
     arrange: arrangeTiers,
     "detail-markers": () => setDetailMarkers((v) => !v),
     "export-mermaid": () => {
@@ -778,6 +817,12 @@ export function App() {
           drillRef.current.reset();
           presentation.exit();
           break;
+        case "m":
+        case "M":
+          // Mute the voice (D52) — only meaningful once it is on.
+          if (!speech.get().enabled) return;
+          speech.setMuted(!speech.get().muted);
+          break;
         default:
           return;
       }
@@ -786,7 +831,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [presentation]);
+  }, [presentation, speech]);
 
   // Click-to-dive during presentation (S11 navigation). View mode swallows
   // Excalidraw's pointer callbacks, so we listen on Docent's own container
@@ -942,6 +987,18 @@ export function App() {
     presentation.index === OVERVIEW
       ? null
       : (presentation.waypoints[presentation.index] ?? null);
+  // The author's own narrative, spoken as the presentation reaches its
+  // frame (D52); leaving the presentation ends the voice.
+  const spokenNarrative = presentation.active ? (currentWaypoint?.narrative ?? null) : null;
+  const spokenKey = presentation.active ? `${presentation.index}:${spokenNarrative ?? ""}` : "";
+  useEffect(() => {
+    if (!presentation.active) {
+      speech.cancel();
+      return;
+    }
+    void speech.speak(spokenNarrative);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spokenKey, presentation.active, speech]);
   const waypointLabel =
     presentation.index === OVERVIEW
       ? "Overview"
@@ -973,6 +1030,7 @@ export function App() {
             onArrangeTiers: arrangeTiers,
             onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
             onConnectAgent: connectAgent,
+            onOpenPlugins: hasPlugins() ? () => setPluginsOpen(true) : undefined,
           }}
           hideDocentMenuItems={isDesktop}
           detailMarkersVisible={detailMarkers}
@@ -1019,6 +1077,15 @@ export function App() {
         {narration && (
           <div className="docent-narration">
             <span className="docent-narration-text">{narration}</span>
+            {speechState.enabled && (
+              <button
+                className="docent-narration-close"
+                title={speechState.muted ? "Unmute the voice" : "Mute the voice"}
+                onClick={() => speech.setMuted(!speechState.muted)}
+              >
+                {speechState.muted ? "🔇" : "🔊"}
+              </button>
+            )}
             <button
               className="docent-narration-close"
               title="Stop narration"
@@ -1051,6 +1118,19 @@ export function App() {
           intent={portfolioIntent}
           onClose={() => setPortfolioOpen(false)}
           onShowChange={showPortfolioChange}
+        />
+      )}
+      {pluginsOpen && hasPlugins() && (
+        <PluginsModal
+          speech={speech}
+          pluginsDir={(window as { __DOCENT_PLUGINS_DIR__?: string }).__DOCENT_PLUGINS_DIR__ ?? null}
+          voice={voice}
+          onVoice={(next) => {
+            setVoice(next);
+            if (next) localStorage.setItem("docent.speech.voice", next);
+            else localStorage.removeItem("docent.speech.voice");
+          }}
+          onClose={() => setPluginsOpen(false)}
         />
       )}
       {legendOpen && canvas && (

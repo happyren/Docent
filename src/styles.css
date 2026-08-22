@@ -984,3 +984,95 @@ body {
   white-space: pre;
   resize: vertical;
 }
+
+/* The Plugins panel (S17, S18). */
+.docent-plugins {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.docent-plugin-row,
+.docent-plugin-text,
+.docent-plugin-head {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.docent-plugins-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.docent-plugins-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.8;
+}
+
+.docent-plugins-rescan {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.docent-plugins-voice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.docent-plugins-voice .docent-field {
+  margin: 0;
+}
+
+.docent-plugin-row {
+  border: 1px solid #2e2e36;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #202026;
+}
+
+.docent-plugin-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.docent-plugin-switch {
+  margin-left: auto;
+  grid-column: auto;
+}
+
+.docent-plugin-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #2e2e36;
+}
+
+.docent-plugin-status.is-running {
+  background: #1d9e75;
+  color: #fff;
+}
+
+.docent-plugin-status.is-failed {
+  background: #7a2b2b;
+  color: #fff;
+}
+
+.docent-plugin-text {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  word-break: break-word;
+}

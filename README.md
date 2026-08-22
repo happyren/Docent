@@ -118,6 +118,10 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - Connecting **checks what the token can do** and says so: a token with read access but no write access binds as **read-only** — the scenes open, and the project wears a `read-only` tag — instead of failing later with a mystery on the first save.
 - Bound projects wear a ⛓ in the portfolio list. Unbound projects behave exactly as they always have; nothing reaches the network for them.
 
+### 🔌 Plugins & 🔊 spoken narration *(desktop)*
+- The desktop app hosts **plugins**: a folder with a manifest and a program Docent starts, health-checks, proxies on its own loopback origin, and stops on quit. **No plugin code ever runs in the page** — the canvas stays exactly as bounded and as fast as it is — and a plugin can be written in any language that answers HTTP. Contracts are versioned and [documented](docs/plugins.md); a community can build against them.
+- The first plugin is **[docent-pocket-tts](https://github.com/happyren/docent-pocket-tts)**: every narration — an agent's `narrate`, each tour step, your own frame narratives as a presentation reaches its frame — **spoken aloud** by Kyutai's Pocket TTS, a 100M-parameter voice on two CPU cores, entirely on your machine. Off until you click *Enable voice*; cancels when the narration changes; **M** mutes; tours wait for the voice. Nothing leaves the laptop.
+
 ### 🧱 Architecture shapes out of the box
 - A **software-architecture shape library** ships with the app — microservice, database, cache, event bus/pipeline, documents or code, browser, mobile device — merged into Excalidraw's library sidebar at startup, served from the deployment's own origin. Nothing to download, no call out to libraries.excalidraw.com. Attribution below.
 - An **AWS architecture icon set** (249 icons — EC2, S3, Lambda, RDS, VPC, SQS/SNS, EKS, …) ships alongside it, from the same origin. It is ~3.9 MB, so it loads **on first open of the library sidebar** rather than at startup: the canvas comes up as fast as it did without it, and the icons are there the moment you go looking for them. Attribution below.
@@ -234,6 +238,7 @@ Two ways to run Docent, both wrapping the same SPA build — neither replaces th
 | Needs | Docker | nothing — one download |
 | Portfolio | `data/<project>/<scene>.excalidraw` on a named volume | the same file tree, under your OS app-data directory |
 | Agent control (MCP) | yes — `/mcp` on the deployment | yes — loopback `/mcp`, read-only; **Help → Agent Endpoint…** has the line to paste |
+| Plugins, spoken narration | not in v1 | yes — **View → Plugins…**; [docent-pocket-tts](https://github.com/happyren/docent-pocket-tts) for the voice |
 
 ### Self-host with Docker
 
@@ -402,8 +407,39 @@ builds are never quarantined. The permanent fix is code signing, which needs
 an Apple Developer ID. On Windows, SmartScreen shows **More info** →
 **Run anyway**.
 
-The MCP endpoint is deliberately absent from the desktop app — agent *driving*
-remains a self-host capability (S13). For that, run the compose stack above.
+The desktop app's own agent endpoint and its plugins are described above and
+below; the compose stack is the same app served to a LAN.
+
+### Plugins and spoken narration (desktop)
+
+**View → Plugins…** lists what is in the app's plugins folder and switches
+each plugin on or off. A plugin is a folder holding `docent-plugin.json` —
+name, version, the contracts it fulfils, and either a command to run (with
+`{port}` in its arguments) or a loopback `url` of a service you run yourself.
+Docent starts the command, polls its health path, proxies `/plugins/<name>/…`
+on its own loopback origin, writes its output to `plugin.log` beside the
+manifest, and terminates it on quit; the choice is remembered. Targets must be
+loopback; a contract Docent does not know is refused with the reason. The
+manifest and every contract are specified in [docs/plugins.md](docs/plugins.md).
+
+**Spoken narration** needs a `speech/1` plugin. Install
+[docent-pocket-tts](https://github.com/happyren/docent-pocket-tts) (it needs
+[`uv`](https://docs.astral.sh/uv/); the first start downloads Kyutai's weights
+into `~/.cache/pocket_tts`), switch it on, and click **Enable voice** — one
+gesture, once per session, because browsers play no sound without one. Then:
+
+- an agent's `narrate` and every `tour` step are spoken, and a tour step lasts
+  at least as long as its speech — the camera never outruns the voice;
+- a presentation speaks the author's frame narrative as it reaches each frame;
+- **M** mutes during a presentation; the 🔊 button on the narration panel does
+  the same anywhere; the panel shows the provider's failure if it has one;
+- the words are the panel's words, read plainly — arrows become "to", markdown
+  drops, `v2` is "version 2" — never a second narration source.
+
+Pick a voice in the panel; each voice shows its license (CC0, CC BY 4.0, or
+CC BY-NC 4.0 — non-commercial) because they differ. The engine and its weights
+are never bundled with Docent; the plugin fetches them under their own
+licenses.
 
 ### GitHub sync
 
@@ -593,7 +629,8 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 - Auth, accounts, multi-tenancy (single-user self-host)
 - Prezi-style viewport *rotation*
 - Pixel-perfect tracing of roughjs strokes
-- TTS narration, mobile support, custom element types
+- Mobile support, custom element types *(TTS narration is lifted for the desktop app only, as a plugin — see Plugins)*
+- Plugins that run code in the page; a plugin marketplace, registry, signing, or auto-update
 
 ---
 
@@ -611,6 +648,7 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and blob-SHA change detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
 11. **Bound projects are local-first.** A binding does not move a project's scenes onto the network: the folder stays the working copy, so opens and saves never wait on GitHub and work offline. Synchronization is explicit — pull, resolve, push — and file-granular, because a drawing has no meaningful line-merge. Docent never pushes to the base branch; drafts on a branch check point themselves.
 12. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
+14. **A plugin is a manifest and a process, never page code.** The desktop core starts, health-checks, proxies (on its own pooled loopback listener), and stops providers declared by a manifest; contracts are versioned and documented, loopback only, and a contract major the core does not know is refused. Speech follows the narration choke points and paces tours; the engine and its weights are a plugin's, never the app's.
 13. **Diffs are semantic before they are visual.** A change is described by diffing the scene graph — by stable id, with the declared meaning on every entity — and that changelog rides the commit and the PR. Pictures are rendered for the author in the app at one rectangle, before and after; on GitHub they are opt-in, quarantined on a prunable orphan branch, and never part of the diagram folder.
 
 ---
