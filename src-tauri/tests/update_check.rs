@@ -246,6 +246,7 @@ fn a_newer_release_offers_the_download_page() {
     assert_eq!(
         dialogs.shown(),
         vec![Outcome::Newer {
+            installable: false,
             version: "9.9.9".to_string(),
             current: "0.0.1".to_string(),
             url: page_for("v9.9.9"),
@@ -449,6 +450,7 @@ fn a_day_old_state_file_lets_the_startup_check_through() {
     assert_eq!(
         dialogs.shown(),
         vec![Outcome::Newer {
+            installable: false,
             version: "9.9.9".to_string(),
             current: "0.0.1".to_string(),
             url: page_for("v9.9.9"),
@@ -546,6 +548,7 @@ fn one_release_is_announced_once_and_the_next_one_again() {
     assert_eq!(
         dialogs.shown().last(),
         Some(&Outcome::Newer {
+            installable: false,
             version: "10.0.0".to_string(),
             current: "0.0.1".to_string(),
             url: page_for("v10.0.0"),

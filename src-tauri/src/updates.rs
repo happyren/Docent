@@ -1,8 +1,10 @@
-//! Update checking (S13, D25) — the notify tier, and deliberately only that.
-//! S13 puts auto-update out of scope for desktop v1, and staying at "notify"
-//! keeps that literally true: nothing here downloads a build, verifies a
-//! signature, or replaces a binary. The whole module is one GET against the
-//! GitHub Releases API, a three-number comparison, and a message box.
+//! Updates (S13, D67, D68) — the policy half. What to ask, when to ask it,
+//! what to say, and what was already said live here, pure and testable;
+//! the network, the signature check, the install, and the relaunch are
+//! Tauri's updater, driven from the shell (lib.rs). Two sources feed the
+//! policy: the signed `latest.json` manifest the updater reads (the app),
+//! and the GitHub Releases API (the fallback, and what the tests drive
+//! through a loopback server).
 //!
 //! Two triggers, different in how loud they are:
 //!
@@ -56,6 +58,8 @@ const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 /// The label on the affirmative button of the "there is an update" box, and
 /// the string the platform hands back when it is pressed. It lives here with
 /// the rest of the user-facing text; the shell renders it.
+pub const INSTALL_LABEL: &str = "Install and Relaunch";
+/// The same button when the app cannot install — it opens the release page.
 pub const OPEN_LABEL: &str = "Open Download Page";
 
 /// The label that dismisses the same box.
@@ -88,17 +92,30 @@ pub enum Trigger {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// A newer release exists. `version` and `current` are display forms, with
-    /// the tag's leading `v` already stripped.
+    /// the tag's leading `v` already stripped. `installable` says whether the
+    /// app can install it itself (the signed manifest) or only open the page.
     Newer {
         version: String,
         current: String,
         url: String,
+        installable: bool,
     },
     UpToDate {
         current: String,
     },
     Failed {
         error: String,
+    },
+    /// Downloaded, verified, and written over the running bundle. With the
+    /// canvas dirty the relaunch waits for the person (D68).
+    Installed {
+        version: String,
+        dirty: bool,
+    },
+    InstallFailed {
+        version: String,
+        error: String,
+        url: String,
     },
 }
 
@@ -109,6 +126,8 @@ impl Outcome {
             Self::Newer { .. } => "Update Available",
             Self::UpToDate { .. } => "Up to Date",
             Self::Failed { .. } => "Update Check Failed",
+            Self::Installed { .. } => "Update Installed",
+            Self::InstallFailed { .. } => "Update Failed",
         }
     }
 
@@ -116,22 +135,66 @@ impl Outcome {
     pub fn message(&self) -> String {
         match self {
             Self::Newer {
-                version, current, ..
-            } => format!("Docent {version} is available (you have {current})."),
+                version,
+                current,
+                installable,
+                ..
+            } => {
+                if *installable {
+                    format!("Docent {version} is available (you have {current}).\n\nInstall it now? Docent will download the signed update, verify it, and relaunch.")
+                } else {
+                    format!("Docent {version} is available (you have {current}).")
+                }
+            }
             Self::UpToDate { current } => format!("You're on the latest version ({current})."),
             // One line of detail, so "that didn't work" is actionable — a
             // refused connection and an unparseable answer are different
             // problems and the user can only tell them apart if we say so.
             Self::Failed { error } => format!("Couldn't check for updates.\n\n{error}"),
+            Self::Installed { version, dirty } => {
+                if *dirty {
+                    format!("Docent {version} is installed. You have unsaved changes — save them, then quit and reopen Docent to start the new version.")
+                } else {
+                    format!("Docent {version} is installed. Relaunching…")
+                }
+            }
+            Self::InstallFailed { version, error, .. } => {
+                format!("Couldn't install Docent {version}.\n\n{error}\n\nYou can download it from the release page instead.")
+            }
         }
     }
 
-    /// The page to open if the user asks for it. `None` is what makes the
-    /// dialog a plain OK box rather than a two-button one.
+    /// The page to open if the user asks for it — only for outcomes that
+    /// cannot install themselves. `None` makes the dialog a plain OK box.
     pub fn download_url(&self) -> Option<&str> {
         match self {
-            Self::Newer { url, .. } => Some(url),
+            Self::Newer {
+                url, installable, ..
+            } if !installable => Some(url),
+            Self::InstallFailed { url, .. } => Some(url),
             _ => None,
+        }
+    }
+
+    /// Whether the affirmative button installs (rather than opens a page).
+    pub fn offers_install(&self) -> bool {
+        matches!(
+            self,
+            Self::Newer {
+                installable: true,
+                ..
+            }
+        )
+    }
+
+    /// The affirmative button's label, when there is one.
+    pub fn affirmative(&self) -> Option<&'static str> {
+        if self.offers_install() {
+            Some(INSTALL_LABEL)
+        } else if self.download_url().is_some() {
+            Some(OPEN_LABEL)
+        } else {
+            None
         }
     }
 }
@@ -160,6 +223,9 @@ pub trait MessageDialog: Send + Sync + 'static {
 #[derive(Default)]
 pub struct RecordingDialog {
     shown: Mutex<Vec<Outcome>>,
+    /// `DOCENT_DIALOG_STUB=install`: press the affirmative on an update
+    /// offer — how a headless run exercises the whole install path.
+    presses_install: bool,
 }
 
 impl RecordingDialog {
@@ -168,9 +234,10 @@ impl RecordingDialog {
     }
 
     pub fn from_env() -> Option<Self> {
-        std::env::var("DOCENT_DIALOG_STUB")
-            .ok()
-            .map(|_| Self::new())
+        std::env::var("DOCENT_DIALOG_STUB").ok().map(|value| Self {
+            shown: Mutex::new(Vec::new()),
+            presses_install: value == "install",
+        })
     }
 
     /// Every outcome shown so far, oldest first.
@@ -188,8 +255,14 @@ impl RecordingDialog {
 impl MessageDialog for RecordingDialog {
     fn show(&self, outcome: &Outcome) -> bool {
         self.log().push(outcome.clone());
-        // Declining keeps a headless run from launching a browser.
-        false
+        eprintln!(
+            "docent: update dialog — {}: {}",
+            outcome.title(),
+            outcome.message()
+        );
+        // Declining keeps a headless run from launching a browser; only an
+        // install offer, and only when asked to, is accepted.
+        self.presses_install && outcome.offers_install()
     }
 }
 
@@ -383,20 +456,37 @@ fn open_url(url: &str) {
 // the check
 // ---------------------------------------------------------------------------
 
-/// Decide whether to ask, ask, record what was learned, and answer with what
-/// the user should be told — `None` when the answer is "nothing".
-fn check(endpoint: &str, current: &str, state_dir: &Path, trigger: Trigger) -> Option<Outcome> {
-    let state = State::load(state_dir);
-    let now = now_millis();
+/// What a source learned: the latest version it knows of (a tag or a bare
+/// version), where a person could get it by hand, and whether the app can
+/// install it itself — true for the signed manifest, false for the API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub version: String,
+    pub url: String,
+    pub installable: bool,
+}
 
+/// Whether a start-up check is due at all (D68: once a day). A menu check
+/// is always due — the person pressed a button.
+pub fn due(state_dir: &Path, trigger: Trigger) -> bool {
     // The throttle is a decision, not a filter on the result: a fresh state
     // file means no request leaves the machine at all.
-    if trigger == Trigger::Startup && state.is_fresh(now) {
-        return None;
-    }
+    trigger == Trigger::Menu || !State::load(state_dir).is_fresh(now_millis())
+}
 
-    let release = match fetch_latest(endpoint) {
-        Ok(release) => release,
+/// Record what a check learned and answer with what the person should be
+/// told — `None` when the answer is "nothing". Pure apart from the state
+/// file, so every branch is a test.
+pub fn decide(
+    result: Result<Found, String>,
+    current: &str,
+    state_dir: &Path,
+    trigger: Trigger,
+) -> Option<Outcome> {
+    let state = State::load(state_dir);
+    let now = now_millis();
+    let found = match result {
+        Ok(found) => found,
         Err(error) => {
             // A failed check still happened, so it still stamps — an offline
             // machine retries tomorrow rather than on every launch. The tag is
@@ -416,21 +506,22 @@ fn check(endpoint: &str, current: &str, state_dir: &Path, trigger: Trigger) -> O
         }
     };
 
-    let newer = is_newer(&release.tag_name, current);
+    let newer = is_newer(&found.version, current);
     // Read before the stamp overwrites it: this is what makes one release
     // announce itself once rather than every day it stays latest.
-    let already_announced = state.last_seen_tag.as_deref() == Some(release.tag_name.as_str());
+    let already_announced = state.last_seen_tag.as_deref() == Some(found.version.as_str());
     State {
         last_checked_at: now,
-        last_seen_tag: Some(release.tag_name.clone()),
+        last_seen_tag: Some(found.version.clone()),
     }
     .save(state_dir);
 
     let running = without_v(current).to_string();
     let announcement = Outcome::Newer {
-        version: without_v(&release.tag_name).to_string(),
+        version: without_v(&found.version).to_string(),
         current: running.clone(),
-        url: release.html_url,
+        url: found.url,
+        installable: found.installable,
     };
     match trigger {
         Trigger::Menu if newer => Some(announcement),
@@ -438,6 +529,30 @@ fn check(endpoint: &str, current: &str, state_dir: &Path, trigger: Trigger) -> O
         Trigger::Startup if newer && !already_announced => Some(announcement),
         Trigger::Startup => None,
     }
+}
+
+/// The GitHub-API source: what the app falls back to when the signed
+/// manifest cannot be read, and what the tests drive.
+pub fn probe_github(endpoint: &str) -> Result<Found, String> {
+    fetch_latest(endpoint).map(|release| Found {
+        version: release.tag_name,
+        url: release.html_url,
+        installable: false,
+    })
+}
+
+/// Decide whether to ask, ask the API, record, and answer — the whole
+/// fallback flow in one call.
+fn check(endpoint: &str, current: &str, state_dir: &Path, trigger: Trigger) -> Option<Outcome> {
+    if !due(state_dir, trigger) {
+        return None;
+    }
+    decide(probe_github(endpoint), current, state_dir, trigger)
+}
+
+/// Open the release page for a person who cannot install from the app.
+pub fn open_release_page(url: &str) {
+    open_url(url);
 }
 
 /// The whole flow behind both triggers: check, show whatever the user is owed,
@@ -569,6 +684,7 @@ mod tests {
             version: "1.2.0".into(),
             current: "0.0.1".into(),
             url: "https://github.com/happyren/Docent/releases/tag/v1.2.0".into(),
+            installable: false,
         };
         assert_eq!(
             newer.message(),

@@ -246,29 +246,28 @@ impl updates::MessageDialog for NativeDialog {
         // Everything the box needs, resolved before it crosses threads.
         let title = outcome.title().to_string();
         let message = outcome.message();
-        let offers_download = outcome.download_url().is_some();
+        let affirmative = outcome.affirmative().map(str::to_string);
         self.on_main(move || {
             let dialog = rfd::MessageDialog::new()
                 .set_level(rfd::MessageLevel::Info)
                 .set_title(title)
                 .set_description(message);
-            let dialog = if offers_download {
-                dialog.set_buttons(rfd::MessageButtons::OkCancelCustom(
-                    updates::OPEN_LABEL.to_string(),
+            let dialog = match &affirmative {
+                Some(label) => dialog.set_buttons(rfd::MessageButtons::OkCancelCustom(
+                    label.clone(),
                     updates::LATER_LABEL.to_string(),
-                ))
-            } else {
-                dialog.set_buttons(rfd::MessageButtons::Ok)
+                )),
+                None => dialog.set_buttons(rfd::MessageButtons::Ok),
             };
             match dialog.show() {
-                rfd::MessageDialogResult::Custom(label) => label == updates::OPEN_LABEL,
+                rfd::MessageDialogResult::Custom(label) => Some(label) == affirmative,
                 // Windows renders custom button labels only with rfd's
                 // `common-controls-v6` feature, which this build does not
                 // enable; without it the two-button box degrades to a plain
-                // OK/Cancel one and OK is the affirmative. Guarded on
-                // `offers_download` so the other two outcomes — whose single
-                // OK button only dismisses them — never open anything.
-                rfd::MessageDialogResult::Ok => offers_download,
+                // OK/Cancel one and OK is the affirmative. Guarded on the
+                // affirmative so outcomes whose single OK button only
+                // dismisses them never act.
+                rfd::MessageDialogResult::Ok => affirmative.is_some(),
                 _ => false,
             }
         })
@@ -518,28 +517,142 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 /// thread must not block on: a network round trip, a file write, and finally a
 /// dialog that hops back to the main thread and stays there until the user
 /// answers it.
+/// Whether the canvas holds unsaved work, as the page already tells the
+/// window: its title carries a leading "●" while dirty. The one signal the
+/// shell needs from the page, and one it already had (D68).
+fn canvas_is_dirty(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.title().ok())
+        .is_some_and(|t| t.trim_start().starts_with('●'))
+}
+
+fn set_title_suffix(app: &AppHandle, suffix: Option<&str>) {
+    if let Some(window) = app.get_webview_window("main") {
+        if let Ok(title) = window.title() {
+            let base = title
+                .split(" — updating")
+                .next()
+                .unwrap_or(&title)
+                .to_string();
+            let _ = window.set_title(&match suffix {
+                Some(s) => format!("{base} — updating: {s}"),
+                None => base,
+            });
+        }
+    }
+}
+
+/// The whole update flow (D67, D68): once-a-day gate for start-up, the signed
+/// manifest first and the release API as the fallback, the announcement, and
+/// — on *Install and Relaunch* — download, verify, install, relaunch.
 fn spawn_update_check(app: AppHandle, trigger: updates::Trigger) {
+    use tauri_plugin_updater::UpdaterExt;
     let Ok(state_dir) = app.path().app_data_dir() else {
         eprintln!("docent: no app-data directory — skipping the update check");
         return;
     };
     let current = app.package_info().version.to_string();
-    // Resolved here rather than inside the check, so the checking code holds no
-    // process-wide state of its own.
     let endpoint = updates::endpoint();
     // The same variable the store's file dialogs answer to: a run with no
     // display records what would have been shown instead of raising it.
     let dialogs: Box<dyn updates::MessageDialog> = match updates::RecordingDialog::from_env() {
         Some(stub) => Box::new(stub),
-        None => Box::new(NativeDialog { app }),
+        None => Box::new(NativeDialog { app: app.clone() }),
     };
-    std::thread::spawn(move || {
-        updates::check_and_notify(dialogs.as_ref(), &endpoint, &current, &state_dir, trigger);
+    tauri::async_runtime::spawn(async move {
+        if !updates::due(&state_dir, trigger) {
+            return;
+        }
+        // The signed manifest, through the updater; the API when the
+        // manifest cannot be read (a release before signing, or a test
+        // pointing at its own server).
+        let mut update = None;
+        let found = match app.updater_builder().build() {
+            Ok(updater) if std::env::var("DOCENT_UPDATE_URL").is_err() => {
+                match updater.check().await {
+                    Ok(Some(found)) => {
+                        let version = found.version.clone();
+                        update = Some(found);
+                        Ok(updates::Found {
+                            version,
+                            url: "https://github.com/happyren/Docent/releases/latest".to_string(),
+                            installable: true,
+                        })
+                    }
+                    Ok(None) => Ok(updates::Found {
+                        version: current.clone(),
+                        url: "https://github.com/happyren/Docent/releases/latest".to_string(),
+                        installable: true,
+                    }),
+                    Err(err) => {
+                        eprintln!(
+                            "docent: updater manifest unavailable ({err}); asking the release API"
+                        );
+                        updates::probe_github(&endpoint)
+                    }
+                }
+            }
+            _ => updates::probe_github(&endpoint),
+        };
+        let Some(outcome) = updates::decide(found, &current, &state_dir, trigger) else {
+            return;
+        };
+        if !dialogs.show(&outcome) {
+            return;
+        }
+        // The affirmative: install when the app can, else open the page.
+        let Some(update) = update.filter(|_| outcome.offers_install()) else {
+            if let Some(url) = outcome.download_url() {
+                updates::open_release_page(url);
+            }
+            return;
+        };
+        let version = update.version.clone();
+        set_title_suffix(&app, Some("downloading"));
+        let mut received: u64 = 0;
+        let installed = update
+            .download_and_install(
+                |chunk, total| {
+                    received += chunk as u64;
+                    if let Some(total) = total {
+                        let pct = (received * 100 / total.max(1)).min(100);
+                        set_title_suffix(&app, Some(&format!("{pct}%")));
+                    }
+                },
+                || {},
+            )
+            .await;
+        set_title_suffix(&app, None);
+        match installed {
+            Ok(()) => {
+                let dirty = canvas_is_dirty(&app);
+                dialogs.show(&updates::Outcome::Installed {
+                    version: version.clone(),
+                    dirty,
+                });
+                if !dirty {
+                    app.restart();
+                }
+            }
+            Err(err) => {
+                let outcome = updates::Outcome::InstallFailed {
+                    version,
+                    error: err.to_string(),
+                    url: "https://github.com/happyren/Docent/releases/latest".to_string(),
+                };
+                if dialogs.show(&outcome) {
+                    if let Some(url) = outcome.download_url() {
+                        updates::open_release_page(url);
+                    }
+                }
+            }
+        }
     });
 }
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .menu(build_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref();
@@ -687,7 +800,13 @@ pub fn run() {
             // about. It only ever tells: S13 keeps auto-update out of v1, so
             // nothing here installs anything. Raised after the window so a
             // notification has the app behind it rather than an empty desktop.
-            spawn_update_check(handle, updates::Trigger::Startup);
+            spawn_update_check(handle.clone(), updates::Trigger::Startup);
+            // …and again every day the app stays open (D68): a laptop that
+            // is never quit still hears about a release.
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(24 * 60 * 60));
+                spawn_update_check(handle.clone(), updates::Trigger::Startup);
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

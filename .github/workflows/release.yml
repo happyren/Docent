@@ -251,8 +251,13 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # In-app updates (D67): every update artifact is signed with the
+          # maintainer's minisign key, and latest.json rides the release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
+          includeUpdaterJson: true
           tagName: ${{ needs.decide.outputs.tag }}
           releaseName: "Docent ${{ needs.decide.outputs.tag }}"
           releaseDraft: false
@@ -272,11 +277,16 @@ jobs:
 
             Installers (dmg / msi / nsis / deb) are attached for those who prefer them.
 
+            **Already running Docent?** It updates itself: **Help → Check for Updates…** (it also checks once a day). The update is signed and verified before it installs, and a download the app makes carries no quarantine flag.
+
             Docent is built on [Excalidraw](https://github.com/excalidraw/excalidraw) — full third-party licenses ship inside every bundle.
 
       - name: Build only (dry run)
         if: needs.decide.outputs.publish != 'true'
         uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
 

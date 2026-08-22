@@ -246,6 +246,7 @@ Two ways to run Docent, both wrapping the same SPA build — neither replaces th
 | Portfolio | `data/<project>/<scene>.excalidraw` on a named volume | the same file tree, under your OS app-data directory |
 | Agent control (MCP) | yes — `/mcp` on the deployment | yes — loopback `/mcp`, read-only; **Help → Agent Endpoint…** has the line to paste |
 | Plugins, spoken narration | not in v1 | yes — **View → Plugins…**; [docent-pocket-tts](https://github.com/happyren/docent-pocket-tts) for the voice |
+| Updates | pull the image | in-app: checks daily and on demand, installs signed updates on your click, relaunches |
 
 ### Self-host with Docker
 
@@ -413,6 +414,16 @@ quarantine flag), clearing the flag on a browser download with
 builds are never quarantined. The permanent fix is code signing, which needs
 an Apple Developer ID. On Windows, SmartScreen shows **More info** →
 **Run anyway**.
+
+**Updates.** The desktop app keeps itself current: it checks for a newer
+release once a day (at start-up, and every 24 hours while it runs) and on
+**Help → Check for Updates…**. A new release is announced once, with
+**Install and Relaunch** or **Later** — nothing downloads until you press
+Install. The update is signed by the release train and verified against the
+key built into the app before it is installed; then Docent relaunches (it waits
+if you have unsaved changes). An update the app downloads itself carries no
+macOS quarantine flag, so the Gatekeeper note above applies to the first
+install only. Self-host deployments update by pulling the image, as before.
 
 The desktop app's own agent endpoint and its plugins are described above and
 below; the compose stack is the same app served to a LAN.
