@@ -50,6 +50,11 @@ export interface DocentElementData {
   /** Present only on the legend carrier element. */
   legend: LegendRule[] | null;
   /**
+   * A drawn legend sample or its label (D69): part of the legend's picture,
+   * never a component or an edge.
+   */
+  legendSample: boolean;
+  /**
    * Declared cross-tier edge refinement (D21): which inner component of a
    * bound endpoint's detail diagram this edge actually lands on (`to`) or
    * departs from (`from`). Validated against the live graph at read time.
@@ -182,6 +187,7 @@ function parseDocent(customData: unknown): DocentElementData {
     narrative: null,
     order: null,
     legend: null,
+    legendSample: false,
     refine: null,
     composite: {},
   };
@@ -222,6 +228,7 @@ function parseDocent(customData: unknown): DocentElementData {
     order:
       typeof d.order === "number" && Number.isFinite(d.order) ? d.order : null,
     legend: parseLegendRules(d.legend),
+    legendSample: d.legendSample === true,
   };
 }
 

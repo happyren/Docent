@@ -221,8 +221,9 @@ function styleOf(el: SnapshotElement): GraphNode["style"] {
   };
 }
 
+/** The legend's own elements: the carrier, and the drawn samples (D69). */
 function isLegendCarrier(el: SnapshotElement): boolean {
-  return el.docent.legend !== null;
+  return el.docent.legend !== null || el.docent.legendSample;
 }
 
 /** Nearest node whose padded bounds contain the point; null when none. */
@@ -259,7 +260,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     snapshot.elements.find((el) => isLegendCarrier(el))?.docent.legend ?? [];
 
   const frameElements = snapshot.elements.filter((el) => el.type === "frame");
-  const edgeElements = snapshot.elements.filter((el) => el.type === "arrow");
+  const edgeElements = snapshot.elements.filter((el) => el.type === "arrow" && !isLegendCarrier(el));
 
   // Grouped composites (D22): a library icon is a group of primitives —
   // lines, freedraw strokes, shapes — that means ONE component. Collapse

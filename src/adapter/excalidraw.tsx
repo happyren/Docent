@@ -603,55 +603,141 @@ function stringField(v: unknown): string | null {
 
 /** Merge a patch into an element's `customData.docent`, dropping null keys. */
 /**
- * The legend as scene elements (D9): a locked text carrier whose
- * customData holds the rules. Returns the element list with the old
- * carrier deleted and the new one appended, ready for one updateScene.
+ * The legend as scene elements (D9, D69): a locked title that carries the
+ * rules as data, and beneath it one drawn sample per rule with its meaning
+ * beside it — a shape in that fill and outline for a fill or shape rule,
+ * a short arrow in that stroke for a stroke-only rule. Samples and labels
+ * are locked, grouped with the title, and marked `legendSample`, which is
+ * what keeps them out of the graph. Returns the element list with the old
+ * legend deleted and the new one appended, ready for one updateScene.
  */
 function legendWrite(
   all: readonly ExcalidrawElement[],
   rules: LegendRule[],
 ): { elements: ExcalidrawElement[]; carrier: ExcalidrawElement } {
-  const carrier = all.find(
-    (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
-  );
-  const legendText = rules.length
-    ? `Legend\n${rules
-        .map((r) => {
-          const conditions = [
-            `${r.attr} ${r.value}`,
-            ...(r.also ?? []).map((c) => `${c.attr} ${c.value}`),
-          ].join(" + ");
-          return `${conditions} → ${r.key}: ${r.meaning}`;
-        })
-        .join("\n")}`
-    : "Legend (empty)";
-  // Recreate the carrier so text metrics stay correct; keep its position.
-  const live = all.filter((el) => !el.isDeleted && el !== carrier);
+  const isLegendPart = (el: ExcalidrawElement) =>
+    parseLegendRules(docentDataOf(el).legend) !== null ||
+    (docentDataOf(el) as { legendSample?: unknown }).legendSample === true;
+  const carrier = all.find((el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null);
+  const previous = all.filter((el) => !el.isDeleted && isLegendPart(el));
+
+  const ROW = 44;
+  const SAMPLE_W = 72;
+  const SAMPLE_H = 30;
+  const LABEL_X = SAMPLE_W + 20;
+  const titleH = 26;
+  const height = titleH + 10 + rules.length * ROW;
+
+  // Keep the legend's column where it was; a legend sits above the drawing,
+  // and one that has grown moves up rather than over the first frame.
+  const live = all.filter((el) => !el.isDeleted && !isLegendPart(el));
   let x: number;
   let y: number;
-  if (carrier) {
+  if (live.length) {
+    const [minX, minY] = getCommonBounds(live);
+    const above = minY - 40 - height;
+    x = carrier ? carrier.x : minX;
+    y = carrier ? Math.min(carrier.y, above) : above;
+  } else if (carrier) {
     x = carrier.x;
     y = carrier.y;
-  } else if (live.length) {
-    const [minX, minY] = getCommonBounds(live);
-    x = minX;
-    y = minY - 40 - 20 * (rules.length + 1);
   } else {
     x = 0;
     y = 0;
   }
-  const [textEl] = convertToExcalidrawElements(
-    [{ type: "text", text: legendText, x, y, fontSize: 14, locked: true }],
-    { regenerateIds: true },
-  );
-  (textEl as { index?: unknown }).index = undefined;
-  const nextCarrier = newElementWith(textEl, {
+
+  const groupId = `legend-${Math.random().toString(36).slice(2, 10)}`;
+  const sample = { legendSample: true };
+  const skeletons: Parameters<typeof convertToExcalidrawElements>[0] = [
+    {
+      type: "text",
+      text: rules.length ? "Legend" : "Legend (empty)",
+      x,
+      y,
+      fontSize: 18,
+      locked: true,
+      groupIds: [groupId],
+    } as never,
+  ];
+  rules.forEach((rule, i) => {
+    const rowY = y + titleH + 10 + i * ROW;
+    const conditions = [{ attr: rule.attr, value: rule.value }, ...(rule.also ?? [])];
+    const style: Record<string, unknown> = {
+      strokeColor: "#1e1e1e",
+      backgroundColor: "transparent",
+      fillStyle: "solid",
+      strokeWidth: 2,
+      strokeStyle: "solid",
+      roughness: 1,
+    };
+    let shape: string | null = null;
+    let strokeOnly = true;
+    for (const c of conditions) {
+      if (c.attr === "shape") {
+        shape = c.value;
+        strokeOnly = false;
+      } else if (c.attr === "strokeWidth") {
+        style.strokeWidth = Number(c.value) || 2;
+      } else {
+        style[c.attr] = c.value;
+        if (c.attr === "backgroundColor" || c.attr === "fillStyle") strokeOnly = false;
+      }
+    }
+    if (strokeOnly) {
+      // A stroke rule is what an arrow is made of: draw the arrow.
+      skeletons.push({
+        type: "arrow",
+        x: x + 4,
+        y: rowY + SAMPLE_H / 2,
+        points: [
+          [0, 0],
+          [SAMPLE_W - 8, 0],
+        ],
+        endArrowhead: "arrow",
+        locked: true,
+        groupIds: [groupId],
+        customData: { docent: sample },
+        ...style,
+      } as never);
+    } else {
+      const type = shape === "ellipse" || shape === "diamond" ? shape : "rectangle";
+      skeletons.push({
+        type,
+        x: x + (type === "rectangle" ? 4 : 0),
+        y: rowY,
+        width: type === "rectangle" ? SAMPLE_W - 8 : SAMPLE_W,
+        height: SAMPLE_H,
+        roundness: type === "rectangle" ? { type: 3 } : null,
+        locked: true,
+        groupIds: [groupId],
+        customData: { docent: sample },
+        ...style,
+      } as never);
+    }
+    skeletons.push({
+      type: "text",
+      text: `${rule.key}: ${rule.meaning}`,
+      x: x + LABEL_X,
+      y: rowY + 5,
+      fontSize: 16,
+      locked: true,
+      groupIds: [groupId],
+      customData: { docent: sample },
+    } as never);
+  });
+  const made = convertToExcalidrawElements(skeletons, { regenerateIds: true });
+  for (const el of made) {
+    (el as { index?: unknown }).index = undefined;
+  }
+  const [title, ...rest] = made;
+  const nextCarrier = newElementWith(title, {
     customData: { docent: { legend: rules } },
   });
   return {
     elements: [
-      ...all.map((el) => (el === carrier ? newElementWith(el, { isDeleted: true }) : el)),
+      ...all.map((el) => (previous.includes(el) ? newElementWith(el, { isDeleted: true }) : el)),
       nextCarrier,
+      ...rest,
     ],
     carrier: nextCarrier,
   };

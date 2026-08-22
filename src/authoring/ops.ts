@@ -12,7 +12,7 @@ import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, Writ
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import { countCrossings, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
+import { countCrossings, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
 import { DEFAULT_STYLE, freshFill, houseStyle, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
@@ -234,7 +234,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const el = elements.get(sourceId);
     return el ? { x: el.x, y: el.y, width: el.width, height: el.height } : null;
   };
+  // The legend is never drawn over (D69): on Layer 1 it is occupied space,
+  // and every new frame goes below it.
+  const legendArea = legendBox(snapshot.elements);
   const occupiedIn = (frameId: string | null): Box[] => [
+    ...(frameId === null && legendArea ? [legendArea] : []),
     ...memberBoxes(snapshot.elements.filter((el) => !removed.has(el.id)), frameId),
     ...[...created.values()]
       .filter((c) => c.frameId === frameId && c.type !== "arrow")
@@ -293,7 +297,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const id = nextId();
         const tier1 = snapshot.elements.filter((el) => el.type === "frame" && (computeTiers(snapshot).frameTier.get(el.id) ?? 1) === 1).map((el) => ({ x: el.x, y: el.y, width: el.width, height: el.height }));
         const size = { width: 760, height: 460 };
-        const box = placeFrame([...tier1, ...[...createdFrames.values()].map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height }))], size);
+        const box = placeFrame([...(legendArea ? [legendArea] : []), ...tier1, ...[...createdFrames.values()].map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height }))], size);
         const frame: WriteFrame & { members: string[] } = {
           id,
           name,
@@ -318,6 +322,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const label = created.get(node)?.label ?? clean(graph.nodes.find((n) => n.sourceId === node)?.label) ?? "component";
         const id = nextId();
         const everything = [
+          ...(legendArea ? [legendArea] : []),
           ...snapshot.elements.filter((el) => el.type === "frame").map((el) => ({ x: el.x, y: el.y, width: el.width, height: el.height })),
           ...[...createdFrames.values()].map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height })),
         ];
@@ -395,7 +400,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
             anchor = { ...anchor, x: right - anchor.width };
           }
         }
-        const box = placeInFrame(frameId ? (grownFrames.get(frameId) ?? frameBox(frameId)) : null, occupiedIn(frameId), size, anchor);
+        const box = placeInFrame(
+          frameId ? (grownFrames.get(frameId) ?? frameBox(frameId)) : null,
+          occupiedIn(frameId),
+          size,
+          anchor,
+          frameId === null && legendArea ? legendArea.y + legendArea.height : null,
+        );
         noteGrow(frameId, box);
         const id = nextId();
         const meaning: WriteMeaning = {};
@@ -673,7 +684,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
-  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, refine: null, composite: {} };
+  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, legendSample: false, refine: null, composite: {} };
 }
 
 function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {

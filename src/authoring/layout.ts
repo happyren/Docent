@@ -85,12 +85,15 @@ export function placeInFrame(
   occupied: readonly Box[],
   size: Size,
   anchor: Box | null,
+  /** Nothing goes above this line — the legend's bottom on Layer 1 (D69). */
+  floor: number | null = null,
 ): Box {
   const origin = frame
     ? { x: frame.x + FRAME_PAD, y: frame.y + FRAME_HEAD + FRAME_PAD }
     : occupied.length
       ? { x: Math.min(...occupied.map((b) => b.x)), y: Math.min(...occupied.map((b) => b.y)) }
       : { x: 0, y: 0 };
+  if (floor !== null && origin.y < floor) origin.y = floor;
   const right = frame ? frame.x + frame.width - FRAME_PAD : Number.POSITIVE_INFINITY;
   const fits = (box: Box) => !occupied.some((o) => overlaps(o, box, Math.min(GAP_X, GAP_Y) / 2));
 
@@ -111,7 +114,7 @@ export function placeInFrame(
     rows.add(o.y);
     rows.add(o.y + o.height + GAP_Y);
   }
-  for (const y of [...rows].sort((a, b) => a - b)) {
+  for (const y of [...rows].filter((r) => floor === null || r >= floor).sort((a, b) => a - b)) {
     let x = origin.x;
     while (x + size.width <= right || x === origin.x) {
       const box = { x, y, ...size };
@@ -258,8 +261,32 @@ export function layeredLayout(
 /** The boxes of a frame's live members — what placement must avoid. */
 export function memberBoxes(elements: readonly SnapshotElement[], frameId: string | null): Box[] {
   return elements
-    .filter((el) => el.frameId === frameId && el.type !== "frame" && !el.containerId && el.type !== "arrow")
+    .filter(
+      (el) =>
+        el.frameId === frameId &&
+        el.type !== "frame" &&
+        !el.containerId &&
+        el.type !== "arrow" &&
+        // The legend's own drawing is not a member of anything (D69).
+        el.docent.legend === null &&
+        !el.docent.legendSample,
+    )
     .map((el) => ({ x: el.x, y: el.y, width: el.width, height: el.height }));
+}
+
+/**
+ * The legend's area, padded — the one place nothing may be placed (D69).
+ * Null when the scene has no legend.
+ */
+export function legendBox(elements: readonly SnapshotElement[]): Box | null {
+  const parts = elements.filter((el) => el.docent.legend !== null || el.docent.legendSample);
+  if (!parts.length) return null;
+  const pad = 30;
+  const minX = Math.min(...parts.map((p) => p.x)) - pad;
+  const minY = Math.min(...parts.map((p) => p.y)) - pad;
+  const maxX = Math.max(...parts.map((p) => p.x + p.width)) + pad;
+  const maxY = Math.max(...parts.map((p) => p.y + p.height)) + pad;
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
 /** Whether two segments cross (touching at an endpoint does not count). */

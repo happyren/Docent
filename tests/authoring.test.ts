@@ -238,6 +238,45 @@ describe("no crossings (D66)", () => {
   });
 });
 
+describe("the drawn legend (D69)", () => {
+  const legendParts = [
+    { ...base, id: "lg_t", type: "text", x: 0, y: -200, width: 80, height: 24, text: "Legend", locked: true, customData: { docent: { legend } } },
+    { ...base, id: "lg_s1", type: "ellipse", x: 0, y: -160, width: 72, height: 30, backgroundColor: "#a5d8ff", locked: true, customData: { docent: { legendSample: true } } },
+    { ...base, id: "lg_l1", type: "text", x: 92, y: -155, width: 120, height: 20, text: "kind: datastore", locked: true, customData: { docent: { legendSample: true } } },
+    { ...base, id: "lg_s2", type: "arrow", x: 0, y: -110, width: 64, height: 0, points: [[0, 0], [64, 0]], strokeStyle: "dashed", locked: true, customData: { docent: { legendSample: true } } },
+  ];
+  const withLegend = snapshotFromRawElements([...raw.filter((el) => el.id !== "legend"), ...legendParts] as never);
+
+  it("is never a component, an edge, or a vote for the house style", () => {
+    const g = buildSceneGraph(withLegend);
+    expect(g.nodes.map((n) => n.sourceId)).not.toContain("lg_s1");
+    expect(g.nodes.map((n) => n.sourceId)).not.toContain("lg_l1");
+    expect(g.edges.map((e) => e.sourceId)).not.toContain("lg_s2");
+    expect(g.legend).toEqual(legend);
+    // Two blue legend ellipses do not make the house shape an ellipse.
+    const house = houseStyle(withLegend, g);
+    expect(house.defaultShape).toBe("rectangle");
+    expect(lint(withLegend).findings.every((f) => !["lg_s1", "lg_l1"].includes(f.about ?? ""))).toBe(true);
+  });
+
+  it("is never drawn over: loose components and new frames keep clear of it", () => {
+    const result = plan(
+      [
+        { op: "add_node", ref: "$loose", label: "Loose", kind: "service" },
+        { op: "add_frame", ref: "$f", name: "09 New" },
+      ],
+      withLegend,
+      idSource(2),
+    );
+    const loose = result.write.shapes![0];
+    const legendBottom = -110 + 30;
+    expect(loose.y).toBeGreaterThanOrEqual(legendBottom);
+    const frame = result.write.frames![0];
+    expect(frame.y).toBeGreaterThan(legendBottom);
+    expect(frame.y).toBeGreaterThan(400); // below the existing frame too
+  });
+});
+
 describe("simulate + diff (D46, D62)", () => {
   it("predicts the changelog of a batch without touching anything", () => {
     const result = plan(

@@ -87,7 +87,9 @@ export interface HouseStyle {
 }
 
 export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseStyle {
-  const live = snapshot.elements;
+  // The legend's own drawing is styled by its rules, not by the author's
+  // hand: it must not vote.
+  const live = snapshot.elements.filter((el) => el.docent.legend === null && !el.docent.legendSample);
   const shapes = live.filter((el) => SHAPES.has(el.type));
   const boundTexts = live.filter((el) => el.type === "text" && el.containerId);
   const freeTexts = live.filter((el) => el.type === "text" && !el.containerId);
