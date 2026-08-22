@@ -352,6 +352,39 @@ impl Drop for Fixture {
     }
 }
 
+/// This test binary doubles as a spawned provider: the host starts it with
+/// `DOCENT_PLUGIN_PORT` set, and this "test" then serves until killed. In
+/// the ordinary run the variable is absent and it passes at once. No
+/// python, no network tool — nothing a runner might lack.
+#[test]
+fn fake_provider_main() {
+    let Ok(port) = std::env::var("DOCENT_PLUGIN_PORT") else {
+        return;
+    };
+    let port: u16 = port.parse().expect("a port");
+    let server = tiny_http::Server::http((Ipv4Addr::LOCALHOST, port)).expect("provider binds");
+    for request in server.incoming_requests() {
+        let _ = request.respond(tiny_http::Response::from_string("provider-ok"));
+    }
+}
+
+/// A manifest that runs this binary as the provider. `--skip {port}` is how
+/// the required `{port}` placeholder rides along without changing what
+/// libtest runs.
+fn spawned(name: &str) -> serde_json::Value {
+    let exe = std::env::current_exe().expect("the test binary");
+    serde_json::json!({
+        "name": name,
+        "version": "0",
+        "contracts": ["speech/1"],
+        "run": {
+            "command": exe.to_string_lossy(),
+            "args": ["--exact", "fake_provider_main", "--nocapture", "--skip", "{port}"],
+            "health": "/"
+        }
+    })
+}
+
 fn attached(url: &str) -> serde_json::Value {
     serde_json::json!({
         "name": "fake",
@@ -551,27 +584,15 @@ fn an_enabled_plugin_comes_back_at_launch() {
 #[cfg(unix)]
 #[test]
 fn a_command_the_host_started_is_run_with_the_port_and_stopped_on_disable() {
-    let fixture = Fixture::new(&[(
-        "py",
-        serde_json::json!({
-            "name": "py",
-            "version": "0",
-            "contracts": ["speech/1"],
-            "run": {
-                "command": "python3",
-                "args": ["-m", "http.server", "{port}", "--bind", "127.0.0.1"],
-                "health": "/"
-            }
-        }),
-    )]);
+    let fixture = Fixture::new(&[("py", spawned("py"))]);
     let res = fixture.post("/plugins/py/enable");
     assert_eq!(res.status, 200, "{}", res.text());
     assert!(
         fixture.wait_for("py", "running", Duration::from_secs(20)),
-        "python3 -m http.server never answered: {}",
-        fixture.status_of("py")
+        "the spawned provider never answered: {}",
+        fixture.list()
     );
-    // Proxied: the directory listing of the plugin's folder comes through.
+    // Proxied: the provider's own answer comes through.
     let res = send(
         fixture.port(),
         "GET",
@@ -581,7 +602,7 @@ fn a_command_the_host_started_is_run_with_the_port_and_stopped_on_disable() {
         Some(WEBVIEW_ORIGIN),
     );
     assert_eq!(res.status, 200, "{}", res.text());
-    assert!(res.text().contains("docent-plugin.json"), "{}", res.text());
+    assert_eq!(res.text(), "provider-ok");
     // The log is where the process wrote.
     let log = fixture
         .config_dir
@@ -609,21 +630,13 @@ fn a_command_the_host_started_is_run_with_the_port_and_stopped_on_disable() {
 #[cfg(unix)]
 #[test]
 fn a_launch_sweeps_what_a_killed_previous_host_left_running() {
-    let fixture = Fixture::new(&[(
-        "py",
-        serde_json::json!({
-            "name": "py",
-            "version": "0",
-            "contracts": ["speech/1"],
-            "run": {
-                "command": "python3",
-                "args": ["-m", "http.server", "{port}", "--bind", "127.0.0.1"],
-                "health": "/"
-            }
-        }),
-    )]);
+    let fixture = Fixture::new(&[("py", spawned("py"))]);
     assert_eq!(fixture.post("/plugins/py/enable").status, 200);
-    assert!(fixture.wait_for("py", "running", Duration::from_secs(20)));
+    assert!(
+        fixture.wait_for("py", "running", Duration::from_secs(20)),
+        "the spawned provider never answered: {}",
+        fixture.list()
+    );
     let pids: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(fixture.config_dir.join("plugins-pids.json")).expect("pids recorded"),
     )
