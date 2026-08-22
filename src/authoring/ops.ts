@@ -10,9 +10,9 @@
 import type { LegendRule, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
 import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle } from "../adapter/excalidraw";
 import { applyLegend } from "../export/legend";
-import { buildSceneGraph, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
+import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import { FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
+import { countCrossings, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
 import { DEFAULT_STYLE, freshFill, houseStyle, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
@@ -380,12 +380,19 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           const afterId = resolve(op.after, at, ["node"]);
           if (afterId) anchor = boxOf(afterId);
         } else if (op.ref) {
-          // No `after`: sit next to what feeds it, if the batch says so.
-          const feeder = ops.slice(i + 1).find((o): o is AddEdge => o.op === "add_edge" && o.to === op.ref && !o.from.startsWith("$"))
-            ?? ops.slice(i + 1).find((o): o is AddEdge => o.op === "add_edge" && o.to === op.ref && o.from.startsWith("$") && ids[o.from] !== undefined);
-          if (feeder) {
-            const feederId = feeder.from.startsWith("$") ? ids[feeder.from] : sourceOf(graph, feeder.from)?.sourceId;
-            if (feederId) anchor = boxOf(feederId);
+          // No `after`: the column after every feeder the batch names, at
+          // the feeders' mean row (D66) — never merely right of the last one.
+          const feeders = ops
+            .slice(i + 1)
+            .filter((o): o is AddEdge => o.op === "add_edge" && o.to === op.ref)
+            .map((o) => (o.from.startsWith("$") ? ids[o.from] : sourceOf(graph, o.from)?.sourceId))
+            .map((id) => (id ? boxOf(id) : null))
+            .filter((b): b is Box => b !== null);
+          if (feeders.length) {
+            const right = Math.max(...feeders.map((b) => b.x + b.width));
+            const meanY = feeders.reduce((sum, b) => sum + b.y, 0) / feeders.length;
+            anchor = { x: right - feeders[0].width, y: meanY, width: feeders[0].width, height: feeders[0].height };
+            anchor = { ...anchor, x: right - anchor.width };
           }
         }
         const box = placeInFrame(frameId ? (grownFrames.get(frameId) ?? frameBox(frameId)) : null, occupiedIn(frameId), size, anchor);
@@ -585,6 +592,50 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
   }
 
+  // Frames the agent built — every component in them new — are laid out
+  // whole (D66): rank by flow, rows ordered to minimize crossings. Nothing
+  // hand-placed is in them, so D60 has nothing to guard.
+  const framesToLayOut = new Set<string>();
+  for (const c of created.values()) {
+    if (c.type === "arrow" || !c.frameId) continue;
+    const existing = memberBoxes(snapshot.elements.filter((el) => !removed.has(el.id)), c.frameId);
+    if (createdFrames.has(c.frameId) || existing.length === 0) framesToLayOut.add(c.frameId);
+  }
+  for (const frameId of framesToLayOut) {
+    const members = [...created.entries()].filter(([, c]) => c.frameId === frameId && c.type !== "arrow");
+    if (members.length < 2) continue;
+    const nodes = members.map(([id, c]) => ({ id, bounds: { x: c.x, y: c.y, width: c.width, height: c.height } })) as unknown as GraphNode[];
+    const edges = write.arrows
+      .filter((a) => created.has(a.from) && created.has(a.to))
+      .map((a) => ({ id: a.id, from: a.from, to: a.to })) as unknown as GraphEdge[];
+    const sizes = new Map(members.map(([id, c]) => [id, { width: c.width, height: c.height }]));
+    const fb = grownFrames.get(frameId) ?? frameBox(frameId);
+    const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: 0, y: 0 };
+    const boxes = layeredLayout(nodes, edges, sizes, origin);
+    // Start the frame from its own origin again: what grew it is being re-placed.
+    let grown: Box = fb ? { x: fb.x, y: fb.y, width: 0, height: 0 } : { x: 0, y: 0, width: 0, height: 0 };
+    for (const [id, c] of members) {
+      const box = boxes.get(id);
+      if (!box) continue;
+      c.x = box.x;
+      c.y = box.y;
+      const shape = write.shapes.find((sh) => sh.id === id);
+      if (shape) {
+        shape.x = box.x;
+        shape.y = box.y;
+      }
+      grown = growFrame(grown, [box]);
+    }
+    const made = createdFrames.get(frameId);
+    if (made) Object.assign(made, { x: grown.x, y: grown.y, width: Math.max(grown.width, 300), height: Math.max(grown.height, 200) });
+    else grownFrames.set(frameId, growFrame(frameBox(frameId) ?? grown, [grown]));
+    const crossings = countCrossings(
+      members.map(([id, c]) => ({ id, bounds: { x: c.x, y: c.y, width: c.width, height: c.height } })) as unknown as GraphNode[],
+      edges,
+    );
+    notes.push(`${createdFrames.get(frameId)?.name ?? frameId}: ${members.length} components laid out by flow${crossings ? ` — ${crossings} crossing${crossings === 1 ? "" : "s"} remain; consider a detail layer` : ", no crossings"}`);
+  }
+
   // Frames that grew to hold what was added.
   for (const [frameId, box] of grownFrames) {
     const made = createdFrames.get(frameId);
@@ -597,7 +648,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // Frames created with members: size to them.
   for (const frame of createdFrames.values()) {
     const memberBoxList = frame.members.map((m) => created.get(m)!).filter(Boolean);
-    if (memberBoxList.length) Object.assign(frame, growFrame({ x: frame.x, y: frame.y, width: frame.width, height: frame.height }, memberBoxList));
+    if (memberBoxList.length) {
+      const base = framesToLayOut.has(frame.id) ? { x: frame.x, y: frame.y, width: 0, height: 0 } : { x: frame.x, y: frame.y, width: frame.width, height: frame.height };
+      Object.assign(frame, growFrame(base, memberBoxList));
+    }
     write.frames.push({ id: frame.id, name: frame.name, x: frame.x, y: frame.y, width: frame.width, height: frame.height, meaning: frame.meaning });
   }
 
@@ -803,6 +857,20 @@ export function lint(snapshot: SceneSnapshot): { findings: LintFinding[]; summar
     const tier = tiers.frameTier.get(frame.sourceId) ?? 1;
     if (tier > 1 && !linked.has(frame.id)) findings.push({ level: "warn", about: frame.id, message: `detail frame ${name} is linked from no component` });
   }
+  for (const frame of graph.frames) {
+    const members = graph.nodes.filter((n) => n.frameId === frame.id);
+    const crossings = countCrossings(members, graph.edges);
+    if (crossings) {
+      findings.push({
+        level: "warn",
+        about: frame.id,
+        message: `frame ${clean(frame.name) || frame.id} has ${crossings} arrow crossing${crossings === 1 ? "" : "s"} — layout({frame:'${frame.id}'}) if you built it, or re-place the component, or add a detail layer`,
+      });
+    }
+  }
+  const loose = graph.nodes.filter((n) => n.frameId === null);
+  const looseCrossings = countCrossings(loose, graph.edges);
+  if (looseCrossings) findings.push({ level: "warn", about: null, message: `Layer 1 has ${looseCrossings} arrow crossing${looseCrossings === 1 ? "" : "s"} among unframed components` });
   const warns = findings.filter((f) => f.level === "warn").length;
   const summary = findings.length ? `${warns} warning${warns === 1 ? "" : "s"}, ${findings.length - warns} note${findings.length - warns === 1 ? "" : "s"}` : "clean — every component has a kind and an intent, every frame a narrative";
   return { findings, summary };

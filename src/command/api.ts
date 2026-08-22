@@ -254,7 +254,21 @@ export class CommandAPI {
         // Showing is a courtesy; the edit already landed.
       }
     }
-    const summary = changelog || planned.notes.join("; ") || "no semantic change";
+    // The panel line is a glance, not the changelog: counts, and the
+    // notes when nothing semantic changed.
+    const { diff } = describeChange(before, after);
+    const parts: string[] = [];
+    const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    if (diff.nodes.added.length) parts.push(`+${count(diff.nodes.added.length, "component")}`);
+    if (diff.nodes.removed.length) parts.push(`−${count(diff.nodes.removed.length, "component")}`);
+    if (diff.nodes.changed.length) parts.push(`${count(diff.nodes.changed.length, "component")} changed`);
+    if (diff.edges.added.length) parts.push(`+${count(diff.edges.added.length, "edge")}`);
+    if (diff.edges.removed.length) parts.push(`−${count(diff.edges.removed.length, "edge")}`);
+    if (diff.edges.changed.length) parts.push(`${count(diff.edges.changed.length, "edge")} changed`);
+    if (diff.frames.added.length) parts.push(`+${count(diff.frames.added.length, "frame")}`);
+    if (diff.frames.removed.length) parts.push(`−${count(diff.frames.removed.length, "frame")}`);
+    if (diff.frames.changed.length) parts.push(`${count(diff.frames.changed.length, "frame")} changed`);
+    const summary = parts.length ? parts.join(" · ") : planned.notes.join("; ") || "no semantic change";
     writer.report?.(summary, () => this.undoAgentEdit());
     this.setWorking(false);
     return { applied: true, changelog, ids, notes: planned.notes, touched, lint: lint(after) };

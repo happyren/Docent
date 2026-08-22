@@ -182,6 +182,62 @@ describe("plan (D59, D62)", () => {
   });
 });
 
+describe("no crossings (D66)", () => {
+  it("lays out an agent-built frame by flow so arrows do not cross, and wraps long labels", () => {
+    // Five components named in an order that would tangle a sequential placer.
+    const result = plan(
+      [
+        { op: "add_frame", ref: "$f", name: "Ritual" },
+        { op: "add_node", ref: "$sheet", label: "22:30 · THE EVENING RITUAL — one sitting, both markets", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$us", label: "US funnel runs", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$asx", label: "ASX funnel runs", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$open", label: "10:00 ASX open", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$morning", label: "Morning check", frame: "$f", intents: ["x"] },
+        { op: "add_edge", from: "$us", to: "$sheet", label: "US sheet drafted" },
+        { op: "add_edge", from: "$asx", to: "$sheet", label: "ASX sheet drafted" },
+        { op: "add_edge", from: "$sheet", to: "$open", label: "orders placed" },
+        { op: "add_edge", from: "$sheet", to: "$morning", label: "overnight fills" },
+        { op: "add_edge", from: "$open", to: "$morning" },
+      ],
+      snapshot,
+      idSource(11),
+    );
+    const shapes = result.write.shapes!;
+    const x = (label: string) => shapes.find((s) => s.label?.startsWith(label))!.x;
+    // Feeders left of what they feed, column by column.
+    expect(x("US funnel")).toBeLessThan(x("22:30"));
+    expect(x("ASX funnel")).toBeLessThan(x("22:30"));
+    expect(x("22:30")).toBeLessThan(x("10:00"));
+    expect(x("10:00")).toBeLessThan(x("Morning"));
+    // The long label wrapped: the shape is not a 900-unit ellipse.
+    const sheet = shapes.find((s) => s.label?.startsWith("22:30"))!;
+    expect(sheet.width).toBeLessThan(450);
+    expect(sheet.height).toBeGreaterThan(70);
+    // And the plan says so.
+    expect(result.notes.some((n) => n.includes("laid out by flow") && n.includes("no crossings"))).toBe(true);
+    // The frame holds them all.
+    const frame = result.write.frames![0];
+    for (const sh of shapes) {
+      expect(sh.x).toBeGreaterThanOrEqual(frame.x);
+      expect(sh.x + sh.width).toBeLessThanOrEqual(frame.x + frame.width);
+      expect(sh.y + sh.height).toBeLessThanOrEqual(frame.y + frame.height);
+    }
+  });
+
+  it("counts crossings in the lint", () => {
+    // Two edges that cross: gateway→db and orders→a node left of gateway.
+    const tangled = snapshotFromRawElements([
+      ...raw,
+      ...box("left", 40, 300, "Left"),
+      arrow("e3", "orders", "left"),
+      arrow("e4", "gateway", "db"),
+    ] as never);
+    const { findings } = lint(tangled);
+    expect(findings.some((f) => f.message.includes("arrow crossing"))).toBe(true);
+    expect(lint(snapshot).findings.some((f) => f.message.includes("crossing"))).toBe(false);
+  });
+});
+
 describe("simulate + diff (D46, D62)", () => {
   it("predicts the changelog of a batch without touching anything", () => {
     const result = plan(

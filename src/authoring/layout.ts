@@ -28,9 +28,31 @@ export const FRAME_HEAD = 36;
 export const MIN_W = 150;
 export const MIN_H = 70;
 
+/** Labels longer than this wrap rather than stretch the shape (D66). */
+export const WRAP_AT = 22;
+
+/** The lines a label takes at the wrap width — what Excalidraw will wrap it to. */
+export function wrapLabel(label: string, at = WRAP_AT): string[] {
+  const lines: string[] = [];
+  for (const para of label.split("\n")) {
+    const words = para.trim().split(/\s+/).filter(Boolean);
+    let line = "";
+    for (const word of words) {
+      if (line && (line + " " + word).length > at) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = line ? `${line} ${word}` : word;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
 /** A shape sized to its label at the given font, within the house minimums. */
 export function sizeForLabel(label: string | null, fontSize: number, shape: "rectangle" | "ellipse" | "diamond"): Size {
-  const lines = (label ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  const lines = wrapLabel(label ?? "");
   const longest = lines.reduce((n, l) => Math.max(n, l.length), 0);
   // Excalifont at 20px runs about 0.72em per character on average.
   const charW = fontSize * 0.72;
@@ -171,12 +193,42 @@ export function layeredLayout(
     return r;
   };
   for (const n of byPos) rankOf(n.id);
-  const layers = new Map<number, GraphNode[]>();
-  for (const n of nodes) {
-    const r = rank.get(n.id) ?? 0;
+  // An edge that skips ranks gets a dummy in each rank it passes, so the
+  // real components there are pushed off its line instead of under it.
+  type Slot = { id: string; dummy: boolean; size: Size; feeders: string[]; order: number };
+  const layers = new Map<number, Slot[]>();
+  const slotOf = new Map<string, Slot>();
+  const push = (r: number, slot: Slot) => {
     const list = layers.get(r) ?? [];
-    list.push(n);
+    list.push(slot);
     layers.set(r, list);
+    slotOf.set(slot.id, slot);
+  };
+  for (const n of nodes) {
+    push(rank.get(n.id) ?? 0, {
+      id: n.id,
+      dummy: false,
+      size: sizes.get(n.id) ?? { width: MIN_W, height: MIN_H },
+      feeders: [],
+      order: order.get(n.id)!,
+    });
+  }
+  let dummies = 0;
+  for (const e of edges) {
+    if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
+    const rf = rank.get(e.from)!;
+    const rt = rank.get(e.to)!;
+    if (rt <= rf) {
+      slotOf.get(e.to)?.feeders.push(e.from);
+      continue;
+    }
+    let previous = e.from;
+    for (let r = rf + 1; r < rt; r++) {
+      const id = `__dummy${dummies++}`;
+      push(r, { id, dummy: true, size: { width: 0, height: Math.round(MIN_H / 2) }, feeders: [previous], order: order.get(e.from)! + 0.5 });
+      previous = id;
+    }
+    slotOf.get(e.to)!.feeders.push(previous);
   }
   const positionIn = new Map<string, number>();
   const result = new Map<string, Box>();
@@ -184,20 +236,19 @@ export function layeredLayout(
   for (const r of [...layers.keys()].sort((a, b) => a - b)) {
     const layer = layers.get(r)!;
     layer.sort((a, b) => {
-      const bary = (n: GraphNode) => {
-        const feeders = (inn.get(n.id) ?? []).filter((f) => positionIn.has(f));
-        return feeders.length ? feeders.reduce((s, f) => s + positionIn.get(f)!, 0) / feeders.length : order.get(n.id)! + 1000;
+      const bary = (slot: Slot) => {
+        const placed = slot.feeders.filter((f) => positionIn.has(f));
+        return placed.length ? placed.reduce((sum, f) => sum + positionIn.get(f)!, 0) / placed.length : slot.order + 1000;
       };
-      return bary(a) - bary(b) || order.get(a.id)! - order.get(b.id)!;
+      return bary(a) - bary(b) || a.order - b.order;
     });
     let y = origin.y;
     let colW = 0;
-    layer.forEach((n, i) => {
-      const size = sizes.get(n.id) ?? { width: MIN_W, height: MIN_H };
-      result.set(n.id, { x, y, ...size });
-      positionIn.set(n.id, i);
-      y += size.height + GAP_Y;
-      colW = Math.max(colW, size.width);
+    layer.forEach((slot, i) => {
+      if (!slot.dummy) result.set(slot.id, { x, y, ...slot.size });
+      positionIn.set(slot.id, i);
+      y += slot.size.height + (slot.dummy ? GAP_Y / 2 : GAP_Y);
+      colW = Math.max(colW, slot.size.width);
     });
     x += colW + GAP_X;
   }
@@ -210,3 +261,36 @@ export function memberBoxes(elements: readonly SnapshotElement[], frameId: strin
     .filter((el) => el.frameId === frameId && el.type !== "frame" && !el.containerId && el.type !== "arrow")
     .map((el) => ({ x: el.x, y: el.y, width: el.width, height: el.height }));
 }
+
+/** Whether two segments cross (touching at an endpoint does not count). */
+function segmentsCross(a1: [number, number], a2: [number, number], b1: [number, number], b2: [number, number]): boolean {
+  const d = (p: [number, number], q: [number, number], r: [number, number]) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = d(b1, b2, a1);
+  const d2 = d(b1, b2, a2);
+  const d3 = d(a1, a2, b1);
+  const d4 = d(a1, a2, b2);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+/**
+ * How many pairs of edges cross, taking each edge as the straight line
+ * between its components' centres — what a reader's eye has to untangle
+ * (D66). Edges sharing a component never count.
+ */
+export function countCrossings(nodes: readonly GraphNode[], edges: readonly GraphEdge[]): number {
+  const centre = new Map(nodes.map((n) => [n.id, [n.bounds.x + n.bounds.width / 2, n.bounds.y + n.bounds.height / 2] as [number, number]]));
+  const lines = edges
+    .filter((e) => e.from && e.to && centre.has(e.from) && centre.has(e.to) && e.from !== e.to)
+    .map((e) => ({ from: e.from!, to: e.to!, a: centre.get(e.from!)!, b: centre.get(e.to!)! }));
+  let count = 0;
+  for (let i = 0; i < lines.length; i++) {
+    for (let j = i + 1; j < lines.length; j++) {
+      const p = lines[i];
+      const q = lines[j];
+      if (p.from === q.from || p.from === q.to || p.to === q.from || p.to === q.to) continue;
+      if (segmentsCross(p.a, p.b, q.a, q.b)) count += 1;
+    }
+  }
+  return count;
+}
+
