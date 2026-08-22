@@ -263,7 +263,30 @@ async function writeSync(project, state) {
   await fs.rename(tmp, file);
 }
 
-const removeSync = (project) => fs.rm(syncFile(project), { force: true });
+/**
+ * The "before" copies (D47): the content the recorded base sha points at,
+ * kept beside the sync state so a review never needs the network. Under
+ * the data root's `.docent/` exception — never inside the project directory,
+ * never pushed.
+ */
+const baseDir = (project) => path.join(SYNC_DIR, project, "base");
+const basePath = (project, scene) => path.join(baseDir(project), `${scene}${EXT}`);
+async function writeBase(project, scene, text) {
+  await fs.mkdir(baseDir(project), { recursive: true });
+  await fs.writeFile(basePath(project, scene), text, "utf8");
+}
+const removeBase = (project, scene) => fs.rm(basePath(project, scene), { force: true });
+async function readBase(project, scene) {
+  try {
+    return await fs.readFile(basePath(project, scene), "utf8");
+  } catch {
+    return null;
+  }
+}
+const removeSync = async (project) => {
+  await fs.rm(syncFile(project), { force: true });
+  await fs.rm(path.join(SYNC_DIR, project), { recursive: true, force: true });
+};
 
 /**
  * The working copy: every addressable scene in the project directory, by
@@ -343,6 +366,12 @@ const publicBinding = (binding, hasToken) => ({
   apiBase: binding.apiBase,
   hasToken,
   canWrite: typeof binding.canWrite === "boolean" ? binding.canWrite : null,
+  // What this binding sends to GitHub beside the scenes (D49) — both off
+  // unless the team asked.
+  review: {
+    images: binding.review?.images === true,
+    sidecars: binding.review?.sidecars === true,
+  },
 });
 
 const bad = (message) => new HttpError(400, message);
@@ -434,7 +463,15 @@ function normalizeBinding(input) {
   if (baseBranch !== "") checkBranch(baseBranch);
   const apiBase = textOr("apiBase", DEFAULT_API_BASE, apiBaseError).replace(/\/+$/, "");
   if (apiBase.length > 512 || !API_BASE_RE.test(apiBase)) throw bad(apiBaseError);
-  return { owner, repo, path: repoPath, branch, baseBranch, apiBase };
+  // Review artifacts (D49): absent keeps what is stored; present sets both.
+  let review = null;
+  if (input.review !== undefined) {
+    if (typeof input.review !== "object" || input.review === null) {
+      throw bad("invalid review — an object with images/sidecars booleans");
+    }
+    review = { images: input.review.images === true, sidecars: input.review.sidecars === true };
+  }
+  return { owner, repo, path: repoPath, branch, baseBranch, apiBase, review };
 }
 
 /** Optional on update: absent or empty means "keep whatever is stored". */
@@ -514,6 +551,12 @@ async function putBinding(project, body) {
     apiBase: requested.apiBase,
     ...(probe.canWrite === null ? {} : { canWrite: probe.canWrite }),
   };
+  // Stored only when a flag is on, so a binding that never asked for
+  // artifacts is the same bytes it always was.
+  const review = requested.review ?? stored?.review ?? null;
+  if (review && (review.images || review.sidecars)) {
+    bindings[project].review = { images: review.images === true, sidecars: review.sidecars === true };
+  }
   await writeJsonFile(BINDINGS_FILE, bindings);
   if (newToken !== null) {
     const secrets = await readSecrets();
@@ -1041,11 +1084,13 @@ async function pullProject(project, binding, token) {
     if (state === "clean") {
       if (remoteSha === null) {
         await fs.rm(scenePath(project, name), { force: true });
+        await removeBase(project, name);
         bases.delete(name);
         removed.push(name);
       } else {
         const text = await githubBlob(binding, token, remoteSha);
         await writeWorkingFile(project, name, text);
+        await writeBase(project, name, text);
         bases.set(name, { baseSha: remoteSha, baseHash: sha256(text), conflictSha: null });
         updated.push(name);
       }
@@ -1054,6 +1099,7 @@ async function pullProject(project, binding, token) {
     if (state === "deleted" && remoteSha === null) {
       // Both sides deleted it: there is nothing to reconcile and nothing to
       // ask about — the copy and the branch already agree.
+      await removeBase(project, name);
       bases.delete(name);
       removed.push(name);
       continue;
@@ -1064,6 +1110,7 @@ async function pullProject(project, binding, token) {
       // and it is an agreement rather than a conflict.
       const text = await githubBlob(binding, token, remoteSha);
       if (sha256(text) === hash) {
+        await writeBase(project, name, text);
         bases.set(name, { baseSha: remoteSha, baseHash: hash, conflictSha: null });
         updated.push(name);
         continue;
@@ -1107,6 +1154,11 @@ async function resolveScene(project, binding, token, body) {
     throw bad(`scene is not conflicted: ${project}/${scene}`);
   }
   if (resolution === "keep-local") {
+    // The recorded base becomes the remote's version, so the "before" copy
+    // follows it: a review after this shows the local work against what the
+    // push will overwrite.
+    if (base.conflictSha === "") await removeBase(project, scene);
+    else await writeBase(project, scene, await githubBlob(binding, token, base.conflictSha));
     bases.set(scene, {
       baseSha: base.conflictSha,
       baseHash: base.baseHash,
@@ -1116,10 +1168,12 @@ async function resolveScene(project, binding, token, body) {
     // The remote deleted it and the author accepts that, so the local file
     // goes too and the scene stops being tracked.
     await fs.rm(scenePath(project, scene), { force: true });
+    await removeBase(project, scene);
     bases.delete(scene);
   } else {
     const text = await githubBlob(binding, token, base.conflictSha);
     await writeWorkingFile(project, scene, text);
+    await writeBase(project, scene, text);
     bases.set(scene, {
       baseSha: base.conflictSha,
       baseHash: sha256(text),
@@ -1138,7 +1192,40 @@ async function resolveScene(project, binding, token, body) {
  * a reader of the repository's history, and because a half-applied push is not
  * a state anyone should have to reason about.
  */
-async function pushProject(project, binding, token) {
+/**
+ * What a push may carry beside the scenes: a changelog for the commit
+ * message (D46) and attachments — files written into the same commit at
+ * paths relative to the bound path, null content meaning "remove" (D49's
+ * semantic sidecars). Paths are one flat name: no separators, no dots
+ * leading, no traversal.
+ */
+const ATTACHMENT_RE = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,120}$/;
+function parsePushBody(body) {
+  if (!body || !body.trim()) return { message: "", attachments: [] };
+  const input = objectBody(body, "a push");
+  const message = typeof input.message === "string" ? input.message.trim().slice(0, 4000) : "";
+  const attachments = [];
+  if (input.attachments !== undefined) {
+    if (!Array.isArray(input.attachments)) throw bad("attachments must be a list");
+    for (const item of input.attachments) {
+      if (
+        typeof item !== "object" ||
+        item === null ||
+        typeof item.path !== "string" ||
+        !ATTACHMENT_RE.test(item.path) ||
+        item.path.endsWith(EXT) ||
+        (item.content !== null && typeof item.content !== "string")
+      ) {
+        throw bad("invalid attachment — a flat file name and string or null content");
+      }
+      attachments.push({ path: item.path, content: item.content });
+    }
+  }
+  return { message, attachments };
+}
+
+async function pushProject(project, binding, token, body = "") {
+  const { message, attachments } = parsePushBody(body);
   // The trunk is protected (D33): through Docent the base branch only ever
   // changes by a pull request someone merged. Checked before anything else,
   // because it is a fact about the branch rather than about the changes —
@@ -1188,7 +1275,7 @@ async function pushProject(project, binding, token) {
       content: Buffer.from(text, "utf8").toString("base64"),
       encoding: "base64",
     });
-    written.push({ name, sha, hash: sha256(text) });
+    written.push({ name, sha, hash: sha256(text), text });
     entries.push({ path: repoFile(binding, name), mode: "100644", type: "blob", sha });
   }
   for (const name of deleted) {
@@ -1196,25 +1283,131 @@ async function pushProject(project, binding, token) {
     // path from the base tree".
     entries.push({ path: repoFile(binding, name), mode: "100644", type: "blob", sha: null });
   }
+  for (const attachment of attachments) {
+    const filePath =
+      binding.path === "" ? attachment.path : `${binding.path}/${attachment.path}`;
+    if (attachment.content === null) {
+      entries.push({ path: filePath, mode: "100644", type: "blob", sha: null });
+      continue;
+    }
+    const sha = await githubCreate(binding, token, "/git/blobs", {
+      content: Buffer.from(attachment.content, "utf8").toString("base64"),
+      encoding: "base64",
+    });
+    entries.push({ path: filePath, mode: "100644", type: "blob", sha });
+  }
   const tree = await githubCreate(binding, token, "/git/trees", {
     base_tree: head.tree,
     tree: entries,
   });
   const total = changed.length + deleted.length;
   const commit = await githubCreate(binding, token, "/git/commits", {
-    message: `docent: update ${project} (${total} scene(s))`,
+    message:
+      `docent: update ${project} (${total} scene(s))` + (message ? `\n\n${message}` : ""),
     tree,
     parents: [head.commit],
   });
   await githubUpdateRef(binding, token, commit);
 
   for (const scene of written) {
+    await writeBase(project, scene.name, scene.text);
     bases.set(scene.name, { baseSha: scene.sha, baseHash: scene.hash, conflictSha: null });
   }
-  for (const name of deleted) bases.delete(name);
+  for (const name of deleted) {
+    await removeBase(project, name);
+    bases.delete(name);
+  }
   await writeSync(project, bases);
   listingCache.delete(project);
   return { ok: true, commit, pushed: changed, removedRemotely: deleted };
+}
+
+/**
+ * The review pictures (D49): before/after crops for one push, committed to
+ * the quarantined `docent-review` branch under `<label>/…` — an orphan
+ * branch that is never merged and is pruned here to the last 90 days by
+ * the date its labels start with. The working branch is never touched.
+ */
+const REVIEW_BRANCH = "docent-review";
+const REVIEW_KEEP_DAYS = 90;
+const REVIEW_LABEL_RE = /^\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]{1,40}$/;
+const REVIEW_PATH_RE = /^[A-Za-z0-9][A-Za-z0-9 _./-]{0,200}\.png$/;
+async function pushReviewImages(project, binding, token, body) {
+  const input = objectBody(body, "review images");
+  if (typeof input.label !== "string" || !REVIEW_LABEL_RE.test(input.label)) {
+    throw bad("invalid label — YYYY-MM-DD-<id>");
+  }
+  if (!Array.isArray(input.images) || input.images.length === 0) {
+    throw bad("images must be a non-empty list of {path, base64}");
+  }
+  for (const image of input.images) {
+    if (
+      typeof image !== "object" ||
+      image === null ||
+      typeof image.path !== "string" ||
+      !REVIEW_PATH_RE.test(image.path) ||
+      image.path.includes("..") ||
+      typeof image.base64 !== "string"
+    ) {
+      throw bad("invalid image — a relative .png path and base64 content");
+    }
+  }
+  const heads = `/git/ref/heads/${REVIEW_BRANCH}`;
+  const existing = await github(token, "GET", repoUrl(binding, heads));
+  let parent = null;
+  let baseTree = null;
+  if (existing.status === 200) {
+    parent = parseJson(existing.text)?.object?.sha ?? null;
+    if (parent) {
+      const commitRes = await github(token, "GET", repoUrl(binding, `/git/commits/${parent}`));
+      if (commitRes.status === 200) baseTree = parseJson(commitRes.text)?.tree?.sha ?? null;
+    }
+  } else if (existing.status !== 404) {
+    throw githubFailure(existing.status, existing.text);
+  }
+  const entries = [];
+  for (const image of input.images) {
+    const sha = await githubCreate(binding, token, "/git/blobs", {
+      content: image.base64,
+      encoding: "base64",
+    });
+    entries.push({ path: `${input.label}/${image.path}`, mode: "100644", type: "blob", sha });
+  }
+  let pruned = 0;
+  if (baseTree) {
+    const listed = await github(token, "GET", repoUrl(binding, `/git/trees/${baseTree}?recursive=1`));
+    if (listed.status === 200) {
+      const cutoff = Date.now() - REVIEW_KEEP_DAYS * 86_400_000;
+      for (const entry of parseJson(listed.text)?.tree ?? []) {
+        if (entry.type !== "blob" || typeof entry.path !== "string") continue;
+        const stamp = entry.path.slice(0, 10);
+        const when = Date.parse(stamp);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(stamp) && Number.isFinite(when) && when < cutoff) {
+          entries.push({ path: entry.path, mode: "100644", type: "blob", sha: null });
+          pruned += 1;
+        }
+      }
+    }
+  }
+  const tree = await githubCreate(binding, token, "/git/trees", {
+    ...(baseTree ? { base_tree: baseTree } : {}),
+    tree: entries,
+  });
+  const commit = await githubCreate(binding, token, "/git/commits", {
+    message: `docent review ${input.label}`,
+    tree,
+    parents: parent ? [parent] : [],
+  });
+  const refUrl = parent
+    ? repoUrl(binding, `/git/refs/heads/${REVIEW_BRANCH}`)
+    : repoUrl(binding, "/git/refs");
+  const res = await github(token, parent ? "PATCH" : "POST", refUrl, {
+    body: JSON.stringify(
+      parent ? { sha: commit, force: false } : { ref: `refs/heads/${REVIEW_BRANCH}`, sha: commit },
+    ),
+  });
+  if (res.status < 200 || res.status >= 300) throw githubWriteFailure(binding, res.status, res.text);
+  return { ok: true, branch: REVIEW_BRANCH, label: input.label, commit, pruned };
 }
 
 /**
@@ -1457,7 +1650,26 @@ async function handle(req, res) {
   if (parts.length === 4 && parts[3] === "push" && req.method === "POST") {
     const project = checkName(parts[2], "project");
     const bound = await boundOrFail(project);
-    return pushProject(project, bound.binding, bound.token);
+    return pushProject(project, bound.binding, bound.token, await readBody(req));
+  }
+
+  // The review pictures (D49): pushed to the quarantined `docent-review`
+  // branch, never the working branch.
+  if (parts.length === 4 && parts[3] === "review-images" && req.method === "POST") {
+    const project = checkName(parts[2], "project");
+    const bound = await boundOrFail(project);
+    return pushReviewImages(project, bound.binding, bound.token, await readBody(req));
+  }
+
+  // The "before" copy of a scene (D47): what the recorded base sha says.
+  if (parts.length === 6 && parts[3] === "scenes" && parts[5] === "base" && req.method === "GET") {
+    const project = checkName(parts[2], "project");
+    const scene = checkName(parts[4], "scene");
+    const text = await readBase(project, scene);
+    if (text === null) {
+      throw new HttpError(404, `no base copy yet for ${project}/${scene} — pull or push first`);
+    }
+    return { raw: text };
   }
 
   if (parts.length === 4 && parts[3] === "scenes" && req.method === "GET") {

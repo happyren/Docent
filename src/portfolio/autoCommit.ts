@@ -28,6 +28,7 @@ import {
   type SceneSyncState,
 } from "./client";
 import { alertDialog, confirmDialog } from "../shell/dialogs";
+import { projectChangelog, pushExtrasFor, rememberPush, reviewProject } from "../review/session";
 
 /** How long after the last save a checkpoint lands. */
 const DEBOUNCE_MS = 45_000;
@@ -193,7 +194,19 @@ async function attempt(project: string): Promise<void> {
     if (status.branch === status.baseBranch) return;
     if (status.local.some((scene) => scene.state === "conflicted")) return;
     if (!status.local.some((scene) => PUSHABLE.has(scene.state))) return;
-    const result = await push(project);
+    // The same commit a manual push makes (S16): the changelog in the
+    // message, and sidecars when the binding asked (D49). Review pictures
+    // are a manual push's business — they are for a conversation the author
+    // starts, not a checkpoint nobody asked to see.
+    const reviews = await reviewProject(project);
+    const binding = await getBinding(project);
+    const result = await push(project, pushExtrasFor(reviews, binding));
+    rememberPush(project, {
+      commit: result.commit,
+      changelog: projectChangelog(reviews),
+      label: null,
+      pictures: [],
+    });
     announce({ project, kind: "committed", commit: result.commit });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

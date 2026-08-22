@@ -546,8 +546,42 @@ fn dispatch(
         check_name(project, "project")?;
         require_app_origin(origin)?;
         let (binding, token) = bound_or_404(context, project)?;
-        let answer = sync::push(data_dir, project, &binding, &token, &context.cache)?;
+        let extras = sync::parse_push_body(&read_body(request)?)?;
+        let answer = sync::push(data_dir, project, &binding, &token, &context.cache, &extras)?;
         return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
+    }
+
+    // The review pictures (D49): pushed to the quarantined `docent-review`
+    // branch, never the working branch.
+    if segments.len() == 4 && part(3) == Some("review-images") && method == Method::Post {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        require_app_origin(origin)?;
+        let (binding, token) = bound_or_404(context, project)?;
+        let today = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| (d.as_secs() / 86_400) as i64)
+            .unwrap_or(0);
+        let answer = github::push_review_images(&binding, &token, &read_body(request)?, today)?;
+        return Ok(Reply::ok(serde_json::to_string(&answer).map_err(json)?));
+    }
+
+    // The "before" copy of a scene (D47): what the recorded base sha says.
+    if segments.len() == 6
+        && part(3) == Some("scenes")
+        && part(5) == Some("base")
+        && method == Method::Get
+    {
+        let (project, scene) = (&segments[2], &segments[4]);
+        check_name(project, "project")?;
+        check_name(scene, "scene")?;
+        return match sync::read_base(data_dir, project, scene) {
+            Some(text) => Ok(Reply::ok(text)),
+            None => Err(HttpError::new(
+                404,
+                format!("no base copy yet for {project}/{scene} — pull or push first"),
+            )),
+        };
     }
 
     if segments.len() == 4 && part(3) == Some("scenes") && method == Method::Get {
@@ -825,6 +859,13 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         .or_else(|| probe.default_branch.clone())
         .unwrap_or_else(|| binding.branch.clone());
     binding.base_branch = Some(base_branch.clone());
+    // Stored only when a flag is on, so a binding that never asked for
+    // artifacts is the same bytes it always was; a PUT that does not mention
+    // review keeps what was recorded.
+    binding.review = binding
+        .review
+        .or_else(|| bindings.get(project).and_then(|stored| stored.review))
+        .filter(|review| review.any());
     bindings.insert(project.to_string(), binding);
     github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
     if let Some(token) = new_token {

@@ -441,6 +441,34 @@ export class CommandAPI {
     this.overlay.clear();
   }
 
+  /**
+   * Show a review change in place (D48): fly to its rectangle and draw
+   * the removed entities as ghosts where they were, from the base copy.
+   * Effects only — the scene is never written (I2). Empty ghosts clears
+   * them; `outline` lights the added/changed elements that are present.
+   */
+  async showChange(params: {
+    rect: SceneBounds;
+    ghosts: { id: string; label: string; rect: SceneBounds }[];
+    outline?: string[];
+  }): Promise<void> {
+    this.overlay.setGhosts(
+      params.ghosts.map((g) => ({ id: g.id, label: g.label, bounds: g.rect })),
+    );
+    if (params.outline && params.outline.length) {
+      const graph = this.getSceneGraph();
+      const present = params.outline.filter((id) => this.reader.getElementInfo(id));
+      if (present.length) {
+        this.overlay.setHighlight(this.resolveEffectTargets(graph, present), "outline");
+      }
+    } else {
+      this.overlay.setHighlight([], "outline");
+    }
+    // The crop rectangle is already the changed cluster with its margin
+    // (D48), so it is flown to as framed — no neighbourhood, no ceiling.
+    await this.camera.flyTo(params.rect, { padding: 0.15 });
+  }
+
   /** Render text in the narration panel (S9). Null/empty hides it. */
   narrate(params: { text: string | null }): void {
     this.narration.narrate(params.text || null);

@@ -28,15 +28,27 @@ export interface FlowState {
   generation: number;
 }
 
+/**
+ * A removed entity drawn where it used to be (D48): the review's "before"
+ * laid over the live scene as a dashed, labelled ghost. Comes from the
+ * base copy, never from the scene — nothing is written (I2).
+ */
+export interface GhostState {
+  id: string;
+  label: string;
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
 export interface OverlayState {
   highlight: HighlightState | null;
   flow: FlowState | null;
+  ghosts: GhostState[];
 }
 
 type Listener = (state: OverlayState) => void;
 
 export class OverlayStore {
-  private state: OverlayState = { highlight: null, flow: null };
+  private state: OverlayState = { highlight: null, flow: null, ghosts: [] };
   private listeners = new Set<Listener>();
   private generation = 0;
 
@@ -92,7 +104,19 @@ export class OverlayStore {
     });
   }
 
+  /** Replace the ghosts (D48). Empty clears them; same ids is a no-op. */
+  setGhosts(ghosts: GhostState[]): void {
+    const current = this.state.ghosts;
+    if (
+      current.length === ghosts.length &&
+      current.every((g, i) => g.id === ghosts[i].id)
+    ) {
+      return;
+    }
+    this.emit({ ...this.state, ghosts: ghosts.map((g) => ({ ...g, bounds: { ...g.bounds } })) });
+  }
+
   clear(): void {
-    this.emit({ highlight: null, flow: null });
+    this.emit({ highlight: null, flow: null, ghosts: [] });
   }
 }

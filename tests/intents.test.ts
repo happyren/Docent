@@ -72,8 +72,8 @@ describe("intents (D41)", () => {
           [0, 0],
           [190, 0],
         ],
-        startBindingId: "a",
-        endBindingId: "b",
+        startBinding: { elementId: "a" },
+        endBinding: { elementId: "b" },
         customData: { docent: { intents: ["order placed", "payment captured"], logic: "retry ≤3" } },
       },
     ]);

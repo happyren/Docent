@@ -58,6 +58,18 @@ export interface Binding {
    * GitHub could not be reached — and never a reason to hide the binding.
    */
   canWrite: boolean | null;
+  /** Which review artifacts may reach GitHub (D49) — both off by default. */
+  review: ReviewOptions;
+}
+
+/**
+ * The opt-in GitHub artifacts of a review (S16, D49): before/after crops on
+ * the quarantined `docent-review` branch, and semantic sidecars committed
+ * beside the scenes. Neither touches the diagram directory unless asked.
+ */
+export interface ReviewOptions {
+  images: boolean;
+  sidecars: boolean;
 }
 
 /**
@@ -91,6 +103,8 @@ export interface BindingInput {
   baseBranch?: string;
   apiBase?: string;
   token?: string;
+  /** Omitted keeps whatever the binding recorded. */
+  review?: ReviewOptions;
 }
 
 /** One branch of the bound repository (D28). */
@@ -357,12 +371,64 @@ export function resolveConflict(
 }
 
 /**
+ * What a push may carry beside the scenes (D46, D49): the changelog for the
+ * commit message, and attachments written into the same commit at flat file
+ * names relative to the bound path — `content: null` removes one.
+ */
+export interface PushExtras {
+  message?: string;
+  attachments?: { path: string; content: string | null }[];
+}
+
+/**
  * Land every local change as one commit on the active branch. Refused on the
  * base branch (D33), while a conflict is unresolved, and when the remote
  * branch has moved — each with a message that says what to do about it.
  */
-export function push(project: string): Promise<PushResult> {
-  return request(syncUrl(project, "push"), { method: "POST" });
+export function push(project: string, extras: PushExtras = {}): Promise<PushResult> {
+  return request(syncUrl(project, "push"), {
+    method: "POST",
+    body: JSON.stringify(extras),
+  });
+}
+
+/**
+ * The "before" copy of a scene (D47): what the recorded base sha points at,
+ * kept by the store beside its sync state. Null when the scene has never
+ * been synced — a new scene has no before.
+ */
+export async function loadBase(project: string, scene: string): Promise<string | null> {
+  const res = await fetch(
+    API_BASE +
+      `/api/projects/${encodeURIComponent(project)}/scenes/${encodeURIComponent(scene)}/base`,
+  );
+  if (res.status === 404) return null;
+  const text = await res.text();
+  if (!res.ok) throw new Error(errorFrom(text, res.status));
+  return text;
+}
+
+/** One review picture for the quarantined branch (D49). */
+export interface ReviewImage {
+  /** Relative `.png` path under the label, e.g. `plan/Core-before.png`. */
+  path: string;
+  base64: string;
+}
+
+/**
+ * Commit review pictures to the orphan `docent-review` branch under
+ * `<label>/…`, pruning labels older than 90 days. The working branch is
+ * never touched.
+ */
+export function pushReviewImages(
+  project: string,
+  label: string,
+  images: ReviewImage[],
+): Promise<{ ok: boolean; branch: string; label: string; commit: string; pruned: number }> {
+  return request(`/api/projects/${encodeURIComponent(project)}/review-images`, {
+    method: "POST",
+    body: JSON.stringify({ label, images }),
+  });
 }
 
 /** The store's word for "someone else committed first", matched exactly. */

@@ -27,6 +27,7 @@ const FLOW_UNITS_PER_SECOND = 500;
 const GLOW_COLOR = "#ffd43b";
 const FLOW_COLOR = "#4dabf7";
 const OUTLINE_COLOR = "#7048e8";
+const GHOST_COLOR = "#e03131";
 const FILTER_MARGIN = 120;
 const MIN_WRITE_INTERVAL_MS = 7.5;
 
@@ -476,6 +477,36 @@ export function OverlayLayer({
               <circle ref={pulseRef} r={16} fill="url(#docent-pulse-halo)" />
             </>
           )}
+          {overlay.ghosts.map((g) => (
+            <g key={`ghost:${g.id}`} className="docent-ghost">
+              <title>{`${g.label} — removed`}</title>
+              <rect
+                x={g.bounds.x}
+                y={g.bounds.y}
+                width={Math.max(g.bounds.width, 8)}
+                height={Math.max(g.bounds.height, 8)}
+                rx={6}
+                fill={GHOST_COLOR}
+                fillOpacity={0.08}
+                stroke={GHOST_COLOR}
+                strokeWidth={2}
+                strokeDasharray="8 6"
+                opacity={0.9}
+              />
+              <text
+                x={g.bounds.x + Math.max(g.bounds.width, 8) / 2}
+                y={g.bounds.y + Math.max(g.bounds.height, 8) / 2}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                fontSize={14}
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+                fill={GHOST_COLOR}
+                opacity={0.8}
+              >
+                {g.label}
+              </text>
+            </g>
+          ))}
           {badges.map((b) => {
             const s = b.size;
             return (

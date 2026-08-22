@@ -311,7 +311,10 @@ class MockGitHub {
         return [422, { message: "Update is not a fast forward" }];
       }
       this.branches.set(name, payload.sha);
-      const snapshot = commit ? this.trees.get(commit.tree) : undefined;
+      // One file map stands for the working branch; the quarantined review
+      // branch (D49) keeps its pictures to itself.
+      const snapshot =
+        commit && name !== "docent-review" ? this.trees.get(commit.tree) : undefined;
       if (snapshot) {
         this.files.clear();
         for (const [key, value] of snapshot) this.files.set(key, value);
@@ -361,6 +364,17 @@ class MockGitHub {
       const sha = this.nextSha("tree");
       this.trees.set(sha, snapshot);
       return [201, { sha }];
+    }
+    if (rest[0] === "trees" && rest.length === 2 && req.method === "GET") {
+      const snapshot = this.trees.get(rest[1].split("?")[0]);
+      if (!snapshot) return notFound;
+      return [
+        200,
+        {
+          sha: rest[1],
+          tree: [...snapshot.keys()].map((path) => ({ path, type: "blob", mode: "100644" })),
+        },
+      ];
     }
     if (rest[0] === "commits" && rest.length === 1 && req.method === "POST") {
       if (this.readOnly) return this.refused();
@@ -488,6 +502,13 @@ const resolve = (project: string, body: unknown) =>
   });
 const push = (project: string) =>
   fetch(`${BASE}/api/projects/${project}/push`, { method: "POST" });
+const pushWith = (project: string, body: unknown) =>
+  fetch(`${BASE}/api/projects/${project}/push`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+const baseOf = (project: string, scene: string) =>
+  fetch(`${BASE}/api/projects/${project}/scenes/${scene}/base`);
 
 type SyncAnswer = {
   branch: string;
@@ -597,6 +618,8 @@ describe("GitHub binding", () => {
       apiBase: github.base,
       hasToken: true,
       canWrite: true,
+      // Review artifacts (D49) are off until a team asks.
+      review: { images: false, sidecars: false },
     });
     // Not merely absent from the typed shape — absent from the bytes.
     expect(body).not.toContain(TOKEN);
@@ -662,6 +685,7 @@ describe("GitHub binding", () => {
       apiBase: "https://api.github.com",
       hasToken: false,
       canWrite: null,
+      review: { images: false, sidecars: false },
     });
     expect((await fetch(`${BASE}/api/projects/defaults/binding`, { method: "DELETE" })).status)
       .toBe(200);
@@ -1965,5 +1989,112 @@ describe("branches and pull requests", () => {
       github.readOnly = false;
     }
     expect(github.branches.has("docent/read-only")).toBe(false);
+  });
+});
+
+describe("visual review plumbing (D47, D49)", () => {
+  const bindingOf = async (project: string) =>
+    (await (await fetch(`${BASE}/api/projects/${project}/binding`)).json()) as {
+      review: { images: boolean; sidecars: boolean };
+    };
+
+  it("keeps a base copy of every synced scene, beside the sync state and never in the project", async () => {
+    await boundProject("review");
+    github.write("docs/review/plan.excalidraw", SCENE);
+    expect((await pull("review")).status).toBe(200);
+    // After a pull the base is the remote content…
+    expect(await (await baseOf("review", "plan")).text()).toBe(SCENE);
+    // …a local edit leaves it alone…
+    const edited = SCENE.replace("[]", '[{"id":"z"}]');
+    expect((await putScene("review", "plan", edited)).status).toBe(200);
+    expect(await (await baseOf("review", "plan")).text()).toBe(SCENE);
+    // …a push moves it to what landed…
+    await draftOn("review", "docent/review");
+    expect((await push("review")).status).toBe(200);
+    expect(await (await baseOf("review", "plan")).text()).toBe(edited);
+    // …a delete-and-push removes it, and a scene never synced has none.
+    expect((await deleteScene("review", "plan")).status).toBe(200);
+    expect((await push("review")).status).toBe(200);
+    expect((await baseOf("review", "plan")).status).toBe(404);
+    expect((await putScene("review", "fresh", SCENE)).status).toBe(200);
+    expect((await baseOf("review", "fresh")).status).toBe(404);
+    // The project directory holds scenes only; the copies live under .docent.
+    const projectFiles = (await walk(path.join(dataDir, "review"))).map((f) => path.basename(f));
+    expect(projectFiles.every((f) => f.endsWith(".excalidraw"))).toBe(true);
+    expect(projectFiles).not.toContain("plan.excalidraw");
+  });
+
+  it("a push carries its changelog into the commit and attachments into the tree", async () => {
+    await boundProject("changelog");
+    expect((await putScene("changelog", "flow", SCENE)).status).toBe(200);
+    await draftOn("changelog", "docent/changelog");
+    const res = await pushWith("changelog", {
+      message: "Core Services: +Retry queue",
+      attachments: [{ path: "flow.docent.json", content: '{"nodes":[]}' }],
+    });
+    expect(res.status, await res.clone().text()).toBe(200);
+    const commits = github.requestsTo("/git/commits").filter((r) => r.method === "POST");
+    const last = JSON.parse(commits[commits.length - 1].body) as { message: string };
+    expect(last.message).toContain("docent: update changelog");
+    expect(last.message).toContain("Core Services: +Retry queue");
+    expect(github.files.get("docs/changelog/flow.docent.json")).toBe('{"nodes":[]}');
+    // A null attachment removes the file from the same commit.
+    expect((await putScene("changelog", "flow", SCENE.replace("[]", '[{"id":"q"}]'))).status).toBe(200);
+    expect((await pushWith("changelog", { attachments: [{ path: "flow.docent.json", content: null }] })).status).toBe(200);
+    expect(github.files.has("docs/changelog/flow.docent.json")).toBe(false);
+    // Traversal and scene impersonation are refused outright.
+    expect((await pushWith("changelog", { attachments: [{ path: "../x.json", content: "" }] })).status).toBe(400);
+    expect((await pushWith("changelog", { attachments: [{ path: "flow.excalidraw", content: "" }] })).status).toBe(400);
+  });
+
+  it("review images land on the quarantined branch, never the working one", async () => {
+    await boundProject("pictures");
+    expect((await putScene("pictures", "scene", SCENE)).status).toBe(200);
+    await draftOn("pictures", "docent/pictures");
+    expect((await push("pictures")).status).toBe(200);
+    const workingHead = github.branches.get("docent/pictures");
+    const first = await fetch(`${BASE}/api/projects/pictures/review-images`, {
+      method: "POST",
+      body: JSON.stringify({
+        label: "2026-08-22-abc1234",
+        images: [{ path: "scene/Core-before.png", base64: Buffer.from("png-1").toString("base64") }],
+      }),
+    });
+    expect(first.status, await first.clone().text()).toBe(200);
+    expect(github.branches.has("docent-review")).toBe(true);
+    // The working branch did not move; the picture is in the review tree.
+    expect(github.branches.get("docent/pictures")).toBe(workingHead);
+    const trees = github.requestsTo("/git/trees").filter((r) => r.method === "POST");
+    const tree = JSON.parse(trees[trees.length - 1].body) as { tree: { path: string }[] };
+    expect(tree.tree.map((t) => t.path)).toEqual(["2026-08-22-abc1234/scene/Core-before.png"]);
+    // A second push descends from the first and prunes labels older than 90 days.
+    const second = await fetch(`${BASE}/api/projects/pictures/review-images`, {
+      method: "POST",
+      body: JSON.stringify({
+        label: "2026-08-23-def5678",
+        images: [{ path: "scene/Core-after.png", base64: Buffer.from("png-2").toString("base64") }],
+      }),
+    });
+    expect(second.status, await second.clone().text()).toBe(200);
+    const answer = (await second.json()) as { pruned: number };
+    expect(answer.pruned).toBe(0);
+    // Malformed labels and paths are refused.
+    const bad = await fetch(`${BASE}/api/projects/pictures/review-images`, {
+      method: "POST",
+      body: JSON.stringify({ label: "nope", images: [{ path: "x.png", base64: "" }] }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it("review artifacts are opt-in per binding and remembered", async () => {
+    await boundProject("optin");
+    expect((await bindingOf("optin")).review).toEqual({ images: false, sidecars: false });
+    const on = await bind("optin", { path: "docs/optin", review: { images: true, sidecars: false } });
+    expect(on.status).toBe(200);
+    expect((await bindingOf("optin")).review).toEqual({ images: true, sidecars: false });
+    // A later PUT that does not mention review keeps it.
+    const again = await bind("optin", { path: "docs/optin" });
+    expect(again.status).toBe(200);
+    expect((await bindingOf("optin")).review).toEqual({ images: true, sidecars: false });
   });
 });

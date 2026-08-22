@@ -33,6 +33,7 @@ import {
   openPullRequest,
   pull,
   push,
+  pushReviewImages,
   putBinding,
   resolveConflict,
   saveScene,
@@ -52,7 +53,20 @@ import {
   onAutoCommit,
   suggestedBranch,
 } from "../portfolio/autoCommit";
+import { base64Of, renderCrop } from "../review/images";
+import {
+  imagePath,
+  labelFor,
+  projectChangelog,
+  pullRequestBody,
+  pushExtrasFor,
+  pushesOf,
+  rememberPush,
+  reviewProject,
+  type PushedReview,
+} from "../review/session";
 import { alertDialog, confirmDialog } from "./dialogs";
+import { ReviewPanel, type ReviewJump } from "./ReviewPanel";
 import { portfolioThumbnail } from "./sceneThumbnails";
 
 /** A brand-new scene is just an empty `.excalidraw` file (D17). */
@@ -110,6 +124,9 @@ const EMPTY_FORM = {
   branch: "",
   apiBase: "",
   token: "",
+  // The opt-in review artifacts (D49): off until asked for.
+  reviewImages: false,
+  reviewSidecars: false,
 };
 
 /**
@@ -239,7 +256,10 @@ function BranchRow({
 
   const propose = () =>
     act(async () => {
-      const pull = await openPullRequest(project);
+      // Prefilled with what this session pushed (D46, D49): the changelog
+      // per push, and the review pictures when the binding asked for them.
+      const body = pullRequestBody(binding, pushesOf(project));
+      const pull = await openPullRequest(project, body ? { body } : {});
       // The system webview can quietly ignore window.open — nothing happens,
       // no error — so the alert is what actually guarantees the user leaves
       // with the URL. It is deliberately not one or the other, and on the
@@ -325,14 +345,19 @@ function BranchRow({
  */
 function SyncRow({
   project,
+  binding,
   sync,
   disabled,
   onChanged,
+  onReview,
 }: {
   project: string;
+  binding: Binding;
   sync: SyncStatus | null;
   disabled: boolean;
   onChanged: () => void;
+  /** Open the Review view (D48) for this project. */
+  onReview: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -389,10 +414,52 @@ function SyncRow({
 
   const doPush = () =>
     act("Push", async () => {
-      const result = await push(project);
+      // The review first (S16): the semantic diff of every changed scene
+      // against its base copy is what the commit message says (D46), and
+      // what the opt-in artifacts are made from (D49).
+      const reviews = await reviewProject(project);
+      const result = await push(project, pushExtrasFor(reviews, binding));
+      const pushed: PushedReview = {
+        commit: result.commit,
+        changelog: projectChangelog(reviews),
+        label: null,
+        pictures: [],
+      };
+      let said = `pushed ${result.commit.slice(0, 7)}`;
+      if (binding.review.images && reviews.some((r) => r.plan.crops.length)) {
+        const label = labelFor(result.commit, new Date());
+        const images: { path: string; base64: string }[] = [];
+        for (const review of reviews) {
+          for (const crop of review.plan.crops) {
+            const pictures = await renderCrop(review, crop);
+            const entry = { scene: review.scene, frameName: crop.frameName, before: null as string | null, after: null as string | null };
+            if (pictures.before) {
+              entry.before = imagePath(review.scene, crop, "before");
+              images.push({ path: entry.before, base64: base64Of(pictures.before) });
+            }
+            if (pictures.after) {
+              entry.after = imagePath(review.scene, crop, "after");
+              images.push({ path: entry.after, base64: base64Of(pictures.after) });
+            }
+            pushed.pictures.push(entry);
+          }
+        }
+        if (images.length) {
+          try {
+            await pushReviewImages(project, label, images);
+            pushed.label = label;
+            said += `, ${images.length} review picture${images.length === 1 ? "" : "s"}`;
+          } catch (err) {
+            // The scenes landed; the pictures are a courtesy. Say so rather
+            // than report the push as failed.
+            said += ` (review pictures not pushed: ${err instanceof Error ? err.message : String(err)})`;
+          }
+        }
+      }
+      rememberPush(project, pushed);
       // The short sha is what a user checks against the repository, and the
       // Open PR button beside it is where the branch goes next.
-      return `pushed ${result.commit.slice(0, 7)}`;
+      return said;
     });
 
   const answer = (scene: string, resolution: "keep-local" | "take-remote") =>
@@ -428,6 +495,13 @@ function SyncRow({
           onClick={doPush}
         >
           Push
+        </button>
+        <button
+          disabled={working || !hasPushable(sync)}
+          title="See every changed frame before and after, with what changed in words"
+          onClick={onReview}
+        >
+          Review changes
         </button>
         {note && <span className="docent-portfolio-sync-note">{note}</span>}
       </div>
@@ -465,10 +539,12 @@ function GitHubPanel({
   project,
   sync,
   onChanged,
+  onReview,
 }: {
   project: string;
   sync: SyncStatus | null;
   onChanged: () => void;
+  onReview: () => void;
 }) {
   const [binding, setBinding] = useState<Binding | null | undefined>(undefined);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -510,6 +586,8 @@ function GitHubPanel({
       branch: binding?.branch ?? "",
       apiBase: binding?.apiBase ?? "",
       token: "",
+      reviewImages: binding?.review.images ?? false,
+      reviewSidecars: binding?.review.sidecars ?? false,
     });
     setOpen(true);
   };
@@ -533,6 +611,7 @@ function GitHubPanel({
           branch: form.branch.trim(),
           apiBase: form.apiBase.trim(),
           token: form.token.trim(),
+          review: { images: form.reviewImages, sidecars: form.reviewSidecars },
         });
         const stored = await getBinding(project);
         setBinding(stored);
@@ -634,9 +713,11 @@ function GitHubPanel({
           />
           <SyncRow
             project={project}
+            binding={binding}
             sync={sync}
             disabled={busy}
             onChanged={onChanged}
+            onReview={onReview}
           />
         </>
       )}
@@ -706,6 +787,29 @@ function GitHubPanel({
                   onChange={(e) => edit({ apiBase: e.target.value })}
                 />
               </label>
+              {/* Review artifacts on GitHub (D49): both off by default, and
+                  neither ever touches the diagram folder on the base branch
+                  except the sidecar a team explicitly asks for. */}
+              <label className="docent-check">
+                <input
+                  type="checkbox"
+                  checked={form.reviewImages}
+                  disabled={busy}
+                  onChange={(e) => edit({ reviewImages: e.target.checked })}
+                />
+                Push review pictures to a <code>docent-review</code> branch and
+                embed them in pull requests (pruned after 90 days, never merged)
+              </label>
+              <label className="docent-check">
+                <input
+                  type="checkbox"
+                  checked={form.reviewSidecars}
+                  disabled={busy}
+                  onChange={(e) => edit({ reviewSidecars: e.target.checked })}
+                />
+                Commit a semantic sidecar (<code>&lt;scene&gt;.docent.json</code>)
+                beside each changed scene
+              </label>
             </div>
           </details>
           <div className="docent-portfolio-new">
@@ -742,6 +846,12 @@ export interface PortfolioModalProps {
   suggestedName: string;
   intent?: PortfolioIntent;
   onClose: () => void;
+  /**
+   * Show a review change in the canvas (D48): open the scene if it is not
+   * the one on screen, fly to the crop, ghost what was removed. Absent when
+   * there is no canvas to fly in.
+   */
+  onShowChange?: (project: string, jump: ReviewJump) => Promise<void>;
 }
 
 const fmtTime = (iso: string | null) =>
@@ -753,8 +863,11 @@ export function PortfolioModal({
   suggestedName,
   intent = "browse",
   onClose,
+  onShowChange,
 }: PortfolioModalProps) {
   const [available, setAvailable] = useState<boolean | null>(null);
+  // The Review view (D48) stands in for the body while it is open.
+  const [reviewing, setReviewing] = useState(false);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [scenes, setScenes] = useState<SceneInfo[]>([]);
@@ -986,7 +1099,22 @@ export function PortfolioModal({
             keep working either way.
           </p>
         )}
-        {available && (
+        {available && reviewing && selected && (
+          <ReviewPanel
+            project={selected}
+            onBack={() => setReviewing(false)}
+            onJump={
+              onShowChange
+                ? (jump) => {
+                    void onShowChange(selected, jump)
+                      .then(onClose)
+                      .catch((err: unknown) => alertDialog(err instanceof Error ? err.message : String(err)));
+                  }
+                : undefined
+            }
+          />
+        )}
+        {available && !reviewing && (
           <div className="docent-portfolio-body">
             <aside className="docent-portfolio-projects">
               <div className="docent-portfolio-list">
@@ -1149,6 +1277,7 @@ export function PortfolioModal({
                     project={selected}
                     sync={sync}
                     onChanged={handleSynced}
+                    onReview={() => setReviewing(true)}
                   />
                 </>
               )}

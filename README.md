@@ -112,6 +112,7 @@ A diagram's *meaning* isn't in its data model — why an arrow is dashed, why a 
 - A bound project is a **local working copy**: scenes open and save at disk speed, offline included, as the same plain `.excalidraw` files. Synchronization is explicit, like code — **pull**, then **push**, which lands every local change as **one commit**. Docent talks to GitHub's HTTP API — **no `git` binary** on any machine, desktop included.
 - When both sides changed a scene, nothing is merged and nothing is overwritten: the scene is listed as a **conflict** with two answers, *Keep mine* and *Take remote*. A push is refused while one is unanswered, and refused if the branch moved while you were drawing — *"the remote branch moved — pull first."*
 - **Branch, then propose.** Pushing to the base branch is **disabled**: cut a branch for a set of changes (Docent offers one the first time you save on the base), let it check point your saves for you, and open a **pull request** back onto the base — diagrams get reviewed the way the code beside them is.
+- **Review what changed, not the JSON.** Every push writes a **semantic changelog** into its commit message — *"Core Services: +Retry queue; −Auth; Catalog: renamed 'Catalog' → 'Catalog v2'"* — and the portfolio's **Review changes** view shows each changed frame **before and after at the same rectangle**, with added/changed outlined and removed ghosted; click a change to fly there with the removed things drawn as ghosts over the live scene. The pull request is prefilled with the changelog. The diagram folder and the base branch carry nothing extra for any of this.
 - Works against **GitHub Enterprise** too: the binding carries its own API base (`https://<host>/api/v3`).
 - Auth is a **fine-grained personal access token** with **Contents: Read and write** on the target repository — nothing else. Tokens are held outside the portfolio and are write-only through the API: no route ever returns one. See [GitHub sync](#github-sync).
 - Connecting **checks what the token can do** and says so: a token with read access but no write access binds as **read-only** — the scenes open, and the project wears a `read-only` tag — instead of failing later with a mystery on the first save.
@@ -479,6 +480,43 @@ hands back the URL — the diagrams then go through exactly the review the code
 in that repository goes through. A project bound before this existed sits on
 its own base until you branch, and behaves as it always did.
 
+**Reviewing a change.** A diagram's JSON diff says nothing a reviewer can use,
+so Docent diffs the **scene graph** instead (S16): components, edges and frames
+by their stable ids, plus the declared meaning on them — labels, legend kind,
+tags, intents, logic, detail links, narratives. The result is a changelog in
+the diagram's own words, and it rides every push — manual or background — as
+the commit message:
+
+```
+docent: update diagrams (1 scene(s))
+
+02 Core Services: +Retry queue; −Auth; Catalog v2: renamed 'Catalog' → 'Catalog v2'
+Layer 1: −edge API Gateway → Auth
+```
+
+In the app, **Review changes** in the Sync row opens the review: for every
+changed frame, a *before* and an *after* crop rendered at the **identical
+rectangle** — added and changed components outlined, removed ones washed out
+and dashed — with that frame's changelog lines beneath. **Show in diagram**
+opens the scene, flies to the change, and draws what was removed as ghosts over
+the live canvas, from the "before" copy. Nothing is written by any of it. The
+"before" copies are what the last pull or push recorded, kept beside the sync
+state at `data/.docent/sync/<project>/base/` — never in the project folder,
+never pushed — so a review needs no network.
+
+**Open PR** prefills the pull request with the changelogs of the pushes made in
+this session. Two further artifacts are **opt-in per binding**, both off by
+default, in the binding form's *Advanced* section:
+
+| Option | What it does | Where it goes |
+|---|---|---|
+| **Review pictures** | A manual Push also renders the before/after crops and commits them under `<date>-<sha>/<scene>/<frame>-{before,after}.png`; the PR body embeds them side by side | An orphan branch, `docent-review` — never merged, pruned to the last 90 days on every push, deletable without touching history |
+| **Semantic sidecars** | Each changed scene's `<scene>.docent.json` (the same export as *Export semantic JSON*) is committed in the same push, and removed with a deleted scene | Beside the scene, on the working branch — the one thing here that does reach the diagram folder, because a team asked for meaning as text in the repo |
+
+The pictures use `…/blob/docent-review/…?raw=true` URLs, which GitHub serves
+through the reader's own session, so they render in private repositories as
+well as public ones.
+
 **Where secrets live.** Binding metadata — owner, repo, path, branch, base
 branch, API base — goes in one dotfile at the data root,
 `data/.docent/bindings.json`, and carries no credentials, so a portfolio stays
@@ -572,7 +610,8 @@ Locked out of scope — see CONSTITUTION.md for rationale:
 9. **Completeness = round-trip comprehension.** "The export carries the diagram's meaning" is defined by a scored question bank in CI (CONSTITUTION.md Q6) — measured, not asserted.
 10. **GitHub sync speaks the API, not the git binary.** Bound projects use GitHub's HTTP endpoints from both stores, so no machine needs `git` installed; commits, history and blob-SHA change detection come for free. Binding metadata is one dotfile in the data tree and carries no secrets — tokens live in deployment config (self-host) or the app's config directory (desktop), and the API never returns them.
 11. **Bound projects are local-first.** A binding does not move a project's scenes onto the network: the folder stays the working copy, so opens and saves never wait on GitHub and work offline. Synchronization is explicit — pull, resolve, push — and file-granular, because a drawing has no meaningful line-merge. Docent never pushes to the base branch; drafts on a branch check point themselves.
-11. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
+12. **Branch-aware sync.** A binding records a base branch beside the active one; scenes are read and written on the active branch, and the same API cuts a branch and opens a pull request back onto the base. Diagram changes get the repository's own review flow instead of landing on `main` unseen.
+13. **Diffs are semantic before they are visual.** A change is described by diffing the scene graph — by stable id, with the declared meaning on every entity — and that changelog rides the commit and the PR. Pictures are rendered for the author in the app at one rectangle, before and after; on GitHub they are opt-in, quarantined on a prunable orphan branch, and never part of the diagram folder.
 
 ---
 

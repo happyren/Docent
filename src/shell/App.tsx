@@ -25,6 +25,7 @@ import { loadScene as loadPortfolioScene, saveScene as savePortfolioScene } from
 import { notePortfolioSave } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
 import { PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
+import type { ReviewJump } from "./ReviewPanel";
 import { LegendEditor } from "./LegendEditor";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
@@ -132,6 +133,8 @@ export function App() {
         : null,
     [canvas, camera, overlayStore],
   );
+  const commandsRef = useRef<CommandAPI | null>(null);
+  commandsRef.current = commands;
 
   // Agent bridge (S8): strictly manual — automatic attempts would log
   // connection errors on every launch without an MCP server. Connect via
@@ -445,6 +448,27 @@ export function App() {
       fitLayerOne();
     },
     [markClean, fitLayerOne, syncSceneUrl],
+  );
+  /**
+   * Show a review change in place (D48): the scene comes up if it is not the
+   * one on screen, the camera flies to the crop, and what was removed is
+   * drawn as ghosts from the base copy — effects only, nothing written (I2).
+   */
+  const showPortfolioChange = useCallback(
+    async (project: string, jump: ReviewJump) => {
+      const source = portfolioSourceRef.current;
+      if (!source || source.project !== project || source.scene !== jump.scene) {
+        await openPortfolioScene(project, jump.scene);
+      }
+      const api = commandsRef.current;
+      if (!api) throw new Error("Canvas not ready");
+      await api.showChange({
+        rect: jump.crop.rect,
+        ghosts: jump.crop.ghosts,
+        outline: jump.crop.marks.filter((m) => m.kind !== "removed").map((m) => m.id),
+      });
+    },
+    [openPortfolioScene],
   );
   const savePortfolioSceneAs = useCallback(
     async (project: string, scene: string) => {
@@ -1026,6 +1050,7 @@ export function App() {
           suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^.*\//, "")}
           intent={portfolioIntent}
           onClose={() => setPortfolioOpen(false)}
+          onShowChange={showPortfolioChange}
         />
       )}
       {legendOpen && canvas && (

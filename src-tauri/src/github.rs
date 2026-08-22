@@ -115,6 +115,26 @@ pub struct Binding {
     /// to what the reference store writes for the same binding.
     #[serde(rename = "canWrite", default, skip_serializing_if = "Option::is_none")]
     pub can_write: Option<bool>,
+    /// The opt-in review artifacts (D49). Stored only when a flag is on, so a
+    /// binding that never asked for artifacts is the same bytes it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<Review>,
+}
+
+/// Which review artifacts a binding asked for (D49): pictures on the
+/// quarantined `docent-review` branch, semantic sidecars beside the scenes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Review {
+    #[serde(default)]
+    pub images: bool,
+    #[serde(default)]
+    pub sidecars: bool,
+}
+
+impl Review {
+    pub fn any(self) -> bool {
+        self.images || self.sidecars
+    }
 }
 
 /// A binding as the API states it — never with the token, in either direction.
@@ -134,6 +154,7 @@ pub struct PublicBinding<'a> {
     has_token: bool,
     #[serde(rename = "canWrite")]
     can_write: Option<bool>,
+    review: Review,
 }
 
 impl Binding {
@@ -147,6 +168,7 @@ impl Binding {
             api_base: &self.api_base,
             has_token,
             can_write: self.can_write,
+            review: self.review.unwrap_or_default(),
         }
     }
 
@@ -371,6 +393,18 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
         .trim_end_matches('/')
         .to_string();
     check_api_base(&api_base)?;
+    let review = match input.get("review") {
+        None => None,
+        Some(value) if value.is_object() => Some(Review {
+            images: value.get("images").and_then(|v| v.as_bool()) == Some(true),
+            sidecars: value.get("sidecars").and_then(|v| v.as_bool()) == Some(true),
+        }),
+        Some(_) => {
+            return Err(Failure::bad(
+                "invalid review — an object with images/sidecars booleans",
+            ))
+        }
+    };
     Ok(Binding {
         owner,
         repo,
@@ -380,6 +414,7 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
         api_base,
         // Never taken from the request body: only a probe may set this.
         can_write: None,
+        review,
     })
 }
 
@@ -1036,6 +1071,255 @@ pub fn update_ref(binding: &Binding, token: &str, commit: &str) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// the review pictures (D49) — the quarantined `docent-review` branch
+// ---------------------------------------------------------------------------
+
+pub const REVIEW_BRANCH: &str = "docent-review";
+const REVIEW_KEEP_DAYS: u64 = 90;
+
+fn valid_review_label(label: &str) -> bool {
+    // `^\d{4}-\d{2}-\d{2}-[A-Za-z0-9._-]{1,40}$`
+    let bytes = label.as_bytes();
+    if bytes.len() < 12 || bytes.len() > 51 {
+        return false;
+    }
+    let stamp_ok = bytes[..10].iter().enumerate().all(|(i, b)| {
+        if i == 4 || i == 7 {
+            *b == b'-'
+        } else {
+            b.is_ascii_digit()
+        }
+    });
+    stamp_ok
+        && bytes[10] == b'-'
+        && bytes[11..]
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+fn valid_review_path(path: &str) -> bool {
+    // `^[A-Za-z0-9][A-Za-z0-9 _./-]{0,200}\.png$` and no `..`
+    let Some(stem) = path.strip_suffix(".png") else {
+        return false;
+    };
+    let mut chars = stem.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && stem.len() <= 201
+        && stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '.' | '/' | '-'))
+        && !path.contains("..")
+}
+
+/// Days since the Unix epoch for a civil date, or None when the date is not
+/// one. Enough to prune by label stamp without pulling in a calendar crate.
+fn days_from_civil(stamp: &str) -> Option<i64> {
+    let mut parts = stamp.split('-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+#[derive(serde::Serialize)]
+pub struct ReviewAnswer {
+    pub ok: bool,
+    pub branch: &'static str,
+    pub label: String,
+    pub commit: String,
+    pub pruned: usize,
+}
+
+/// Before/after crops for one push, committed to the quarantined
+/// `docent-review` branch under `<label>/…` — an orphan branch that is never
+/// merged and is pruned here to the last 90 days by the date its labels
+/// start with. The working branch is never touched. `today_days` is the
+/// caller's clock, in days since the epoch.
+pub fn push_review_images(
+    binding: &Binding,
+    token: &str,
+    body: &str,
+    today_days: i64,
+) -> Result<ReviewAnswer> {
+    let input: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| Failure::bad("body is not JSON"))?;
+    if !input.is_object() {
+        return Err(Failure::bad("body is not review images"));
+    }
+    let label = input
+        .get("label")
+        .and_then(|l| l.as_str())
+        .filter(|l| valid_review_label(l))
+        .ok_or_else(|| Failure::bad("invalid label — YYYY-MM-DD-<id>"))?
+        .to_string();
+    let images = input
+        .get("images")
+        .and_then(|i| i.as_array())
+        .filter(|i| !i.is_empty())
+        .ok_or_else(|| Failure::bad("images must be a non-empty list of {path, base64}"))?;
+    let mut pictures = Vec::with_capacity(images.len());
+    for image in images {
+        let path = image.get("path").and_then(|p| p.as_str());
+        let base64 = image.get("base64").and_then(|b| b.as_str());
+        match (path, base64) {
+            (Some(path), Some(base64)) if valid_review_path(path) => {
+                pictures.push((path.to_string(), base64.to_string()));
+            }
+            _ => {
+                return Err(Failure::bad(
+                    "invalid image — a relative .png path and base64 content",
+                ))
+            }
+        }
+    }
+    let existing = request(
+        token,
+        "GET",
+        &repo_url(binding, &format!("/git/ref/heads/{REVIEW_BRANCH}")),
+        None,
+        None,
+    )?;
+    let mut parent: Option<String> = None;
+    let mut base_tree: Option<String> = None;
+    if existing.status == 200 {
+        parent = parse_json(&existing.text)?
+            .get("object")
+            .and_then(|o| o.get("sha"))
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        if let Some(sha) = &parent {
+            let commit = request(
+                token,
+                "GET",
+                &repo_url(binding, &format!("/git/commits/{}", encode_segment(sha))),
+                None,
+                None,
+            )?;
+            if commit.status == 200 {
+                base_tree = parse_json(&commit.text)?
+                    .get("tree")
+                    .and_then(|t| t.get("sha"))
+                    .and_then(|s| s.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from);
+            }
+        }
+    } else if existing.status != 404 {
+        return Err(failure(existing.status, &existing.text));
+    }
+    let mut entries = Vec::new();
+    for (path, base64) in &pictures {
+        let sha = create_object(
+            binding,
+            token,
+            "/git/blobs",
+            &serde_json::json!({ "content": base64, "encoding": "base64" }),
+        )?;
+        entries.push(serde_json::json!({
+            "path": format!("{label}/{path}"),
+            "mode": "100644",
+            "type": "blob",
+            "sha": sha,
+        }));
+    }
+    let mut pruned = 0;
+    if let Some(tree) = &base_tree {
+        let listed = request(
+            token,
+            "GET",
+            &repo_url(
+                binding,
+                &format!("/git/trees/{}?recursive=1", encode_segment(tree)),
+            ),
+            None,
+            None,
+        )?;
+        if listed.status == 200 {
+            let cutoff = today_days - REVIEW_KEEP_DAYS as i64;
+            for entry in parse_json(&listed.text)?
+                .get("tree")
+                .and_then(|t| t.as_array())
+                .cloned()
+                .unwrap_or_default()
+            {
+                if entry.get("type").and_then(|t| t.as_str()) != Some("blob") {
+                    continue;
+                }
+                let Some(path) = entry.get("path").and_then(|p| p.as_str()) else {
+                    continue;
+                };
+                let stamp = path.get(..10).unwrap_or_default();
+                if days_from_civil(stamp).is_some_and(|when| when < cutoff) {
+                    entries.push(serde_json::json!({
+                        "path": path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": serde_json::Value::Null,
+                    }));
+                    pruned += 1;
+                }
+            }
+        }
+    }
+    let mut tree_payload = serde_json::json!({ "tree": entries });
+    if let Some(base) = &base_tree {
+        tree_payload["base_tree"] = serde_json::Value::String(base.clone());
+    }
+    let tree = create_object(binding, token, "/git/trees", &tree_payload)?;
+    let commit = create_object(
+        binding,
+        token,
+        "/git/commits",
+        &serde_json::json!({
+            "message": format!("docent review {label}"),
+            "tree": tree,
+            "parents": parent.iter().collect::<Vec<_>>(),
+        }),
+    )?;
+    let reply = match &parent {
+        Some(_) => request(
+            token,
+            "PATCH",
+            &repo_url(binding, &format!("/git/refs/heads/{REVIEW_BRANCH}")),
+            Some(serde_json::json!({ "sha": commit, "force": false }).to_string()),
+            None,
+        )?,
+        None => request(
+            token,
+            "POST",
+            &repo_url(binding, "/git/refs"),
+            Some(
+                serde_json::json!({ "ref": format!("refs/heads/{REVIEW_BRANCH}"), "sha": commit })
+                    .to_string(),
+            ),
+            None,
+        )?,
+    };
+    if !reply.is_success() {
+        return Err(write_failure(binding, reply.status, &reply.text));
+    }
+    Ok(ReviewAnswer {
+        ok: true,
+        branch: REVIEW_BRANCH,
+        label,
+        commit,
+        pruned,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // branches and pull requests (D28) — the repository's own review flow
 // ---------------------------------------------------------------------------
 
@@ -1205,6 +1489,7 @@ mod tests {
             base_branch: None,
             api_base: "https://api.github.com".into(),
             can_write: None,
+            review: None,
         }
     }
 

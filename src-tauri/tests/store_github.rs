@@ -231,8 +231,7 @@ impl MockGitHub {
         let sent = self
             .seen()
             .into_iter()
-            .filter(|entry| entry.url.contains(fragment) && entry.method == method)
-            .next_back();
+            .rfind(|entry| entry.url.contains(fragment) && entry.method == method);
         serde_json::from_str(&sent.map(|entry| entry.body).unwrap_or_default())
             .unwrap_or(serde_json::Value::Null)
     }
@@ -580,8 +579,12 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
             );
         }
         repo.branches.insert(name.clone(), sha.clone());
-        if let Some(snapshot) = repo.trees.get(&commit.tree).cloned() {
-            repo.files = snapshot;
+        // One file map stands for the working branch; the quarantined review
+        // branch (D49) keeps its pictures to itself.
+        if name != "docent-review" {
+            if let Some(snapshot) = repo.trees.get(&commit.tree).cloned() {
+                repo.files = snapshot;
+            }
         }
         repo.version += 1;
         return (
@@ -659,6 +662,19 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
         let sha = format!("tree-{}", repo.objects);
         repo.trees.insert(sha.clone(), snapshot);
         return (201, Payload::json(serde_json::json!({ "sha": sha })));
+    }
+    if rest.first() == Some(&"trees") && rest.len() == 2 && method == "GET" {
+        let Some(snapshot) = repo.trees.get(rest[1]) else {
+            return not_found();
+        };
+        let tree: Vec<serde_json::Value> = snapshot
+            .keys()
+            .map(|path| serde_json::json!({ "path": path, "type": "blob", "mode": "100644" }))
+            .collect();
+        return (
+            200,
+            Payload::json(serde_json::json!({ "sha": rest[1], "tree": tree })),
+        );
     }
     if rest.first() == Some(&"commits") && rest.len() == 1 && method == "POST" {
         if repo.read_only {
@@ -913,6 +929,37 @@ impl Fixture {
         post(self.port(), &format!("/api/projects/{project}/push"), None)
     }
 
+    /// A push with a body: the changelog and attachments of D46/D49.
+    fn push_with(&self, project: &str, body: serde_json::Value) -> Res {
+        post(
+            self.port(),
+            &format!("/api/projects/{project}/push"),
+            Some(&body.to_string()),
+        )
+    }
+
+    /// The "before" copy of a scene (D47), as the store answers it.
+    fn base_of(&self, project: &str, scene: &str) -> Res {
+        get(
+            self.port(),
+            &format!("/api/projects/{project}/scenes/{}/base", encode(scene)),
+        )
+    }
+
+    fn review_images(&self, project: &str, body: serde_json::Value) -> Res {
+        post(
+            self.port(),
+            &format!("/api/projects/{project}/review-images"),
+            Some(&body.to_string()),
+        )
+    }
+
+    fn binding_of(&self, project: &str) -> serde_json::Value {
+        let res = get(self.port(), &format!("/api/projects/{project}/binding"));
+        assert_eq!(res.status, 200, "{}", res.body);
+        res.json()
+    }
+
     /// Draft on a branch: the base branch is protected (D33), so every case
     /// that pushes has to be somewhere else first.
     fn draft_on(&self, project: &str, branch: &str) {
@@ -1139,6 +1186,8 @@ fn binds_a_project_and_the_token_never_comes_back_out() {
             "hasToken": true,
             // The bind-time probe found a token that can write, and says so.
             "canWrite": true,
+            // Review artifacts are opt-in (D49) and off until asked for.
+            "review": { "images": false, "sidecars": false },
         })
     );
     // Not merely absent from the typed shape — absent from the bytes.
@@ -1230,6 +1279,7 @@ fn defaults_the_branch_and_the_api_base() {
             "apiBase": "https://api.github.com",
             "hasToken": false,
             "canWrite": serde_json::Value::Null,
+            "review": { "images": false, "sidecars": false },
         })
     );
 }
@@ -3131,4 +3181,200 @@ fn branch_writes_refuse_an_origin_that_is_not_the_app() {
     }
     assert_eq!(fixture.github.requests_to("/git/refs").len(), before);
     assert!(!fixture.github.has_branch("docent/sneaky"));
+}
+
+// ---------------------------------------------------------------------------
+// visual review plumbing (D47, D49)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn keeps_a_base_copy_of_every_synced_scene_beside_the_sync_state_and_never_in_the_project() {
+    let fixture = Fixture::new();
+    fixture.bound_project("review");
+    fixture.github.write("docs/diagrams/plan.excalidraw", SCENE);
+    fixture.pulled("review");
+    // After a pull the base is the remote content…
+    let base = fixture.base_of("review", "plan");
+    assert_eq!(base.status, 200, "{}", base.body);
+    assert_eq!(base.body, SCENE);
+    // …a local edit leaves it alone…
+    let edited = SCENE.replace("[]", r#"[{"id":"z"}]"#);
+    assert_eq!(fixture.put_scene("review", "plan", &edited).status, 200);
+    assert_eq!(fixture.base_of("review", "plan").body, SCENE);
+    // …a push moves it to what landed…
+    fixture.draft_on("review", "docent/review");
+    let pushed = fixture.push("review");
+    assert_eq!(pushed.status, 200, "{}", pushed.body);
+    assert_eq!(fixture.base_of("review", "plan").body, edited);
+    // …a delete-and-push removes it, and a scene never synced has none.
+    assert_eq!(fixture.delete_scene("review", "plan").status, 200);
+    assert_eq!(fixture.push("review").status, 200);
+    assert_eq!(fixture.base_of("review", "plan").status, 404);
+    assert_eq!(fixture.put_scene("review", "fresh", SCENE).status, 200);
+    assert_eq!(fixture.base_of("review", "fresh").status, 404);
+    // The project directory holds scenes only; the copies live under .docent.
+    let project_files: Vec<String> = walk(&fixture.data_dir().join("review"))
+        .iter()
+        .map(|file| {
+            file.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert!(project_files
+        .iter()
+        .all(|name| name.ends_with(".excalidraw")));
+    assert!(!project_files.iter().any(|name| name == "plan.excalidraw"));
+    let base_dir = fixture
+        .data_dir()
+        .join(".docent")
+        .join("sync")
+        .join("review")
+        .join("base");
+    assert!(base_dir.join("fresh.excalidraw").exists().eq(&false));
+    assert!(base_dir.join("plan.excalidraw").exists().eq(&false));
+}
+
+#[test]
+fn a_push_carries_its_changelog_into_the_commit_and_attachments_into_the_tree() {
+    let fixture = Fixture::new();
+    fixture.bound_project("changelog");
+    assert_eq!(fixture.put_scene("changelog", "flow", SCENE).status, 200);
+    fixture.draft_on("changelog", "docent/changelog");
+    let res = fixture.push_with(
+        "changelog",
+        serde_json::json!({
+            "message": "Core Services: +Retry queue",
+            "attachments": [{ "path": "flow.docent.json", "content": "{\"nodes\":[]}" }],
+        }),
+    );
+    assert_eq!(res.status, 200, "{}", res.body);
+    let last = fixture.github.body_of("/git/commits", "POST");
+    let message = last["message"].as_str().unwrap_or_default();
+    assert!(message.contains("docent: update changelog"), "{message}");
+    assert!(message.contains("Core Services: +Retry queue"), "{message}");
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/flow.docent.json")
+            .as_deref(),
+        Some("{\"nodes\":[]}")
+    );
+    // A null attachment removes the file from the same commit.
+    assert_eq!(
+        fixture
+            .put_scene("changelog", "flow", &SCENE.replace("[]", r#"[{"id":"q"}]"#))
+            .status,
+        200
+    );
+    let removed = fixture.push_with(
+        "changelog",
+        serde_json::json!({ "attachments": [{ "path": "flow.docent.json", "content": null }] }),
+    );
+    assert_eq!(removed.status, 200, "{}", removed.body);
+    assert!(fixture
+        .github
+        .file("docs/diagrams/flow.docent.json")
+        .is_none());
+    // Traversal and scene impersonation are refused outright.
+    assert_eq!(
+        fixture
+            .push_with(
+                "changelog",
+                serde_json::json!({ "attachments": [{ "path": "../x.json", "content": "" }] })
+            )
+            .status,
+        400
+    );
+    assert_eq!(
+        fixture
+            .push_with(
+                "changelog",
+                serde_json::json!({ "attachments": [{ "path": "flow.excalidraw", "content": "" }] })
+            )
+            .status,
+        400
+    );
+}
+
+#[test]
+fn review_images_land_on_the_quarantined_branch_never_the_working_one() {
+    let fixture = Fixture::new();
+    fixture.bound_project("pictures");
+    assert_eq!(fixture.put_scene("pictures", "scene", SCENE).status, 200);
+    fixture.draft_on("pictures", "docent/pictures");
+    assert_eq!(fixture.push("pictures").status, 200);
+    let working_head = fixture.github.branch_head("docent/pictures");
+    let first = fixture.review_images(
+        "pictures",
+        serde_json::json!({
+            "label": "2026-08-22-abc1234",
+            "images": [{ "path": "scene/Core-before.png", "base64": base64_encode(b"png-1") }],
+        }),
+    );
+    assert_eq!(first.status, 200, "{}", first.body);
+    assert!(fixture.github.has_branch("docent-review"));
+    // The working branch did not move; the picture is in the review tree.
+    assert_eq!(fixture.github.branch_head("docent/pictures"), working_head);
+    let tree = fixture.github.body_of("/git/trees", "POST");
+    let paths: Vec<&str> = tree["tree"]
+        .as_array()
+        .expect("entries")
+        .iter()
+        .map(|entry| entry["path"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(paths, vec!["2026-08-22-abc1234/scene/Core-before.png"]);
+    assert!(fixture
+        .github
+        .file("docs/diagrams/scene/Core-before.png")
+        .is_none());
+    // A second push descends from the first and prunes labels older than 90 days.
+    let second = fixture.review_images(
+        "pictures",
+        serde_json::json!({
+            "label": "2026-08-23-def5678",
+            "images": [{ "path": "scene/Core-after.png", "base64": base64_encode(b"png-2") }],
+        }),
+    );
+    assert_eq!(second.status, 200, "{}", second.body);
+    assert_eq!(second.json()["pruned"], 0);
+    // Malformed labels and paths are refused.
+    let bad = fixture.review_images(
+        "pictures",
+        serde_json::json!({ "label": "nope", "images": [{ "path": "x.png", "base64": "" }] }),
+    );
+    assert_eq!(bad.status, 400);
+}
+
+#[test]
+fn review_artifacts_are_opt_in_per_binding_and_remembered() {
+    let fixture = Fixture::new();
+    fixture.bound_project("optin");
+    assert_eq!(
+        fixture.binding_of("optin")["review"],
+        serde_json::json!({ "images": false, "sidecars": false })
+    );
+    let on = fixture.bind(
+        "optin",
+        serde_json::json!({ "path": "docs/optin", "review": { "images": true, "sidecars": false } }),
+    );
+    assert_eq!(on.status, 200, "{}", on.body);
+    assert_eq!(
+        fixture.binding_of("optin")["review"],
+        serde_json::json!({ "images": true, "sidecars": false })
+    );
+    // A later PUT that does not mention review keeps it.
+    let again = fixture.bind("optin", serde_json::json!({ "path": "docs/optin" }));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert_eq!(
+        fixture.binding_of("optin")["review"],
+        serde_json::json!({ "images": true, "sidecars": false })
+    );
+    // On disk the flag is written only when on — the dotfile for a binding
+    // that never asked is the bytes it always was.
+    assert_eq!(
+        fixture.bindings()["optin"]["review"],
+        serde_json::json!({ "images": true, "sidecars": false })
+    );
 }

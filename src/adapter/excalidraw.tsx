@@ -266,6 +266,130 @@ export async function renderSceneThumbnail(
   return canvas.toDataURL("image/png");
 }
 
+/** A rectangle in scene coordinates — the review's unit of cropping (D48). */
+export interface CropRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** A rectangle to outline on a crop: added/changed on the after, removed on the before. */
+export interface CropMark {
+  rect: CropRect;
+  kind: "added" | "changed" | "removed";
+}
+
+const MARK_COLORS: Record<CropMark["kind"], string> = {
+  added: "#2f9e44",
+  changed: "#7048e8",
+  removed: "#e03131",
+};
+
+/**
+ * Rasterize one rectangle of a serialized scene (D48): the same `rect`
+ * on the before and the after yields two pictures a reviewer can compare
+ * at a glance. Goes through Excalidraw's own frame export — a synthetic
+ * frame at the rectangle crops exactly there, with every element that
+ * overlaps it — so the pictures are the scene at full fidelity, not a
+ * re-drawing. `frameId` is the scene frame being reviewed, when there is
+ * one: elements inside it are the ones the crop keeps (Excalidraw drops
+ * other frames' children from a frame export). Marks are drawn after the
+ * export, on the raster, so the scene itself is never touched (I2).
+ * Deterministic (I3): same scene, rect, marks and scale → same bytes.
+ */
+export async function renderSceneCrop(
+  sceneJSON: string,
+  rect: CropRect,
+  frameId: string | null,
+  marks: readonly CropMark[],
+  options: { scale?: number; ghost?: boolean } = {},
+): Promise<string> {
+  const parsed = JSON.parse(sceneJSON) as {
+    elements?: unknown;
+    appState?: { viewBackgroundColor?: unknown };
+    files?: unknown;
+  };
+  const background =
+    typeof parsed.appState?.viewBackgroundColor === "string"
+      ? parsed.appState.viewBackgroundColor
+      : "#ffffff";
+  const scale = options.scale ?? Math.min(2, Math.max(0.5, 1200 / Math.max(rect.width, rect.height)));
+  const restored = restoreElements(
+    (Array.isArray(parsed.elements) ? parsed.elements : []) as never,
+    null,
+  ).filter((el) => !el.isDeleted);
+  // The crop frame: Excalidraw keeps an element in a frame export when it
+  // overlaps the frame and is either unframed or that very frame's child,
+  // so the synthetic frame borrows the reviewed frame's id.
+  const [cropFrame] = restoreElements(
+    [
+      {
+        type: "frame",
+        id: frameId ?? "docent-review-crop",
+        x: rect.x,
+        y: rect.y,
+        width: Math.max(1, rect.width),
+        height: Math.max(1, rect.height),
+        name: "",
+      },
+    ] as never,
+    null,
+  );
+  // A Layer-1 crop (no frame) is the space *between* frames — the arrows
+  // that cross them and the components they join. Excalidraw would drop
+  // every framed element from a frame export, so for that crop the
+  // elements are rendered unframed: same drawing, no frame membership.
+  const elements = restored
+    .filter((el) => el.id !== cropFrame.id)
+    .map((el) => (frameId === null && el.frameId ? { ...el, frameId: null } : el));
+  const canvas = await exportToCanvas({
+    elements,
+    appState: { viewBackgroundColor: background, exportBackground: true },
+    files: (parsed.files ?? null) as never,
+    exportingFrame: cropFrame as never,
+    getDimensions: (width: number, height: number) => ({
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale)),
+      scale,
+    }),
+  });
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    // The renderer leaves its own scale/translate on the context; the
+    // marks are placed in canvas pixels, so start from identity.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const toCanvas = (r: CropRect) => ({
+      x: (r.x - rect.x) * scale,
+      y: (r.y - rect.y) * scale,
+      width: r.width * scale,
+      height: r.height * scale,
+    });
+    for (const mark of marks) {
+      const box = toCanvas(mark.rect);
+      const pad = 6 * scale;
+      ctx.save();
+      ctx.lineWidth = Math.max(2, 2.5 * scale);
+      ctx.strokeStyle = MARK_COLORS[mark.kind];
+      if (mark.kind === "removed") {
+        ctx.setLineDash([8 * scale, 6 * scale]);
+        // Ghosting: wash the removed thing out so the eye reads "gone".
+        ctx.fillStyle = "rgba(255, 255, 255, 0.55)";
+        ctx.fillRect(box.x - pad, box.y - pad, box.width + pad * 2, box.height + pad * 2);
+      }
+      ctx.strokeRect(box.x - pad, box.y - pad, box.width + pad * 2, box.height + pad * 2);
+      ctx.restore();
+    }
+    if (options.ghost) {
+      ctx.save();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    }
+  }
+  return canvas.toDataURL("image/png");
+}
+
 export interface SceneMenuActions {
   onOpen: () => void;
   onSave: () => void;

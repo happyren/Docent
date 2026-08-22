@@ -109,6 +109,37 @@ fn write_state(data_dir: &Path, project: &str, scenes: &BTreeMap<String, SceneBa
 
 pub fn remove_state(data_dir: &Path, project: &str) {
     let _ = fs::remove_file(sync_file(data_dir, project));
+    let _ = fs::remove_dir_all(data_dir.join(".docent").join("sync").join(project));
+}
+
+/// The "before" copies (D47): the content the recorded base sha points at,
+/// kept beside the sync state so a review never needs the network. Under
+/// the data root's `.docent/` exception — never inside the project directory,
+/// never pushed.
+fn base_dir(data_dir: &Path, project: &str) -> PathBuf {
+    data_dir
+        .join(".docent")
+        .join("sync")
+        .join(project)
+        .join("base")
+}
+
+fn base_file(data_dir: &Path, project: &str, scene: &str) -> PathBuf {
+    base_dir(data_dir, project).join(format!("{scene}{EXT}"))
+}
+
+fn write_base(data_dir: &Path, project: &str, scene: &str, text: &str) -> Result<()> {
+    fs::create_dir_all(base_dir(data_dir, project)).map_err(internal)?;
+    fs::write(base_file(data_dir, project, scene), text).map_err(internal)
+}
+
+fn remove_base(data_dir: &Path, project: &str, scene: &str) {
+    let _ = fs::remove_file(base_file(data_dir, project, scene));
+}
+
+/// The base copy of a scene, or None when nothing has been synced for it.
+pub fn read_base(data_dir: &Path, project: &str, scene: &str) -> Option<String> {
+    fs::read_to_string(base_file(data_dir, project, scene)).ok()
 }
 
 fn internal(err: std::io::Error) -> Failure {
@@ -289,12 +320,14 @@ pub fn pull(
             match remote_sha {
                 None => {
                     let _ = fs::remove_file(scene_file(data_dir, project, &name));
+                    remove_base(data_dir, project, &name);
                     bases.remove(&name);
                     answer.removed.push(name);
                 }
                 Some(sha) => {
                     let text = github::blob(binding, token, sha)?;
                     write_working_file(data_dir, project, &name, &text)?;
+                    write_base(data_dir, project, &name, &text)?;
                     bases.insert(
                         name.clone(),
                         SceneBase {
@@ -311,6 +344,7 @@ pub fn pull(
         if state == "deleted" && remote_sha.is_none() {
             // Both sides deleted it: there is nothing to reconcile and nothing
             // to ask about — the copy and the branch already agree.
+            remove_base(data_dir, project, &name);
             bases.remove(&name);
             answer.removed.push(name);
             continue;
@@ -323,6 +357,7 @@ pub fn pull(
                 // a conflict.
                 let text = github::blob(binding, token, sha)?;
                 if sha256(&text) == *hash {
+                    write_base(data_dir, project, &name, &text)?;
                     bases.insert(
                         name.clone(),
                         SceneBase {
@@ -411,6 +446,15 @@ pub fn resolve(
     };
     let conflict = base.conflict_sha.clone().unwrap_or_default();
     if resolution == "keep-local" {
+        // The recorded base becomes the remote's version, so the "before"
+        // copy follows it: a review after this shows the local work against
+        // what the push will overwrite.
+        if conflict.is_empty() {
+            remove_base(data_dir, project, &scene);
+        } else {
+            let text = github::blob(binding, token, &conflict)?;
+            write_base(data_dir, project, &scene, &text)?;
+        }
         bases.insert(
             scene.clone(),
             SceneBase {
@@ -423,10 +467,12 @@ pub fn resolve(
         // The remote deleted it and the author accepts that, so the local file
         // goes too and the scene stops being tracked.
         let _ = fs::remove_file(scene_file(data_dir, project, &scene));
+        remove_base(data_dir, project, &scene);
         bases.remove(&scene);
     } else {
         let text = github::blob(binding, token, &conflict)?;
         write_working_file(data_dir, project, &scene, &text)?;
+        write_base(data_dir, project, &scene, &text)?;
         bases.insert(
             scene.clone(),
             SceneBase {
@@ -468,12 +514,78 @@ fn repo_file(binding: &Binding, scene: &str) -> String {
 /// commit rather than one per scene because a drawing session is one change to
 /// a reader of the repository's history, and because a half-applied push is not
 /// a state anyone should have to reason about.
+/// What a push may carry beside the scenes (D46, D49): a changelog for the
+/// commit message and attachments written into the same commit at paths
+/// relative to the bound path — `None` content meaning "remove".
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PushExtras {
+    pub message: String,
+    pub attachments: Vec<(String, Option<String>)>,
+}
+
+fn attachment_name_ok(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && name.len() <= 121
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '.' | '-'))
+        && !name.ends_with(EXT)
+}
+
+/// Parse the optional push body — the reference store's exact rules.
+pub fn parse_push_body(body: &str) -> Result<PushExtras> {
+    if body.trim().is_empty() {
+        return Ok(PushExtras::default());
+    }
+    let input: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| Failure::new(400, "body is not JSON"))?;
+    if !input.is_object() {
+        return Err(Failure::new(400, "body is not a push"));
+    }
+    let message = input
+        .get("message")
+        .and_then(|m| m.as_str())
+        .map(|m| m.trim().chars().take(4000).collect::<String>())
+        .unwrap_or_default();
+    let mut attachments = Vec::new();
+    if let Some(list) = input.get("attachments") {
+        let Some(items) = list.as_array() else {
+            return Err(Failure::new(400, "attachments must be a list"));
+        };
+        for item in items {
+            let path = item.get("path").and_then(|p| p.as_str());
+            let content = item.get("content");
+            let valid = path.is_some_and(attachment_name_ok)
+                && content.is_some_and(|c| c.is_null() || c.is_string());
+            if !valid {
+                return Err(Failure::new(
+                    400,
+                    "invalid attachment — a flat file name and string or null content",
+                ));
+            }
+            attachments.push((
+                path.unwrap_or_default().to_string(),
+                content.and_then(|c| c.as_str()).map(String::from),
+            ));
+        }
+    }
+    Ok(PushExtras {
+        message,
+        attachments,
+    })
+}
+
 pub fn push(
     data_dir: &Path,
     project: &str,
     binding: &Binding,
     token: &str,
     cache: &Cache,
+    extras: &PushExtras,
 ) -> Result<PushAnswer> {
     // The trunk is protected (D33): through Docent the base branch only ever
     // changes by a pull request someone merged. Checked before anything else,
@@ -529,7 +641,7 @@ pub fn push(
     for name in &changed {
         let text = fs::read_to_string(scene_file(data_dir, project, name)).map_err(internal)?;
         let sha = github::create_blob(binding, token, &text)?;
-        written.push((name.clone(), sha.clone(), sha256(&text)));
+        written.push((name.clone(), sha.clone(), sha256(&text), text.clone()));
         entries.push(serde_json::json!({
             "path": repo_file(binding, name),
             "mode": "100644",
@@ -547,6 +659,23 @@ pub fn push(
             "sha": serde_json::Value::Null,
         }));
     }
+    for (name, content) in &extras.attachments {
+        let path = if binding.path.is_empty() {
+            name.clone()
+        } else {
+            format!("{}/{name}", binding.path)
+        };
+        let sha = match content {
+            None => serde_json::Value::Null,
+            Some(text) => serde_json::Value::String(github::create_blob(binding, token, text)?),
+        };
+        entries.push(serde_json::json!({
+            "path": path,
+            "mode": "100644",
+            "type": "blob",
+            "sha": sha,
+        }));
+    }
     let tree = github::create_object(
         binding,
         token,
@@ -559,14 +688,19 @@ pub fn push(
         token,
         "/git/commits",
         &serde_json::json!({
-            "message": format!("docent: update {project} ({total} scene(s))"),
+            "message": if extras.message.is_empty() {
+                format!("docent: update {project} ({total} scene(s))")
+            } else {
+                format!("docent: update {project} ({total} scene(s))\n\n{}", extras.message)
+            },
             "tree": tree,
             "parents": [head.commit],
         }),
     )?;
     github::update_ref(binding, token, &commit)?;
 
-    for (name, sha, hash) in written {
+    for (name, sha, hash, text) in written {
+        write_base(data_dir, project, &name, &text)?;
         bases.insert(
             name,
             SceneBase {
@@ -577,6 +711,7 @@ pub fn push(
         );
     }
     for name in &deleted {
+        remove_base(data_dir, project, name);
         bases.remove(name);
     }
     write_state(data_dir, project, &bases)?;
