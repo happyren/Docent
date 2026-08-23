@@ -13,7 +13,7 @@ import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
 import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
-import { absolutePoints, passesThrough, routeEdge, type Point } from "./route";
+import { absolutePoints, assignPorts, dropCollinear, nudgeRoutes, passesThrough, polylineThroughBox, ROUTE_PAD, routeEdge, softenCorners, type Point } from "./route";
 import { DEFAULT_STYLE, freshFill, houseStyle, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
@@ -692,13 +692,17 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     write.frames.push({ id: frame.id, name: frame.name, x: frame.x, y: frame.y, width: frame.width, height: frame.height, meaning: frame.meaning });
   }
 
-  // Every edge the batch draws or moves is routed around what lies between
-  // its ends (D72): the final boxes of every component, and the legend.
+  // Every edge the batch draws or moves leaves and enters at a port spread
+  // along the side it uses (D75) and is routed around what lies between its
+  // ends (D72) — over the final boxes of every component, and the legend.
+  // Then the segments that would run along one line are nudged apart and
+  // every corner is softened, each step given up when it would put the edge
+  // through something: D72's guarantee stands beneath D75.
   // A component that was resized moved as far as its edges are concerned (D74).
   const moved = new Set(
     write.patches.filter((p) => p.x !== undefined || p.y !== undefined || p.width !== undefined || p.height !== undefined).map((p) => p.id),
   );
-  const finalBoxes = new Map<string, Box & { id: string }>();
+  const finalBoxes = new Map<string, Box & { id: string; shape?: string }>();
   for (const n of graph.nodes) {
     if (removed.has(n.sourceId)) continue;
     const patch = write.patches.find((p) => p.id === n.sourceId);
@@ -708,35 +712,73 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       y: patch?.y ?? n.bounds.y,
       width: patch?.width ?? n.bounds.width,
       height: patch?.height ?? n.bounds.height,
+      shape: n.shape,
     });
   }
-  for (const [id, c] of created) if (c.type !== "arrow") finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height });
+  for (const [id, c] of created) if (c.type !== "arrow") finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height, shape: c.type });
   if (legendArea) finalBoxes.set("__legend", { id: "__legend", ...legendArea });
   const obstacles = [...finalBoxes.values()];
-  const routeBetween = (from: string, to: string): Point[] | null => {
-    const a = finalBoxes.get(from);
-    const b = finalBoxes.get(to);
-    if (!a || !b) return null;
-    return routeEdge(a, b, obstacles.filter((o) => o.id !== from && o.id !== to));
-  };
-  let routed = 0;
+  const around = (from: string, to: string) => obstacles.filter((o) => o.id !== from && o.id !== to);
+  // The edges this write is responsible for: the ones it draws, and the
+  // existing ones whose ends it moves. Untouched edges keep what they have.
+  const jobs: { id: string; from: string; to: string; arrow?: WriteArrow }[] = [];
   for (const arrow of write.arrows) {
-    const via = routeBetween(arrow.from, arrow.to);
-    if (via) {
-      arrow.via = via;
-      routed += 1;
-    }
+    if (finalBoxes.has(arrow.from) && finalBoxes.has(arrow.to)) jobs.push({ id: arrow.id, from: arrow.from, to: arrow.to, arrow });
   }
   for (const e of graph.edges) {
     if (!e.from || !e.to || removed.has(e.sourceId)) continue;
     const from = graph.nodes.find((n) => n.id === e.from)?.sourceId;
     const to = graph.nodes.find((n) => n.id === e.to)?.sourceId;
     if (!from || !to || (!moved.has(from) && !moved.has(to))) continue;
-    const via = routeBetween(from, to);
-    const patch = write.patches.find((p) => p.id === e.sourceId);
-    if (patch) patch.via = via ?? [];
-    else write.patches.push({ id: e.sourceId, via: via ?? [] });
-    if (!touched.includes(e.sourceId)) touched.push(e.sourceId);
+    if (!finalBoxes.has(from) || !finalBoxes.has(to)) continue;
+    jobs.push({ id: e.sourceId, from, to });
+  }
+  const ports = assignPorts(jobs, finalBoxes);
+  // The whole drawn polyline of each routed edge — port, turns, port.
+  const lines = new Map<string, Point[]>();
+  const endsOf = new Map<string, { start: Point; end: Point }>();
+  const aligned = (p: Point, q: Point) => Math.abs(p[0] - q[0]) < 1e-6 || Math.abs(p[1] - q[1]) < 1e-6;
+  for (const job of jobs) {
+    const a = finalBoxes.get(job.from)!;
+    const b = finalBoxes.get(job.to)!;
+    const port = ports.get(job.id);
+    const turns = routeEdge(a, b, around(job.from, job.to), ROUTE_PAD, port);
+    // An edge whose route could not leave from its port — the router fell
+    // back to a side's middle to get through at all — keeps D72's line to
+    // the centres: the guarantee outranks the port.
+    const ported = !!port && (!turns || (aligned(port.start.at, turns[0]) && aligned(port.end.at, turns[turns.length - 1])));
+    if (ported) endsOf.set(job.id, { start: port!.start.at, end: port!.end.at });
+    if (turns) {
+      const head: Point = ported ? port!.start.at : [a.x + a.width / 2, a.y + a.height / 2];
+      const tail: Point = ported ? port!.end.at : [b.x + b.width / 2, b.y + b.height / 2];
+      lines.set(job.id, [head, ...turns, tail]);
+    }
+  }
+  const jobOf = new Map(jobs.map((j) => [j.id, j]));
+  for (const [id, points] of nudgeRoutes([...lines].map(([id, points]) => ({ id, points, obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to) })))) {
+    lines.set(id, points);
+  }
+  for (const [id, points] of lines) {
+    const soft = dropCollinear(softenCorners(points));
+    const blocked = around(jobOf.get(id)!.from, jobOf.get(id)!.to).some((o) => polylineThroughBox(soft, o, 2));
+    lines.set(id, blocked ? points : soft);
+  }
+  let routed = 0;
+  for (const job of jobs) {
+    const ends = endsOf.get(job.id);
+    const line = lines.get(job.id);
+    const via = line ? line.slice(1, -1) : null;
+    if (job.arrow) {
+      if (ends) job.arrow.ends = ends;
+      if (via) job.arrow.via = via;
+    } else {
+      const patch = write.patches.find((p) => p.id === job.id);
+      if (patch) {
+        patch.via = via ?? [];
+        if (ends) patch.ends = ends;
+      } else write.patches.push({ id: job.id, via: via ?? [], ...(ends ? { ends } : {}) });
+      if (!touched.includes(job.id)) touched.push(job.id);
+    }
     if (via) routed += 1;
   }
   if (routed) notes.push(`${routed} edge${routed === 1 ? "" : "s"} routed around components`);
@@ -866,10 +908,11 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
   for (const arrow of write.arrows ?? []) {
     const a = byId.get(arrow.from);
     const b = byId.get(arrow.to);
-    const ax = a ? a.x + a.width / 2 : 0;
-    const ay = a ? a.y + a.height / 2 : 0;
-    const bx = b ? b.x + b.width / 2 : 0;
-    const by = b ? b.y + b.height / 2 : 0;
+    // The ports the write chose (D75), or the centres when it chose none.
+    const ax = arrow.ends ? arrow.ends.start[0] : a ? a.x + a.width / 2 : 0;
+    const ay = arrow.ends ? arrow.ends.start[1] : a ? a.y + a.height / 2 : 0;
+    const bx = arrow.ends ? arrow.ends.end[0] : b ? b.x + b.width / 2 : 0;
+    const by = arrow.ends ? arrow.ends.end[1] : b ? b.y + b.height / 2 : 0;
     const el = blank(arrow.id, "arrow", { x: ax, y: ay, width: Math.abs(bx - ax), height: Math.abs(by - ay) }, arrow.style, arrow.frameId);
     el.points = [[0, 0], ...(arrow.via ?? []).map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
     el.startBindingId = arrow.from;
@@ -894,10 +937,10 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     const a = byId.get(el.startBindingId);
     const b = byId.get(el.endBindingId);
     if (!a || !b) continue;
-    const ax = a.x + a.width / 2;
-    const ay = a.y + a.height / 2;
-    const bx = b.x + b.width / 2;
-    const by = b.y + b.height / 2;
+    const ax = patch.ends ? patch.ends.start[0] : a.x + a.width / 2;
+    const ay = patch.ends ? patch.ends.start[1] : a.y + a.height / 2;
+    const bx = patch.ends ? patch.ends.end[0] : b.x + b.width / 2;
+    const by = patch.ends ? patch.ends.end[1] : b.y + b.height / 2;
     el.x = ax;
     el.y = ay;
     el.points = [[0, 0], ...patch.via.map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
