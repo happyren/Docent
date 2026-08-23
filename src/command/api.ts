@@ -44,7 +44,7 @@ export interface SceneReader {
  * orange frame and the panel line (D61).
  */
 export interface SceneWriter {
-  applyWrite(write: SceneWrite): void;
+  applyWrite(write: SceneWrite): void | Promise<void>;
   captureScene(): unknown;
   restoreScene(captured: unknown): void;
   canEdit(): boolean;
@@ -232,7 +232,7 @@ export class CommandAPI {
     const captured = writer.captureScene();
     this.setWorking(true);
     try {
-      writer.applyWrite(planned.write);
+      await writer.applyWrite(planned.write);
     } catch (err) {
       this.setWorking(false);
       throw err;

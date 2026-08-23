@@ -151,7 +151,7 @@ export function LegendEditor({
   };
 
   const save = () => {
-    canvas.setLegend(
+    void canvas.setLegend(
       rules.filter((r) => r.value.trim() !== "" && r.key.trim() !== ""),
     );
     onClose();

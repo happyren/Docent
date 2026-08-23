@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef } from "react";
 import {
   CaptureUpdateAction,
   Excalidraw,
+  FONT_FAMILY,
   MainMenu,
   convertToExcalidrawElements,
   elementsOverlappingBBox,
@@ -27,7 +28,7 @@ import type {
   ExcalidrawImperativeAPI,
   LibraryItems_anyVersion,
 } from "@excalidraw/excalidraw/types";
-import type { ExcalidrawElement } from "@excalidraw/excalidraw/element/types";
+import type { ExcalidrawElement, ExcalidrawTextElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
 import type { LegendRule, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
@@ -328,7 +329,7 @@ export interface DocentCanvasHandle {
    * human-readable text, machine-readable `customData.docent.legend` — so
    * the legend travels inside the `.excalidraw` file (D9, B6).
    */
-  setLegend(rules: LegendRule[]): void;
+  setLegend(rules: LegendRule[]): Promise<void>;
 
   /**
    * Apply one write to the scene as one undo step (S19, D61). Shapes get
@@ -336,7 +337,7 @@ export interface DocentCanvasHandle {
    * what lies inside them, and patches touch exactly the fields named.
    * Unknown ids throw before anything changes.
    */
-  applyWrite(write: SceneWrite): void;
+  applyWrite(write: SceneWrite): Promise<void>;
   /** The scene as it is, opaque — what `restoreScene` puts back (D61 Undo). */
   captureScene(): unknown;
   /** Put a captured scene back, as one undo step of its own. */
@@ -615,6 +616,102 @@ function stringField(v: unknown): string | null {
  * what keeps them out of the graph. Returns the element list with the old
  * legend deleted and the new one appended, ready for one updateScene.
  */
+// ---------------------------------------------------------------------------
+// fonts — a text is measured in the font it will be drawn in
+// ---------------------------------------------------------------------------
+//
+// Excalidraw registers its font faces with `document.fonts` when a scene
+// first loads but fetches each family's subsets only for the characters
+// the scene already holds, and when a face arrives later it clears its
+// caches without re-measuring any text. A text created while its font was
+// not loaded keeps the fallback font's width for good and is clipped once
+// the real one draws. So: the font is loaded for what is about to be
+// written before it is measured, the Latin subsets are asked for at mount,
+// and the legend's labels — the one text Docent measures itself — are
+// re-measured whenever a font finishes loading.
+
+const FAMILY_NAMES: Record<number, string> = Object.fromEntries(
+  Object.entries(FONT_FAMILY).map(([name, id]) => [id as number, name]),
+);
+const LATIN_SAMPLE =
+  " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~" +
+  "àáâãäåæçèéêëìíîïñòóôõöøùúûüýÿÀÉÈÊÖÜß–—…‘’“”€£";
+
+const fontFamilyString = (fontFamily: number) => `${FAMILY_NAMES[fontFamily] ?? "Excalifont"}, Segoe UI Emoji`;
+
+/** Load the font faces the given texts need; never throws, never waits past a few seconds. */
+async function loadFontsFor(texts: { fontFamily: number; text: string }[]): Promise<void> {
+  if (typeof document === "undefined" || !("fonts" in document)) return;
+  const byFamily = new Map<number, Set<string>>();
+  for (const { fontFamily, text } of texts) {
+    const chars = byFamily.get(fontFamily) ?? new Set<string>();
+    for (const ch of text) chars.add(ch);
+    byFamily.set(fontFamily, chars);
+  }
+  const loads = [...byFamily].map(([family, chars]) =>
+    document.fonts.load(`16px ${fontFamilyString(family)}`, [...chars].join("")).catch(() => []),
+  );
+  await Promise.race([Promise.all(loads), new Promise((resolve) => setTimeout(resolve, 3000))]);
+}
+
+/** Excalidraw's measure of a single-line text, in the font it is drawn in. */
+function measureLine(text: string, fontSize: number, fontFamily: number): { width: number; height: number } | null {
+  if (typeof document === "undefined") return null;
+  const context = document.createElement("canvas").getContext("2d");
+  if (!context) return null;
+  context.font = `${fontSize}px ${fontFamilyString(fontFamily)}`;
+  const width = context.measureText(text).width;
+  // Excalifont's line height; what the converter uses for these labels.
+  return { width, height: fontSize * 1.25 };
+}
+
+/**
+ * Re-measure the legend's title and labels in the font that is now loaded
+ * (they are the one text Docent lays out itself); patch those a loaded
+ * font has changed. Not an undo step: nothing the person did.
+ */
+function repairLegendLabels(api: ExcalidrawImperativeAPI): void {
+  const all = api.getSceneElementsIncludingDeleted();
+  let changed = false;
+  const next = all.map((el) => {
+    if (el.isDeleted || el.type !== "text") return el;
+    const data = docentDataOf(el) as { legendSample?: unknown; legend?: unknown };
+    if (data.legendSample !== true && parseLegendRules(data.legend) === null) return el;
+    const text = el as ExcalidrawTextElement;
+    if (text.text.includes("\n")) return el;
+    const measured = measureLine(text.text, text.fontSize, text.fontFamily);
+    if (!measured || Math.abs(measured.width - text.width) < 1) return el;
+    changed = true;
+    return newElementWith(text, { width: measured.width, height: measured.height });
+  });
+  if (changed) api.updateScene({ elements: next, captureUpdate: CaptureUpdateAction.NEVER });
+}
+
+/** Ask for the Latin subsets once Excalidraw has registered its faces, then keep the legend honest. */
+function watchFonts(api: ExcalidrawImperativeAPI): () => void {
+  if (typeof document === "undefined" || !("fonts" in document)) return () => {};
+  let stopped = false;
+  const onLoaded = () => {
+    if (!stopped) repairLegendLabels(api);
+  };
+  document.fonts.addEventListener("loadingdone", onLoaded);
+  const registered = () => [...document.fonts].some((face) => face.family.replace(/"/g, "") === "Excalifont");
+  const started = Date.now();
+  const preload = () => {
+    if (stopped) return;
+    if (registered()) {
+      void loadFontsFor([{ fontFamily: FONT_FAMILY.Excalifont, text: LATIN_SAMPLE }]).then(onLoaded);
+    } else if (Date.now() - started < 10000) {
+      setTimeout(preload, 200);
+    }
+  };
+  preload();
+  return () => {
+    stopped = true;
+    document.fonts.removeEventListener("loadingdone", onLoaded);
+  };
+}
+
 function legendWrite(
   all: readonly ExcalidrawElement[],
   rules: LegendRule[],
@@ -659,6 +756,7 @@ function legendWrite(
       x,
       y,
       fontSize: 18,
+      fontFamily: FONT_FAMILY.Excalifont,
       locked: true,
       groupIds: [groupId],
     } as never,
@@ -724,6 +822,7 @@ function legendWrite(
       x: x + LABEL_X,
       y: rowY + 5,
       fontSize: 16,
+      fontFamily: FONT_FAMILY.Excalifont,
       locked: true,
       groupIds: [groupId],
       customData: { docent: sample },
@@ -1111,7 +1210,15 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
     },
 
-    applyWrite: (write) => {
+    applyWrite: async (write) => {
+      // Measured in the font it will be drawn in — see `loadFontsFor`.
+      await loadFontsFor([
+        ...(write.shapes ?? []).filter((sh) => sh.label).map((sh) => ({ fontFamily: sh.style.fontFamily, text: sh.label! })),
+        ...(write.texts ?? []).map((t) => ({ fontFamily: t.style.fontFamily, text: t.text })),
+        ...(write.arrows ?? []).filter((a) => a.label).map((a) => ({ fontFamily: a.style.fontFamily, text: a.label! })),
+        ...(write.patches ?? []).filter((p) => typeof p.label === "string").map((p) => ({ fontFamily: FONT_FAMILY.Excalifont, text: p.label as string })),
+        ...(write.legend ?? []).map((r) => ({ fontFamily: FONT_FAMILY.Excalifont, text: `${r.key}: ${r.meaning}` })),
+      ]);
       const all = api.getSceneElementsIncludingDeleted();
       const live = new Map(all.filter((el) => !el.isDeleted).map((el) => [el.id, el]));
       const known = new Set<string>(live.keys());
@@ -1597,7 +1704,8 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         : [];
     },
 
-    setLegend: (rules) => {
+    setLegend: async (rules) => {
+      await loadFontsFor(rules.map((r) => ({ fontFamily: FONT_FAMILY.Excalifont, text: `${r.key}: ${r.meaning}` })));
       const all = api.getSceneElementsIncludingDeleted();
       const { elements } = legendWrite(all, rules);
       api.updateScene({
@@ -1763,6 +1871,8 @@ export function ExcalidrawCanvas({
   contextExport,
 }: ExcalidrawCanvasProps) {
   const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const fontWatchRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => fontWatchRef.current?.(), []);
   const lastFingerprintRef = useRef(0);
   const lastSelectionRef = useRef("");
   const lazyLibrariesRef = useRef(false);
@@ -1835,6 +1945,8 @@ export function ExcalidrawCanvas({
       lastFingerprintRef.current = hashElementsVersion(
         api.getSceneElementsIncludingDeleted(),
       );
+      fontWatchRef.current?.();
+      fontWatchRef.current = watchFonts(api);
       onReady?.(makeHandle(api));
       void loadBundledLibraries(api, (library) => library.eager);
     },
