@@ -113,6 +113,17 @@
       <li><strong>Visual review</strong> — every push carries a semantic changelog in the diagram's own words, and the app shows each changed frame before and after at the same rectangle.</li>
       <li><strong>Plugins</strong> — the desktop app hosts out-of-process providers behind versioned contracts; nothing runs inside the canvas.</li>
       <li><strong>Agents that draw</strong> — an agent adds components, edges, frames and detail layers in the diagram's own style, with intents and logic filled in; every edit is one undo step, shown under an orange frame, and reviewable.</li>
+      <li><strong>Pleasing by construction</strong> — what an agent draws is laid out the way a careful human would lay it out: no crossings, straight flows, gentle turns, room for every label, colours that mean something. <strong>Tidy</strong> (⌥⇧F) does the same to any diagram — and never changes what it says.</li>
+    </ul>
+  </section>
+
+  <section id="pleasing">
+    <h2>Diagrams that please <span class="badge">new</span></h2>
+    <p>An agent authors meaning; Docent draws. What the research on graph aesthetics ranks — fewest edge crossings first, fewest bends, straight and aligned flows, balance, room for every label — is what Docent's own layout engine optimises on every write: a proper layered pipeline (median sweeps with transpose, Brandes–Köpf coordinates), long flows that fold into bands instead of one endless row, edges that leave at spread ports and route <em>around</em> components with softened turns, and a legend whose colours are chosen for meaning and distinctness — <code>danger</code> is red, <code>storage</code> is blue, and every new kind stands as far from the others as the palette allows.</p>
+    <ul>
+      <li><strong>Tidy</strong> — the formatter for diagrams. One keystroke (⌥⇧F), the menu, or <code>tidy({frame})</code> over MCP re-lays out a frame, a tier, or the whole diagram. It is guaranteed to change nothing but the picture: its semantic changelog is empty, by test.</li>
+      <li><strong>The craft score</strong> — <code>validate()</code> answers with a score out of 100 and its parts (crossings, bends, alignment, overlaps, lengths, angles, colour), per frame, with one line of advice each — so an agent draws, validates, and tidies in a loop, and can say how good the picture is.</li>
+      <li><strong>Deterministic</strong> — the same diagram tidies to the same picture on every machine; no force-directed randomness, no dependencies, no engine to install.</li>
     </ul>
   </section>
 
