@@ -90,10 +90,10 @@ describe("find_symbol finds one (D82)", () => {
     const hits = top("database", { limit: 3 });
     expect(hits.length).toBeGreaterThan(0);
     expect(
-      hits.includes("software/database-cylinder") ||
+      hits.includes("software/database") ||
         hits.some((symbol) => symbol.startsWith("aws/")),
     ).toBe(true);
-    expect(hits.slice(0, 3)).toContain("software/database-cylinder");
+    expect(hits.slice(0, 3)).toContain("software/database");
   });
 
   it("says why each hit matched, and how big it is", () => {
@@ -108,7 +108,7 @@ describe("find_symbol finds one (D82)", () => {
 
   it("keeps to one library when asked", () => {
     const hits = findSymbols(catalog, "database", { library: "software-architecture" });
-    expect(hits.map((hit) => hit.symbol)).toEqual(["software/database-cylinder"]);
+    expect(hits.map((hit) => hit.symbol)).toEqual(["software/database"]);
     for (const hit of findSymbols(catalog, "server", { library: "software-architecture" })) {
       expect(hit.library).toBe("software-architecture");
     }

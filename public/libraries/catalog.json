@@ -5102,72 +5102,30 @@
    "aliases": []
   },
   {
-   "symbol": "software/actor",
-   "name": "Actor",
-   "library": "software-architecture",
-   "index": 3,
-   "itemId": "software-architecture-3",
-   "category": "people",
-   "icon": {
-    "width": 143,
-    "height": 155,
-    "x": 0,
-    "y": 0
-   },
-   "size": {
-    "width": 143,
-    "height": 155
-   },
-   "caption": null,
-   "aliases": [
-    "user",
-    "person",
-    "human"
-   ]
-  },
-  {
    "symbol": "software/browser-window",
    "name": "Browser window",
    "library": "software-architecture",
-   "index": 4,
-   "itemId": "software-architecture-4",
+   "index": 5,
+   "itemId": "software-architecture-5",
    "category": "client",
    "icon": {
-    "width": 88,
-    "height": 123,
+    "width": 129,
+    "height": 77,
     "x": 0,
     "y": 0
    },
    "size": {
-    "width": 88,
-    "height": 123
+    "width": 129,
+    "height": 77
    },
    "caption": null,
    "aliases": [
     "browser",
     "web client",
-    "frontend"
+    "frontend",
+    "website",
+    "web app"
    ]
-  },
-  {
-   "symbol": "software/cloud",
-   "name": "Cloud",
-   "library": "software-architecture",
-   "index": 1,
-   "itemId": "software-architecture-1",
-   "category": "network",
-   "icon": {
-    "width": 91,
-    "height": 165,
-    "x": 0,
-    "y": 0
-   },
-   "size": {
-    "width": 91,
-    "height": 165
-   },
-   "caption": null,
-   "aliases": []
   },
   {
    "symbol": "software/connector",
@@ -5187,15 +5145,95 @@
     "height": 104
    },
    "caption": null,
-   "aliases": []
+   "aliases": [
+    "connector",
+    "line",
+    "link"
+   ]
   },
   {
-   "symbol": "software/database-cylinder",
-   "name": "Database cylinder",
+   "symbol": "software/database",
+   "name": "Database",
+   "library": "software-architecture",
+   "index": 1,
+   "itemId": "software-architecture-1",
+   "category": "storage",
+   "icon": {
+    "width": 91,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 91,
+    "height": 165
+   },
+   "caption": null,
+   "aliases": [
+    "database",
+    "db",
+    "datastore",
+    "cylinder",
+    "sql"
+   ]
+  },
+  {
+   "symbol": "software/document",
+   "name": "Document",
+   "library": "software-architecture",
+   "index": 4,
+   "itemId": "software-architecture-4",
+   "category": "general",
+   "icon": {
+    "width": 88,
+    "height": 123,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 88,
+    "height": 123
+   },
+   "caption": null,
+   "aliases": [
+    "document",
+    "file",
+    "report",
+    "spec",
+    "record"
+   ]
+  },
+  {
+   "symbol": "software/layers",
+   "name": "Layers",
+   "library": "software-architecture",
+   "index": 2,
+   "itemId": "software-architecture-2",
+   "category": "general",
+   "icon": {
+    "width": 113,
+    "height": 71,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 71
+   },
+   "caption": null,
+   "aliases": [
+    "layers",
+    "stack",
+    "tiers"
+   ]
+  },
+  {
+   "symbol": "software/mobile-device",
+   "name": "Mobile device",
    "library": "software-architecture",
    "index": 6,
    "itemId": "software-architecture-6",
-   "category": "storage",
+   "category": "client",
    "icon": {
     "width": 71,
     "height": 108,
@@ -5208,53 +5246,37 @@
    },
    "caption": null,
    "aliases": [
-    "database",
-    "db",
-    "cylinder"
+    "mobile",
+    "phone",
+    "mobile app",
+    "device",
+    "ios",
+    "android"
    ]
   },
   {
-   "symbol": "software/decision",
-   "name": "Decision",
+   "symbol": "software/pipe",
+   "name": "Pipe",
    "library": "software-architecture",
-   "index": 2,
-   "itemId": "software-architecture-2",
-   "category": "control",
+   "index": 3,
+   "itemId": "software-architecture-3",
+   "category": "messaging",
    "icon": {
-    "width": 113,
-    "height": 71,
+    "width": 143,
+    "height": 155,
     "x": 0,
     "y": 0
    },
    "size": {
-    "width": 113,
-    "height": 71
-   },
-   "caption": null,
-   "aliases": []
-  },
-  {
-   "symbol": "software/server-rack",
-   "name": "Server rack",
-   "library": "software-architecture",
-   "index": 5,
-   "itemId": "software-architecture-5",
-   "category": "compute",
-   "icon": {
-    "width": 129,
-    "height": 77,
-    "x": 0,
-    "y": 0
-   },
-   "size": {
-    "width": 129,
-    "height": 77
+    "width": 143,
+    "height": 155
    },
    "caption": null,
    "aliases": [
-    "server",
-    "on prem",
-    "rack"
+    "pipe",
+    "pipeline",
+    "stream",
+    "channel"
    ]
   }
  ]

@@ -2,23 +2,23 @@
   "names": {
     "software-architecture": {
       "0": "Connector",
-      "1": "Cloud",
-      "2": "Decision",
-      "3": "Actor",
-      "4": "Browser window",
-      "5": "Server rack",
-      "6": "Database cylinder"
+      "1": "Database",
+      "2": "Layers",
+      "3": "Pipe",
+      "4": "Document",
+      "5": "Browser window",
+      "6": "Mobile device"
     }
   },
   "categories": {
     "software-architecture": {
       "Connector": "general",
-      "Cloud": "network",
-      "Decision": "control",
-      "Actor": "people",
+      "Database": "storage",
+      "Layers": "general",
+      "Pipe": "messaging",
+      "Document": "general",
       "Browser window": "client",
-      "Server rack": "compute",
-      "Database cylinder": "storage"
+      "Mobile device": "client"
     }
   },
   "aliases": {
@@ -176,25 +176,50 @@
       "network",
       "virtual private cloud"
     ],
-    "software/actor": [
-      "user",
-      "person",
-      "human"
-    ],
     "software/browser-window": [
       "browser",
       "web client",
-      "frontend"
+      "frontend",
+      "website",
+      "web app"
     ],
-    "software/database-cylinder": [
+    "software/connector": [
+      "connector",
+      "line",
+      "link"
+    ],
+    "software/database": [
       "database",
       "db",
-      "cylinder"
+      "datastore",
+      "cylinder",
+      "sql"
     ],
-    "software/server-rack": [
-      "server",
-      "on prem",
-      "rack"
+    "software/document": [
+      "document",
+      "file",
+      "report",
+      "spec",
+      "record"
+    ],
+    "software/layers": [
+      "layers",
+      "stack",
+      "tiers"
+    ],
+    "software/mobile-device": [
+      "mobile",
+      "phone",
+      "mobile app",
+      "device",
+      "ios",
+      "android"
+    ],
+    "software/pipe": [
+      "pipe",
+      "pipeline",
+      "stream",
+      "channel"
     ]
   }
 }

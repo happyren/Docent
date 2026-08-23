@@ -112,9 +112,13 @@ export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseSty
       !el.groupIds.some((g) => drawn.has(g)),
   );
   const shapes = live.filter((el) => SHAPES.has(el.type));
-  const boundTexts = live.filter((el) => el.type === "text" && el.containerId);
-  const freeTexts = live.filter((el) => el.type === "text" && !el.containerId);
   const arrows = live.filter((el) => el.type === "arrow");
+  const arrowIds = new Set(arrows.map((a) => a.id));
+  // A label on an arrow is set in the arrow font, not the label font: it
+  // votes for the arrow's, never for the shapes'.
+  const boundTexts = live.filter((el) => el.type === "text" && el.containerId && !arrowIds.has(el.containerId));
+  const arrowTexts = live.filter((el) => el.type === "text" && el.containerId && arrowIds.has(el.containerId));
+  const freeTexts = live.filter((el) => el.type === "text" && !el.containerId);
 
   const shapeStyle = lookOf(shapes, DEFAULT_STYLE);
   const labelFont = {
@@ -135,8 +139,8 @@ export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseSty
     style: {
       ...arrowStyle,
       roundness: arrowType === "sharp" ? null : 2,
-      fontFamily: labelFont.fontFamily,
-      fontSize: Math.max(12, labelFont.fontSize - 4),
+      fontFamily: mode(arrowTexts.map((t) => t.look.fontFamily)) ?? labelFont.fontFamily,
+      fontSize: mode(arrowTexts.map((t) => t.look.fontSize)) ?? Math.max(12, labelFont.fontSize - 4),
     },
     startArrowhead: arrows.length ? (mode(arrows.map((a) => a.look.startArrowhead ?? "none")) ?? "none") : "none",
     endArrowhead: arrows.length ? (mode(arrows.map((a) => a.look.endArrowhead ?? "none")) ?? "arrow") : "arrow",
