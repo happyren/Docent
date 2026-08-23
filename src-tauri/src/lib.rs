@@ -51,6 +51,7 @@ enum MenuAction {
     Library,
     Legend,
     Arrange,
+    Tidy,
     DetailMarkers,
     Plugins,
     AgentEdit,
@@ -62,7 +63,7 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -73,6 +74,7 @@ impl MenuAction {
         Self::Library,
         Self::Legend,
         Self::Arrange,
+        Self::Tidy,
         Self::DetailMarkers,
         Self::Plugins,
         Self::AgentEdit,
@@ -96,6 +98,7 @@ impl MenuAction {
             Self::Library => "library",
             Self::Legend => "legend",
             Self::Arrange => "arrange",
+            Self::Tidy => "tidy",
             Self::DetailMarkers => "detail-markers",
             Self::Plugins => "plugins",
             Self::AgentEdit => "agent-edit",
@@ -118,6 +121,7 @@ impl MenuAction {
             Self::Library => "Library",
             Self::Legend => "Legend…",
             Self::Arrange => "Arrange Detail Tiers",
+            Self::Tidy => "Tidy Diagram",
             Self::DetailMarkers => "Detail Markers",
             Self::Plugins => "Plugins…",
             Self::AgentEdit => "Agent Can Edit",
@@ -138,6 +142,9 @@ impl MenuAction {
             Self::SaveAs => Some("CmdOrCtrl+Shift+S"),
             Self::Present => Some("CmdOrCtrl+P"),
             Self::Library => Some("CmdOrCtrl+L"),
+            // Format Document's chord, as every editor has it (D73); Alt is
+            // Option on macOS.
+            Self::Tidy => Some("Alt+Shift+F"),
             // Checking for updates is a thing you go looking for, not a thing
             // you reach for mid-draw, so it claims no chord.
             Self::ExportFile
@@ -430,6 +437,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Legend)?,
             &item(app, MenuAction::Arrange)?,
+            &item(app, MenuAction::Tidy)?,
             &check_item(app, MenuAction::DetailMarkers, true)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Plugins)?,
@@ -834,7 +842,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 15] = [
+    const FRONTEND_IDS: [&str; 16] = [
         "new",
         "open",
         "import",
@@ -845,6 +853,7 @@ mod tests {
         "library",
         "legend",
         "arrange",
+        "tidy",
         "detail-markers",
         "plugins",
         "agent-edit",
@@ -899,6 +908,17 @@ mod tests {
                 "adding it to the page's union would invent a handler that should not exist"
             );
         }
+    }
+
+    #[test]
+    fn tidy_is_a_page_item_on_the_format_document_chord() {
+        // D73: ⌥⇧F everywhere an editor has it, answered by the page like
+        // any other View item — the menu is only the way in.
+        assert_eq!(MenuAction::Tidy.id(), "tidy");
+        assert_eq!(MenuAction::Tidy.label(), "Tidy Diagram");
+        assert_eq!(MenuAction::Tidy.accelerator(), Some("Alt+Shift+F"));
+        assert!(is_frontend_menu_id(MenuAction::Tidy.id()));
+        assert!(FRONTEND_IDS.contains(&MenuAction::Tidy.id()));
     }
 
     #[test]

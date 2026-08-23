@@ -20,6 +20,7 @@ import { exportSceneFile, importSceneFile } from "./desktop-files";
 import { alertDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
+import { tidyOps, type TidyScope } from "../authoring/tidy";
 import { detailBadges, logicMarks } from "../scene/detailBadges";
 import {
   createBranch as createPortfolioBranch,
@@ -68,6 +69,7 @@ type DocentMenuId =
   | "library"
   | "legend"
   | "arrange"
+  | "tidy"
   | "detail-markers"
   | "plugins"
   | "agent-edit"
@@ -347,6 +349,33 @@ export function App() {
     const moves = arrangeMoves(computeTiers(snapshot), snapshot);
     if (moves.length) c.translateFrames(moves);
   }, []);
+
+  // Tidy (S20, D73): the formatter, from ⌥⇧F or the menu. What is selected
+  // says what to format — the frame the selection sits in, or, when the
+  // selection spans more than one region or there is none, the tier the
+  // viewport is looking at. The promise that nothing but the picture
+  // changed is kept by the Command API, which puts the scene back if a
+  // tidy ever changed meaning; here we only report what it said.
+  const selectedIdsRef = useRef<string[]>(selectedIds);
+  selectedIdsRef.current = selectedIds;
+  const tidyDiagram = useCallback(() => {
+    const c = canvasRef.current;
+    const api = commandsRef.current;
+    if (!c || !api) return;
+    if (!api.canEdit()) {
+      setAgentReport({ line: "Tidy is off while View → Agent Can Edit is unchecked", undo: null });
+      return;
+    }
+    const snapshot = c.getSceneSnapshot();
+    const selection = selectedIdsRef.current;
+    const scope: TidyScope =
+      selection.length && tidyOps(snapshot, { selection }).length === 1
+        ? { selection }
+        : { tier: trailAt(computeTiers(snapshot), snapshot, viewportCenter()).length + 1 };
+    void api.tidy(scope).catch((err: unknown) => {
+      setAgentReport({ line: err instanceof Error ? err.message : String(err), undo: null });
+    });
+  }, [viewportCenter]);
 
   // Saving tidies the tiers first (D16): bands re-space against the current
   // Layer-1 extent, so files always round-trip with clean layering. The
@@ -791,6 +820,27 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [openScene, saveScene, saveSceneAs]);
 
+  // Format Document, for a diagram (D73): ⌥⇧F tidies what is in scope.
+  // The desktop shell's native accelerator owns the chord there, as it does
+  // for the file chords above. Typing is never interrupted: a text field,
+  // or Excalidraw's own editor, keeps the key.
+  useEffect(() => {
+    if (isDesktop) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || !event.shiftKey || event.metaKey || event.ctrlKey) return;
+      // ⌥⇧F types a character on macOS, so the physical key is what counts.
+      if (event.code !== "KeyF" && event.key.toLowerCase() !== "f") return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      tidyDiagram();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [tidyDiagram]);
+
   // Native menu bar bridge (S13). The Rust handlers reach the page by
   // evaluating `window.__docentMenu(id)`, which keeps the desktop shell free
   // of any JS SDK (I7) — the same reasoning as the injected store base URL.
@@ -830,6 +880,7 @@ export function App() {
     plugins: () => setPluginsOpen(true),
     "agent-edit": () => setAgentCanEdit((v) => !v),
     arrange: arrangeTiers,
+    tidy: tidyDiagram,
     "detail-markers": () => setDetailMarkers((v) => !v),
     "export-mermaid": () => {
       const handle = canvasRef.current;
@@ -1091,6 +1142,7 @@ export function App() {
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
             onArrangeTiers: arrangeTiers,
+            onTidy: tidyDiagram,
             onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
             onConnectAgent: connectAgent,
             onOpenPlugins: hasPlugins() ? () => setPluginsOpen(true) : undefined,
@@ -1146,7 +1198,7 @@ export function App() {
         )}
         {agentReport && !agentWorking && (
           <div className="docent-agent-report">
-            <span className="docent-agent-report-text">Agent edited: {agentReport.line}</span>
+            <span className="docent-agent-report-text">{agentReport.line}</span>
             {agentReport.undo && (
               <button
                 onClick={() => {

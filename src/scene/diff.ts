@@ -303,3 +303,46 @@ export function describeChange(beforeSnapshot: SceneSnapshot, afterSnapshot: Sce
   const diff = diffGraphs(before, after);
   return { diff, changelog: changelog(diff, after, before) };
 }
+
+/**
+ * The picture, not the meaning: a component that only moved or was resized
+ * changed how the diagram is drawn, not what it says. Everything else this
+ * file reports — a component or edge or frame added, removed, relabelled,
+ * rewired, re-kinded, re-tagged, re-intented, its logic, its narrative, its
+ * detail link, its frame — is meaning.
+ */
+const GEOMETRY = new Set<NodeChange["kind"]>(["moved", "resized"]);
+
+/**
+ * The meaning-only view of a diff (D73): the same diff with the purely
+ * geometric changes dropped. This is what "a tidy changed nothing" is
+ * measured against — a formatter that may not move anything could not
+ * format, and D73's list of what must be untouched (components, edges,
+ * frames, labels, kinds, intents, logic, narratives, the legend) is
+ * exactly what survives this filter.
+ */
+export function meaningOnly(diff: SceneDiff): SceneDiff {
+  const changed = diff.nodes.changed
+    .map((entry) => ({ ...entry, changes: entry.changes.filter((c) => !GEOMETRY.has(c.kind)) }))
+    .filter((entry) => entry.changes.length > 0);
+  const nodes = { ...diff.nodes, changed };
+  const empty =
+    !nodes.added.length && !nodes.removed.length && !nodes.changed.length &&
+    !diff.edges.added.length && !diff.edges.removed.length && !diff.edges.changed.length &&
+    !diff.frames.added.length && !diff.frames.removed.length && !diff.frames.changed.length;
+  return { ...diff, nodes, empty };
+}
+
+/**
+ * What a change did to the diagram's *meaning* (D73): the changelog with
+ * the geometry filtered out. Empty is the guarantee a tidy asserts.
+ */
+export function describeMeaningChange(beforeSnapshot: SceneSnapshot, afterSnapshot: SceneSnapshot): {
+  diff: SceneDiff;
+  changelog: string;
+} {
+  const before = buildSceneGraph(beforeSnapshot);
+  const after = buildSceneGraph(afterSnapshot);
+  const diff = meaningOnly(diffGraphs(before, after));
+  return { diff, changelog: changelog(diff, after, before) };
+}

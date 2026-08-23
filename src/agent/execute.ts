@@ -12,6 +12,7 @@ import { detailBadges } from "../scene/detailBadges";
 import { computeTiers } from "../scene/tiers";
 import { scriptTour } from "./script";
 import type { Op } from "../authoring/ops";
+import type { TidyScope } from "../authoring/tidy";
 import type { SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
@@ -245,6 +246,31 @@ function withNext(result: import("../command/api").EditResult) {
       ? `${warns} warning${warns === 1 ? "" : "s"} remain (see lint) — update what is missing; save_scene when done`
       : "validate is clean — save_scene when done; show the result with focus or a tour",
   };
+}
+
+/**
+ * The one scope a tidy names (D73). Exactly one, always: a call that meant
+ * two things would format more than the caller asked for, and Tidy may move
+ * hand-placed work only because it was asked to (D60).
+ */
+function tidyScopeFrom(params: Record<string, unknown>): TidyScope {
+  const named = ["frame", "tier", "all", "selection"].filter((key) => params[key] !== undefined);
+  if (named.length !== 1) {
+    throw new Error("tidy takes exactly one of frame, tier, all, selection — e.g. tidy({frame:'f_core'})");
+  }
+  if (params.frame !== undefined) return { frame: params.frame === null ? null : String(params.frame) };
+  if (params.tier !== undefined) {
+    const tier = Number(params.tier);
+    if (!Number.isInteger(tier) || tier < 1) throw new Error("tidy({tier}) takes a tier number — 1 is Layer 1");
+    return { tier };
+  }
+  if (params.all !== undefined) {
+    if (params.all !== true) throw new Error("tidy({all:false}) says nothing — pass all:true, or name a frame, a tier, or a selection");
+    return { all: true };
+  }
+  const selection = params.selection;
+  if (!Array.isArray(selection) || !selection.length) throw new Error("tidy({selection}) needs a non-empty list of ids");
+  return { selection: selection.map(String) };
 }
 
 /**
@@ -494,6 +520,10 @@ export async function execute(
       if (!Array.isArray(ops) || !ops.length) throw new Error("edit needs a non-empty ops list");
       return withNext(await commands.edit(ops));
     }
+    // The formatter (D73): the same write path as edit, and a meaning
+    // changelog that comes back empty or the whole thing is put back.
+    case "tidy":
+      return await commands.tidy(tidyScopeFrom(params));
     case "propose": {
       const ops = params.ops as Op[] | undefined;
       if (!Array.isArray(ops) || !ops.length) throw new Error("propose needs a non-empty ops list");

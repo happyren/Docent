@@ -22,7 +22,8 @@ import { computeTiers } from "../scene/tiers";
 import type { HighlightStyle, OverlayStore } from "../overlay/state";
 import type { SceneWrite } from "../adapter/excalidraw";
 import { idSource, lint, plan, PlanError, simulate, type LintFinding, type Op } from "../authoring/ops";
-import { describeChange } from "../scene/diff";
+import { tidyTargets, type TidyScope } from "../authoring/tidy";
+import { describeChange, describeMeaningChange } from "../scene/diff";
 
 /** The read-only slice of the canvas surface commands may touch. */
 export interface SceneReader {
@@ -62,6 +63,29 @@ export interface EditResult {
   /** Graph ids of what was created or changed. */
   touched: string[];
   lint: { findings: LintFinding[]; summary: string };
+}
+
+/** What a tidy answers (D73): what it re-laid out, and nothing about meaning. */
+export interface TidyResult {
+  tidied: { frames: number; components: number };
+  /** The craft score (D76) either side of the tidy — present once the lint carries one. */
+  score?: { before: unknown; after: unknown };
+  next: string;
+}
+
+type LintResult = { findings: LintFinding[]; summary: string };
+
+/**
+ * The craft score (D76) either side of a tidy — nothing to report until the
+ * lint carries one. The before-score is computed only then, so a tidy pays
+ * for one lint pass, not two.
+ */
+function craftScores(beforeSnapshot: SceneSnapshot, afterLint: LintResult): TidyResult["score"] | null {
+  if (!("score" in afterLint)) return null;
+  return {
+    before: (lint(beforeSnapshot) as { score?: unknown }).score,
+    after: (afterLint as { score?: unknown }).score,
+  };
 }
 
 /** Scene-units per second at speed 1.0. */
@@ -269,9 +293,69 @@ export class CommandAPI {
     if (diff.frames.removed.length) parts.push(`−${count(diff.frames.removed.length, "frame")}`);
     if (diff.frames.changed.length) parts.push(`${count(diff.frames.changed.length, "frame")} changed`);
     const summary = parts.length ? parts.join(" · ") : planned.notes.join("; ") || "no semantic change";
-    writer.report?.(summary, () => this.undoAgentEdit());
+    // The line says who did what: a tidy reports differently, because it
+    // did not edit anything (D73).
+    writer.report?.(`Agent edited: ${summary}`, () => this.undoAgentEdit());
     this.setWorking(false);
     return { applied: true, changelog, ids, notes: planned.notes, touched, lint: lint(after) };
+  }
+
+  /**
+   * The formatter (D73): re-lay out a frame, a tier, a selection, or the
+   * whole diagram — the same path as `edit` (the orange frame, one undo
+   * step, the camera on what changed, the panel line) — and then *prove*
+   * that nothing but the picture changed. The meaning-only changelog
+   * (D46, geometry filtered out) must be empty; if it is not, the scene
+   * goes back to where it started and the caller is told what moved.
+   * That refusal is the whole promise: a keystroke that cannot lie.
+   */
+  async tidy(scope: TidyScope): Promise<TidyResult> {
+    const writer = this.requireWriter();
+    const before = this.reader.getSceneSnapshot();
+    const targets = tidyTargets(before, scope);
+    if (!targets.ops.length) {
+      return { tidied: { frames: 0, components: 0 }, next: "nothing to tidy in that scope — tidy({all:true}) formats the diagram" };
+    }
+    const planned = this.planOrExplain(targets.ops);
+    const captured = writer.captureScene();
+    this.setWorking(true);
+    try {
+      await writer.applyWrite(planned.write);
+    } catch (err) {
+      this.setWorking(false);
+      throw err;
+    }
+    this.undoStack.push(captured);
+    if (this.undoStack.length > 20) this.undoStack.shift();
+    const after = this.reader.getSceneSnapshot();
+    const { changelog } = describeMeaningChange(before, after);
+    if (changelog) {
+      // A tidy that changed meaning must not land, whatever the cause —
+      // the guarantee is what makes the command safe to press (D73).
+      writer.restoreScene(captured);
+      this.undoStack.pop();
+      this.setWorking(false);
+      throw new Error(`Tidy was undone — it would have changed the diagram's meaning:\n${changelog}`);
+    }
+    const present = planned.touched.filter((id) => this.reader.getElementInfo(id) || this.reader.getFrameInfo(id));
+    if (present.length) {
+      try {
+        await this.frameTargets(present, 0.25);
+      } catch {
+        // Showing is a courtesy; the tidy already landed.
+      }
+    }
+    writer.report?.(
+      `Tidied ${targets.components} component${targets.components === 1 ? "" : "s"}`,
+      () => this.undoAgentEdit(),
+    );
+    this.setWorking(false);
+    const scores = craftScores(before, lint(after));
+    return {
+      tidied: { frames: targets.frames, components: targets.components },
+      ...(scores ? { score: scores } : {}),
+      next: "the changelog is empty by construction — validate() for what is left, or save_scene",
+    };
   }
 
   /** Put the scene back to before the last agent edit — itself undoable. */
