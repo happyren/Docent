@@ -1,0 +1,5261 @@
+{
+ "version": 1,
+ "symbols": [
+  {
+   "symbol": "aws/agent",
+   "name": "Agent",
+   "library": "aws-architecture-icons",
+   "index": 145,
+   "itemId": "OIt09CQkHg3vC57dYJ_K8",
+   "category": "general",
+   "icon": {
+    "width": 65,
+    "height": 48,
+    "x": 3,
+    "y": 0
+   },
+   "size": {
+    "width": 68,
+    "height": 76
+   },
+   "caption": "Agent",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/agentless-collector",
+   "name": "Agentless Collector",
+   "library": "aws-architecture-icons",
+   "index": 141,
+   "itemId": "P4WLUA2izSUVx2My6Bq1S",
+   "category": "general",
+   "icon": {
+    "width": 47,
+    "height": 81,
+    "x": 25,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 98
+   },
+   "caption": "Agentless\nCollector",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/alarm",
+   "name": "Alarm",
+   "library": "aws-architecture-icons",
+   "index": 156,
+   "itemId": "8oTPxsFoxJTSlcXl7qIKt",
+   "category": "general",
+   "icon": {
+    "width": 48,
+    "height": 45,
+    "x": 3,
+    "y": 0
+   },
+   "size": {
+    "width": 53,
+    "height": 78
+   },
+   "caption": "Alarm",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/alb",
+   "name": "ALB",
+   "library": "aws-architecture-icons",
+   "index": 229,
+   "itemId": "ccu7upIdPlgfnhoQP5NgO",
+   "category": "general",
+   "icon": {
+    "width": 66,
+    "height": 66,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 93
+   },
+   "caption": "ALB",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/alexa-for-business",
+   "name": "Alexa for Business",
+   "library": "aws-architecture-icons",
+   "index": 151,
+   "itemId": "KSxcrg4ZMPKukhPNBouhi",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 65,
+    "height": 109,
+    "x": 14,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 118
+   },
+   "caption": "Alexa for\nBusiness",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/amazon-bedrock",
+   "name": "Amazon Bedrock",
+   "library": "aws-architecture-icons",
+   "index": 50,
+   "itemId": "wVfa26EiK3Ren73T4QiBb",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 46,
+    "y": 0
+   },
+   "size": {
+    "width": 157,
+    "height": 93
+   },
+   "caption": "Amazon Bedrock",
+   "aliases": [
+    "llm",
+    "foundation model",
+    "genai"
+   ]
+  },
+  {
+   "symbol": "aws/amazon-mq",
+   "name": "Amazon MQ",
+   "library": "aws-architecture-icons",
+   "index": 107,
+   "itemId": "lPPd6tZ_MP80Lwrg8Dhhd",
+   "category": "application integration",
+   "icon": {
+    "width": 72,
+    "height": 65,
+    "x": 23,
+    "y": 0
+   },
+   "size": {
+    "width": 110,
+    "height": 92
+   },
+   "caption": "Amazon MQ",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/amazon-q",
+   "name": "Amazon Q",
+   "library": "aws-architecture-icons",
+   "index": 51,
+   "itemId": "-cIgS47U1fweKZpC0XuzK",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 16,
+    "y": 0
+   },
+   "size": {
+    "width": 96,
+    "height": 93
+   },
+   "caption": "Amazon Q",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ami",
+   "name": "AMI",
+   "library": "aws-architecture-icons",
+   "index": 79,
+   "itemId": "aFzMTcq2wR7gkq7L8xnfF",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 63,
+    "height": 88
+   },
+   "caption": "AMI",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/amplify",
+   "name": "Amplify",
+   "library": "aws-architecture-icons",
+   "index": 137,
+   "itemId": "NUCj7c7VUkTcLypayHLzM",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 80,
+    "height": 87,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 80,
+    "height": 94
+   },
+   "caption": "Amplify",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/api-gateway",
+   "name": "API Gateway",
+   "library": "aws-architecture-icons",
+   "index": 233,
+   "itemId": "qo_vkCo5K-uOb6pTatU_y",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 34,
+    "y": 0
+   },
+   "size": {
+    "width": 134,
+    "height": 92
+   },
+   "caption": "API Gateway",
+   "aliases": [
+    "rest api",
+    "api endpoint",
+    "gateway",
+    "http api"
+   ]
+  },
+  {
+   "symbol": "aws/app-runner",
+   "name": "App Runner",
+   "library": "aws-architecture-icons",
+   "index": 92,
+   "itemId": "fvaOGxKOXmU3XjcVn59Nh",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 69,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 106,
+    "height": 91
+   },
+   "caption": "App Runner",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/appconfig",
+   "name": "AppConfig",
+   "library": "aws-architecture-icons",
+   "index": 176,
+   "itemId": "4Y0IW22ZCu027aO8bsJbg",
+   "category": "application integration",
+   "icon": {
+    "width": 72,
+    "height": 97,
+    "x": 13,
+    "y": 0
+   },
+   "size": {
+    "width": 90,
+    "height": 97
+   },
+   "caption": "AppConfig",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/appflow",
+   "name": "AppFlow",
+   "library": "aws-architecture-icons",
+   "index": 115,
+   "itemId": "D0T2kQ6yUjeYO74AJ5Dgt",
+   "category": "application integration",
+   "icon": {
+    "width": 65,
+    "height": 64,
+    "x": 4,
+    "y": 0
+   },
+   "size": {
+    "width": 73,
+    "height": 91
+   },
+   "caption": "AppFlow",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/application-auto-scaling",
+   "name": "Application Auto Scaling",
+   "library": "aws-architecture-icons",
+   "index": 160,
+   "itemId": "pLbD7dTrFRKFRmvREp3i6",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 121,
+    "height": 118
+   },
+   "caption": "Application\nAuto Scaling",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/application-composer",
+   "name": "Application Composer",
+   "library": "aws-architecture-icons",
+   "index": 135,
+   "itemId": "jZtYqOPkSxJm3NABRPPQz",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 19,
+    "y": 0
+   },
+   "size": {
+    "width": 102,
+    "height": 116
+   },
+   "caption": "Application\nComposer",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/application-discovery-service",
+   "name": "Application Discovery Service",
+   "library": "aws-architecture-icons",
+   "index": 140,
+   "itemId": "RrGu2nWDCSIiJU5Gl3PiV",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 52,
+    "y": 0
+   },
+   "size": {
+    "width": 169,
+    "height": 118
+   },
+   "caption": "Application\nDiscovery Service",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/application-migration-service",
+   "name": "Application Migration Service",
+   "library": "aws-architecture-icons",
+   "index": 148,
+   "itemId": "m1J851OdyI1BuUrfAU1YJ",
+   "category": "machine learning",
+   "icon": {
+    "width": 68,
+    "height": 86,
+    "x": 50,
+    "y": 0
+   },
+   "size": {
+    "width": 165,
+    "height": 118
+   },
+   "caption": "Application \nMigration Service",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/appsync",
+   "name": "AppSync",
+   "library": "aws-architecture-icons",
+   "index": 108,
+   "itemId": "1mR8yB8R_IE3Ywzal-_i6",
+   "category": "compute",
+   "icon": {
+    "width": 72,
+    "height": 64,
+    "x": 5,
+    "y": 0
+   },
+   "size": {
+    "width": 77,
+    "height": 92
+   },
+   "caption": "AppSync",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/artifact",
+   "name": "Artifact",
+   "library": "aws-architecture-icons",
+   "index": 187,
+   "itemId": "K_OWVM6FbwchUTd0FOays",
+   "category": "application integration",
+   "icon": {
+    "width": 80,
+    "height": 111,
+    "x": 9,
+    "y": 0
+   },
+   "size": {
+    "width": 88,
+    "height": 111
+   },
+   "caption": "Artifact",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/athena",
+   "name": "Athena",
+   "library": "aws-architecture-icons",
+   "index": 23,
+   "itemId": "DXxd6V75vKzgkkAYlZXtr",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 2,
+    "y": 0
+   },
+   "size": {
+    "width": 68,
+    "height": 93
+   },
+   "caption": "Athena",
+   "aliases": [
+    "query",
+    "sql on s3"
+   ]
+  },
+  {
+   "symbol": "aws/attachment",
+   "name": "Attachment",
+   "library": "aws-architecture-icons",
+   "index": 208,
+   "itemId": "UGcxDzmXdSzjl2XlM00-d",
+   "category": "general",
+   "icon": {
+    "width": 52,
+    "height": 52,
+    "x": 31,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 84
+   },
+   "caption": "Attachment",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/audit-manager",
+   "name": "Audit Manager",
+   "library": "aws-architecture-icons",
+   "index": 204,
+   "itemId": "ajgjKLDvwJV1NOfvV_nhX",
+   "category": "application integration",
+   "icon": {
+    "width": 80,
+    "height": 106,
+    "x": 39,
+    "y": 0
+   },
+   "size": {
+    "width": 142,
+    "height": 106
+   },
+   "caption": "Audit Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/augmented-ai",
+   "name": "Augmented AI",
+   "library": "aws-architecture-icons",
+   "index": 49,
+   "itemId": "dZAxacxkhvBQ0sZMMftow",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 78,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 135,
+    "height": 93
+   },
+   "caption": "Augmented IA",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/aurora",
+   "name": "Aurora",
+   "library": "aws-architecture-icons",
+   "index": 52,
+   "itemId": "066R3cvVUPdeFJVTybmOZ",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 1,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 91
+   },
+   "caption": "Aurora",
+   "aliases": [
+    "aurora postgres",
+    "aurora mysql"
+   ]
+  },
+  {
+   "symbol": "aws/aurora-instance",
+   "name": "Aurora instance",
+   "library": "aws-architecture-icons",
+   "index": 67,
+   "itemId": "PzuyJy6vK1shXOTdKDv_m",
+   "category": "general",
+   "icon": {
+    "width": 52,
+    "height": 82,
+    "x": 70,
+    "y": 19
+   },
+   "size": {
+    "width": 157,
+    "height": 101
+   },
+   "caption": "Aurora instance",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/auto-scaling",
+   "name": "Auto scaling",
+   "library": "aws-architecture-icons",
+   "index": 80,
+   "itemId": "DY5yQgRDLnV4d5etDKrKa",
+   "category": "general",
+   "icon": {
+    "width": 70,
+    "height": 73,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 120,
+    "height": 89
+   },
+   "caption": "Auto scaling",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/auto-scaling-group",
+   "name": "Auto Scaling group",
+   "library": "aws-architecture-icons",
+   "index": 242,
+   "itemId": "DX6cJceLbfX86At7JlSl6",
+   "category": "compute",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "Auto Scaling group",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/automation",
+   "name": "Automation",
+   "library": "aws-architecture-icons",
+   "index": 168,
+   "itemId": "QgC7mLjqK44j4TE7RMN85",
+   "category": "general",
+   "icon": {
+    "width": 58,
+    "height": 83,
+    "x": 42,
+    "y": 0
+   },
+   "size": {
+    "width": 109,
+    "height": 83
+   },
+   "caption": "Automation",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/aws-account",
+   "name": "AWS account",
+   "library": "aws-architecture-icons",
+   "index": 247,
+   "itemId": "JbsmmCx-nZbsMXj0CR5sV",
+   "category": "application integration",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "AWS account",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/aws-cli",
+   "name": "AWS CLI",
+   "library": "aws-architecture-icons",
+   "index": 130,
+   "itemId": "XTlvHfA558UrPgty-D_r0",
+   "category": "database",
+   "icon": {
+    "width": 91,
+    "height": 93,
+    "x": 11,
+    "y": 0
+   },
+   "size": {
+    "width": 102,
+    "height": 93
+   },
+   "caption": "AWS CLI",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/aws-cloud",
+   "name": "AWS Cloud",
+   "library": "aws-architecture-icons",
+   "index": 240,
+   "itemId": "j75zqLdjJdU-YlQY-VEhg",
+   "category": "grouping",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "AWS Cloud",
+   "aliases": [
+    "aws account",
+    "cloud boundary"
+   ]
+  },
+  {
+   "symbol": "aws/aws-step-functions-workflow",
+   "name": "AWS Step Functions Workflow",
+   "library": "aws-architecture-icons",
+   "index": 248,
+   "itemId": "o6UvbKP36AWzJc23AN9-s",
+   "category": "application integration",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "AWS Step Functions \nWorkflow",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/aws-sts",
+   "name": "AWS STS",
+   "library": "aws-architecture-icons",
+   "index": 195,
+   "itemId": "FQ8mXs2l7cCcgW8ZdeOcx",
+   "category": "general",
+   "icon": {
+    "width": 61,
+    "height": 44,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 91,
+    "height": 69
+   },
+   "caption": "AWS STS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/backint-agent",
+   "name": "Backint Agent",
+   "library": "aws-architecture-icons",
+   "index": 178,
+   "itemId": "JI7FbVnDrGXAikiUo6y5q",
+   "category": "application integration",
+   "icon": {
+    "width": 86,
+    "height": 85,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 137,
+    "height": 93
+   },
+   "caption": "Backint Agent",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/backup",
+   "name": "Backup",
+   "library": "aws-architecture-icons",
+   "index": 73,
+   "itemId": "F0EV_MnMbi52aceBOcoZb",
+   "category": "storage",
+   "icon": {
+    "width": 73,
+    "height": 65,
+    "x": 2,
+    "y": 0
+   },
+   "size": {
+    "width": 75,
+    "height": 94
+   },
+   "caption": "Backup",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/batch",
+   "name": "Batch",
+   "library": "aws-architecture-icons",
+   "index": 93,
+   "itemId": "UIGE9mqI4trNt_NBz0Lrj",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 91
+   },
+   "caption": "Batch",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/budgets",
+   "name": "Budgets",
+   "library": "aws-architecture-icons",
+   "index": 235,
+   "itemId": "qJliIlYjJdgmYHt6m22K-",
+   "category": "storage",
+   "icon": {
+    "width": 67,
+    "height": 69,
+    "x": 8,
+    "y": 0
+   },
+   "size": {
+    "width": 80,
+    "height": 94
+   },
+   "caption": "Budgets",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/business-data-catalog",
+   "name": "Business data catalog",
+   "library": "aws-architecture-icons",
+   "index": 22,
+   "itemId": "CL1brTsoc5dCMeSpvfx4Y",
+   "category": "general",
+   "icon": {
+    "width": 45,
+    "height": 57,
+    "x": 51,
+    "y": 0
+   },
+   "size": {
+    "width": 144,
+    "height": 108
+   },
+   "caption": "Business data\ncatalog",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/canvas",
+   "name": "Canvas",
+   "library": "aws-architecture-icons",
+   "index": 33,
+   "itemId": "sIIzFyRlKAiHYnZv1L7iu",
+   "category": "general",
+   "icon": {
+    "width": 68,
+    "height": 73,
+    "x": 9,
+    "y": 0
+   },
+   "size": {
+    "width": 77,
+    "height": 83
+   },
+   "caption": "Canvas",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/certificate-manager",
+   "name": "Certificate Manager",
+   "library": "aws-architecture-icons",
+   "index": 188,
+   "itemId": "3bOUMMH0YJ1O-TLIMeMEZ",
+   "category": "application integration",
+   "icon": {
+    "width": 90,
+    "height": 100,
+    "x": 27,
+    "y": 0
+   },
+   "size": {
+    "width": 118,
+    "height": 118
+   },
+   "caption": "Certificate \nManager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/chatbot",
+   "name": "Chatbot",
+   "library": "aws-architecture-icons",
+   "index": 177,
+   "itemId": "_5E7VYrsrTRiQWvTv-Ht2",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 8,
+    "y": 0
+   },
+   "size": {
+    "width": 80,
+    "height": 92
+   },
+   "caption": "Chatbot",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/chime",
+   "name": "Chime",
+   "library": "aws-architecture-icons",
+   "index": 152,
+   "itemId": "cwgzoVFHD8zg0aNWLewkD",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 65,
+    "height": 72,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 91
+   },
+   "caption": "Chime",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/client-vpn",
+   "name": "Client VPN",
+   "library": "aws-architecture-icons",
+   "index": 226,
+   "itemId": "SmstCw_sqcPuYAFBiwbT6",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 73,
+    "height": 76,
+    "x": 18,
+    "y": 0
+   },
+   "size": {
+    "width": 101,
+    "height": 94
+   },
+   "caption": "Client VPN",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloud9",
+   "name": "Cloud9",
+   "library": "aws-architecture-icons",
+   "index": 125,
+   "itemId": "z2DpAIN96cqUBR_22itCx",
+   "category": "database",
+   "icon": {
+    "width": 85,
+    "height": 81,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 85,
+    "height": 92
+   },
+   "caption": "Cloud9",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloudformation",
+   "name": "CloudFormation",
+   "library": "aws-architecture-icons",
+   "index": 159,
+   "itemId": "3y6kRDDU4U7kQVAmZRyuL",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 41,
+    "y": 0
+   },
+   "size": {
+    "width": 145,
+    "height": 93
+   },
+   "caption": "CloudFormation",
+   "aliases": [
+    "infrastructure as code",
+    "iac",
+    "stack"
+   ]
+  },
+  {
+   "symbol": "aws/cloudfront",
+   "name": "CloudFront",
+   "library": "aws-architecture-icons",
+   "index": 209,
+   "itemId": "K4rLNxE4Q5rJRAorYasbT",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 20,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 92
+   },
+   "caption": "CloudFront",
+   "aliases": [
+    "cdn",
+    "edge cache"
+   ]
+  },
+  {
+   "symbol": "aws/cloudhsm",
+   "name": "CloudHSM",
+   "library": "aws-architecture-icons",
+   "index": 189,
+   "itemId": "of7FB13dZ5BfahENL7im-",
+   "category": "application integration",
+   "icon": {
+    "width": 70,
+    "height": 86,
+    "x": 14,
+    "y": 0
+   },
+   "size": {
+    "width": 90,
+    "height": 94
+   },
+   "caption": "CloudHSM",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloudsearch",
+   "name": "CloudSearch",
+   "library": "aws-architecture-icons",
+   "index": 0,
+   "itemId": "qniW8QxfTsGnWAjyARhBV",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 26,
+    "y": 0
+   },
+   "size": {
+    "width": 117,
+    "height": 89
+   },
+   "caption": "CloudSearch",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloudshell",
+   "name": "CloudShell",
+   "library": "aws-architecture-icons",
+   "index": 134,
+   "itemId": "S1-BgoKl69WPqkVxtuoQQ",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 16,
+    "y": 0
+   },
+   "size": {
+    "width": 95,
+    "height": 92
+   },
+   "caption": "CloudShell",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloudtrail",
+   "name": "CloudTrail",
+   "library": "aws-architecture-icons",
+   "index": 165,
+   "itemId": "Blfjt0vqzgD-ZPn0B1pF4",
+   "category": "application integration",
+   "icon": {
+    "width": 76,
+    "height": 78,
+    "x": 18,
+    "y": 0
+   },
+   "size": {
+    "width": 100,
+    "height": 94
+   },
+   "caption": "CloudTrail",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cloudwatch",
+   "name": "CloudWatch",
+   "library": "aws-architecture-icons",
+   "index": 155,
+   "itemId": "16fWGD2ZDvbsjBhGJS4Bg",
+   "category": "application integration",
+   "icon": {
+    "width": 108,
+    "height": 64,
+    "x": 24,
+    "y": 0
+   },
+   "size": {
+    "width": 132,
+    "height": 93
+   },
+   "caption": "CloudWatch",
+   "aliases": [
+    "monitoring",
+    "metrics",
+    "logs",
+    "alarms"
+   ]
+  },
+  {
+   "symbol": "aws/codeartifact",
+   "name": "CodeArtifact",
+   "library": "aws-architecture-icons",
+   "index": 133,
+   "itemId": "T8S25jKU5mEqH8Pnz0DAd",
+   "category": "database",
+   "icon": {
+    "width": 74,
+    "height": 64,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 128,
+    "height": 92
+   },
+   "caption": "CodeArtifact",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/codebuild",
+   "name": "CodeBuild",
+   "library": "aws-architecture-icons",
+   "index": 126,
+   "itemId": "vs-TdTCtuCcXIt2ka4UmU",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 67,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 96
+   },
+   "caption": "</>",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/codecommit",
+   "name": "CodeCommit",
+   "library": "aws-architecture-icons",
+   "index": 127,
+   "itemId": "hNuUNPdR52MOb_te9gm4f",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 24,
+    "y": 0
+   },
+   "size": {
+    "width": 111,
+    "height": 94
+   },
+   "caption": "</>",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/codedeploy",
+   "name": "CodeDeploy",
+   "library": "aws-architecture-icons",
+   "index": 128,
+   "itemId": "Zqa_06AcsJP47Jz9FXKb5",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 22,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 93
+   },
+   "caption": "</>",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/codeguru",
+   "name": "CodeGuru",
+   "library": "aws-architecture-icons",
+   "index": 43,
+   "itemId": "ibEjCoCcjiB1_xajsyUr6",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 76,
+    "x": 14,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 94
+   },
+   "caption": "CodeGuru",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/codepipeline",
+   "name": "CodePipeline",
+   "library": "aws-architecture-icons",
+   "index": 129,
+   "itemId": "vdC8GAYawvJKHlslDQsV_",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 25,
+    "y": 0
+   },
+   "size": {
+    "width": 115,
+    "height": 92
+   },
+   "caption": "</>",
+   "aliases": [
+    "ci cd",
+    "pipeline"
+   ]
+  },
+  {
+   "symbol": "aws/codewhisperer",
+   "name": "CodeWhisperer",
+   "library": "aws-architecture-icons",
+   "index": 48,
+   "itemId": "s1x0Cncq8j21x3Nf4zSAq",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 71,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 136,
+    "height": 94
+   },
+   "caption": "CodeWhisperer",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cognito",
+   "name": "Cognito",
+   "library": "aws-architecture-icons",
+   "index": 183,
+   "itemId": "qdtDDNSnmZFw2njyyRP68",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 114,
+    "height": 76,
+    "x": 2,
+    "y": 0
+   },
+   "size": {
+    "width": 117,
+    "height": 93
+   },
+   "caption": "Cognito",
+   "aliases": [
+    "auth",
+    "user pool",
+    "login"
+   ]
+  },
+  {
+   "symbol": "aws/comprehend",
+   "name": "Comprehend",
+   "library": "aws-architecture-icons",
+   "index": 24,
+   "itemId": "-8K_sQSsbD1kXFukLoAPO",
+   "category": "machine learning",
+   "icon": {
+    "width": 68,
+    "height": 71,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 93
+   },
+   "caption": "Comprehend",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/comprehend-medical",
+   "name": "Comprehend Medical",
+   "library": "aws-architecture-icons",
+   "index": 47,
+   "itemId": "3yy8f9rz33MNfT28ywdH9",
+   "category": "machine learning",
+   "icon": {
+    "width": 70,
+    "height": 100,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 117
+   },
+   "caption": "Comprehend\nMedical",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/config",
+   "name": "Config",
+   "library": "aws-architecture-icons",
+   "index": 161,
+   "itemId": "cIVXA0Js4ayoFnIicGr1C",
+   "category": "application integration",
+   "icon": {
+    "width": 75,
+    "height": 93,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 75,
+    "height": 94
+   },
+   "caption": "Config",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/connect",
+   "name": "Connect",
+   "library": "aws-architecture-icons",
+   "index": 153,
+   "itemId": "DPyfW6DlxXVKJ4ppDJInO",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 79,
+    "height": 103,
+    "x": 5,
+    "y": 0
+   },
+   "size": {
+    "width": 84,
+    "height": 103
+   },
+   "caption": "Connect",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/container",
+   "name": "Container",
+   "library": "aws-architecture-icons",
+   "index": 99,
+   "itemId": "lVYGuNQcsQ30_e2I2Qkb4",
+   "category": "general",
+   "icon": {
+    "width": 49,
+    "height": 31,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 92,
+    "height": 60
+   },
+   "caption": "Container",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/container2",
+   "name": "Container2",
+   "library": "aws-architecture-icons",
+   "index": 100,
+   "itemId": "dc5gb2XlJKxfQ_oqV91Pu",
+   "category": "general",
+   "icon": {
+    "width": 49,
+    "height": 31,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 105,
+    "height": 60
+   },
+   "caption": "Container2",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/control-tower",
+   "name": "Control Tower",
+   "library": "aws-architecture-icons",
+   "index": 174,
+   "itemId": "J25-77-y3TPVQnHHgcfVm",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 37,
+    "y": 0
+   },
+   "size": {
+    "width": 138,
+    "height": 93
+   },
+   "caption": "Control Tower",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cost-and-usage-report",
+   "name": "Cost & Usage Report",
+   "library": "aws-architecture-icons",
+   "index": 236,
+   "itemId": "h7b0G0CwGOzIJ9oqHNT-a",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 74,
+    "x": 37,
+    "y": 0
+   },
+   "size": {
+    "width": 140,
+    "height": 118
+   },
+   "caption": "Cost & Usage\nReport",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/cost-explorer",
+   "name": "Cost Explorer",
+   "library": "aws-architecture-icons",
+   "index": 237,
+   "itemId": "Q9pSxvL18RTkyh2bfYE8L",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 135,
+    "height": 94
+   },
+   "caption": "Cost Explorer",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/crawler",
+   "name": "Crawler",
+   "library": "aws-architecture-icons",
+   "index": 11,
+   "itemId": "8m1S9zQQNHOcbWTjY-NR5",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 93,
+    "height": 50,
+    "x": 13,
+    "y": 0
+   },
+   "size": {
+    "width": 106,
+    "height": 74
+   },
+   "caption": "Crawler",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/dashboard",
+   "name": "Dashboard",
+   "library": "aws-architecture-icons",
+   "index": 158,
+   "itemId": "mRqdxb2HEkvoyiqYZVgp1",
+   "category": "general",
+   "icon": {
+    "width": 79,
+    "height": 72,
+    "x": 26,
+    "y": 0
+   },
+   "size": {
+    "width": 105,
+    "height": 83
+   },
+   "caption": "Dashboard",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/data-center",
+   "name": "Data center",
+   "library": "aws-architecture-icons",
+   "index": 243,
+   "itemId": "rdqhHQs3mSiWhPfwJdtso",
+   "category": "grouping",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "Data center",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/data-exchange",
+   "name": "Data Exchange",
+   "library": "aws-architecture-icons",
+   "index": 19,
+   "itemId": "yIA6jSVrze6xR7RSyYSam",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 67,
+    "x": 44,
+    "y": 0
+   },
+   "size": {
+    "width": 152,
+    "height": 91
+   },
+   "caption": "Data Exchange",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/data-lake",
+   "name": "Data Lake",
+   "library": "aws-architecture-icons",
+   "index": 3,
+   "itemId": "MG8g6JE1Rs1oQcMZAH53N",
+   "category": "general",
+   "icon": {
+    "width": 43,
+    "height": 44,
+    "x": 30,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 70
+   },
+   "caption": "Data lake",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/data-pipeline",
+   "name": "Data Pipeline",
+   "library": "aws-architecture-icons",
+   "index": 17,
+   "itemId": "ukjH63jM8adVwuR539Ozp",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 62,
+    "height": 62,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 132,
+    "height": 90
+   },
+   "caption": "Data Pipeline",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/datacatalog",
+   "name": "DataCatalog",
+   "library": "aws-architecture-icons",
+   "index": 12,
+   "itemId": "3ShmOskbUsqh_qFbYDScZ",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 77,
+    "height": 59,
+    "x": 51,
+    "y": 0
+   },
+   "size": {
+    "width": 131,
+    "height": 75
+   },
+   "caption": "DataCatalog",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/datasync",
+   "name": "DataSync",
+   "library": "aws-architecture-icons",
+   "index": 144,
+   "itemId": "wkfuqvr6YE5miHvxJMsgC",
+   "category": "machine learning",
+   "icon": {
+    "width": 98,
+    "height": 79,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 112,
+    "height": 94
+   },
+   "caption": "DataSync",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/datazone",
+   "name": "DataZone",
+   "library": "aws-architecture-icons",
+   "index": 21,
+   "itemId": "NDDPiGeTjpsTIsX3A08C_",
+   "category": "compute",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 19,
+    "y": 0
+   },
+   "size": {
+    "width": 101,
+    "height": 89
+   },
+   "caption": "DataZone",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/dax",
+   "name": "DAX",
+   "library": "aws-architecture-icons",
+   "index": 56,
+   "itemId": "6W31atnmnbI_wp18dKBQ8",
+   "category": "general",
+   "icon": {
+    "width": 60,
+    "height": 39,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 60,
+    "height": 70
+   },
+   "caption": "DAX",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/db-instance",
+   "name": "DB Instance",
+   "library": "aws-architecture-icons",
+   "index": 82,
+   "itemId": "xhqvo3j8F3YoQ9ns6DHhn",
+   "category": "general",
+   "icon": {
+    "width": 59,
+    "height": 63,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 84
+   },
+   "caption": "DB Instance",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/deepcomposer",
+   "name": "DeepComposer",
+   "library": "aws-architecture-icons",
+   "index": 40,
+   "itemId": "HTJcAoQMauVCE2m-kzmsM",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 135,
+    "height": 93
+   },
+   "caption": "DeepComposer",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/detective",
+   "name": "Detective",
+   "library": "aws-architecture-icons",
+   "index": 202,
+   "itemId": "9ZglngcZgMJw6oniL0U-w",
+   "category": "application integration",
+   "icon": {
+    "width": 67,
+    "height": 76,
+    "x": 16,
+    "y": 0
+   },
+   "size": {
+    "width": 96,
+    "height": 94
+   },
+   "caption": "Detective",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/device-farm",
+   "name": "Device Farm",
+   "library": "aws-architecture-icons",
+   "index": 138,
+   "itemId": "MYbEMuekcQo25gTan1WJ1",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 65,
+    "height": 73,
+    "x": 27,
+    "y": 0
+   },
+   "size": {
+    "width": 118,
+    "height": 94
+   },
+   "caption": "Device Farm",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/devops-guru",
+   "name": "DevOps Guru",
+   "library": "aws-architecture-icons",
+   "index": 44,
+   "itemId": "QxxDilsOpclav3deIzI4T",
+   "category": "machine learning",
+   "icon": {
+    "width": 75,
+    "height": 110,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 129,
+    "height": 110
+   },
+   "caption": "DevOps Guru",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/direct-connect",
+   "name": "Direct Connect",
+   "library": "aws-architecture-icons",
+   "index": 224,
+   "itemId": "wljXfLrah21GI3BheQvXE",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 71,
+    "height": 69,
+    "x": 40,
+    "y": 0
+   },
+   "size": {
+    "width": 146,
+    "height": 94
+   },
+   "caption": "Direct Connect",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/directory-service",
+   "name": "Directory Service",
+   "library": "aws-architecture-icons",
+   "index": 190,
+   "itemId": "9XxHpjohrfB-QfyLmLm6V",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 107,
+    "height": 85,
+    "x": 18,
+    "y": 0
+   },
+   "size": {
+    "width": 125,
+    "height": 118
+   },
+   "caption": "Directory \nService",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/discovery",
+   "name": "Discovery",
+   "library": "aws-architecture-icons",
+   "index": 146,
+   "itemId": "60VBTr9pYy5g4i-QXwS0U",
+   "category": "general",
+   "icon": {
+    "width": 59,
+    "height": 53,
+    "x": 31,
+    "y": 0
+   },
+   "size": {
+    "width": 92,
+    "height": 76
+   },
+   "caption": "Discovery",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/discovery-agent",
+   "name": "Discovery Agent",
+   "library": "aws-architecture-icons",
+   "index": 142,
+   "itemId": "nGtyWJhlSMpJz61z2j-vs",
+   "category": "general",
+   "icon": {
+    "width": 60,
+    "height": 61,
+    "x": 67,
+    "y": 0
+   },
+   "size": {
+    "width": 156,
+    "height": 63
+   },
+   "caption": "Discovery Agent",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/distro-for-open-telemetry",
+   "name": "Distro for Open Telemetry",
+   "library": "aws-architecture-icons",
+   "index": 181,
+   "itemId": "yGpjaSrh7D1QPU8_9yThD",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 76,
+    "x": 43,
+    "y": 0
+   },
+   "size": {
+    "width": 151,
+    "height": 116
+   },
+   "caption": "Distro for\nOpen Telemetry",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/dms",
+   "name": "DMS",
+   "library": "aws-architecture-icons",
+   "index": 59,
+   "itemId": "Oxk97j_RDf9Hfe2cedYB6",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 94
+   },
+   "caption": "DMS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/documentdb",
+   "name": "DocumentDB",
+   "library": "aws-architecture-icons",
+   "index": 53,
+   "itemId": "z_ki0kE9Tj1MelNJ8RAB4",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 70,
+    "x": 29,
+    "y": 0
+   },
+   "size": {
+    "width": 122,
+    "height": 93
+   },
+   "caption": "DocumentDB",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/documents",
+   "name": "Documents",
+   "library": "aws-architecture-icons",
+   "index": 169,
+   "itemId": "03gCurYTHLfAwDkPU1GhR",
+   "category": "general",
+   "icon": {
+    "width": 57,
+    "height": 65,
+    "x": 47,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 80
+   },
+   "caption": "Documents",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/dynamodb",
+   "name": "DynamoDB",
+   "library": "aws-architecture-icons",
+   "index": 54,
+   "itemId": "4rYCRAzb_mssVkQpj97oz",
+   "category": "database",
+   "icon": {
+    "width": 72,
+    "height": 65,
+    "x": 20,
+    "y": 0
+   },
+   "size": {
+    "width": 102,
+    "height": 93
+   },
+   "caption": "DynamoDB",
+   "aliases": [
+    "nosql",
+    "key value store",
+    "dynamo"
+   ]
+  },
+  {
+   "symbol": "aws/dynamodb-table",
+   "name": "DynamoDB Table",
+   "library": "aws-architecture-icons",
+   "index": 55,
+   "itemId": "ht6KqdetMskw-t6VG4xmw",
+   "category": "general",
+   "icon": {
+    "width": 43,
+    "height": 43,
+    "x": 6,
+    "y": 0
+   },
+   "size": {
+    "width": 59,
+    "height": 73
+   },
+   "caption": "Table",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ebs",
+   "name": "EBS",
+   "library": "aws-architecture-icons",
+   "index": 68,
+   "itemId": "qgLmG5fFYmmvuykulKscb",
+   "category": "compute",
+   "icon": {
+    "width": 66,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 94
+   },
+   "caption": "EBS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ec2",
+   "name": "EC2",
+   "library": "aws-architecture-icons",
+   "index": 78,
+   "itemId": "32__whS1wVS_5EICi-IYV",
+   "category": "compute",
+   "icon": {
+    "width": 73,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 73,
+    "height": 93
+   },
+   "caption": "EC2",
+   "aliases": [
+    "virtual machine",
+    "vm",
+    "instance",
+    "server"
+   ]
+  },
+  {
+   "symbol": "aws/ec2-auto-scaling",
+   "name": "EC2 Auto Scaling",
+   "library": "aws-architecture-icons",
+   "index": 88,
+   "itemId": "TDcIWnqEMy5W7-fS5mtbO",
+   "category": "compute",
+   "icon": {
+    "width": 67,
+    "height": 68,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 121,
+    "height": 117
+   },
+   "caption": "EC2\nAuto Scaling",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ec2-contents",
+   "name": "EC2 contents",
+   "library": "aws-architecture-icons",
+   "index": 245,
+   "itemId": "_rOWZiIN8wCafEZNCGuCC",
+   "category": "compute",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "EC2 contents",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ec2-image-builder",
+   "name": "EC2 Image Builder",
+   "library": "aws-architecture-icons",
+   "index": 90,
+   "itemId": "l6MzcsPahFmToSQED2ISe",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 99,
+    "x": 22,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 115
+   },
+   "caption": "EC2 Image\nBuilder",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ecr",
+   "name": "ECR",
+   "library": "aws-architecture-icons",
+   "index": 95,
+   "itemId": "VBFPe8NddeC4rgSD7FFif",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 76,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 91
+   },
+   "caption": "ECR",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ecs",
+   "name": "ECS",
+   "library": "aws-architecture-icons",
+   "index": 98,
+   "itemId": "uPZ1FbhMWIrNGr28AKO7r",
+   "category": "compute",
+   "icon": {
+    "width": 75,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 75,
+    "height": 91
+   },
+   "caption": "ECS",
+   "aliases": [
+    "container service",
+    "containers"
+   ]
+  },
+  {
+   "symbol": "aws/edge-location",
+   "name": "Edge location",
+   "library": "aws-architecture-icons",
+   "index": 210,
+   "itemId": "E7-aNCC3amMj5_rcSZeYA",
+   "category": "general",
+   "icon": {
+    "width": 65,
+    "height": 50,
+    "x": 41,
+    "y": 0
+   },
+   "size": {
+    "width": 132,
+    "height": 80
+   },
+   "caption": "Edge location",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/efs",
+   "name": "EFS",
+   "library": "aws-architecture-icons",
+   "index": 70,
+   "itemId": "GfBzPlObwkoFGxTLALRjq",
+   "category": "compute",
+   "icon": {
+    "width": 93,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 94
+   },
+   "caption": "EFS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/eks",
+   "name": "EKS",
+   "library": "aws-architecture-icons",
+   "index": 94,
+   "itemId": "DC6q__M-fpREbBsae3Gdh",
+   "category": "compute",
+   "icon": {
+    "width": 75,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 75,
+    "height": 93
+   },
+   "caption": "EKS",
+   "aliases": [
+    "kubernetes",
+    "k8s"
+   ]
+  },
+  {
+   "symbol": "aws/eks-anywhere",
+   "name": "EKS Anywhere",
+   "library": "aws-architecture-icons",
+   "index": 103,
+   "itemId": "LmI1_6w3fki1X6pFqqm1d",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 34,
+    "y": 0
+   },
+   "size": {
+    "width": 133,
+    "height": 92
+   },
+   "caption": "EKS Anywhere",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/elastic-beanstalk",
+   "name": "Elastic Beanstalk",
+   "library": "aws-architecture-icons",
+   "index": 86,
+   "itemId": "jXXOzfyVUfeBys99NXlgX",
+   "category": "compute",
+   "icon": {
+    "width": 96,
+    "height": 70,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 116
+   },
+   "caption": "Elastic \nBeanstalk",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/elastic-fabric-adapter",
+   "name": "Elastic Fabric Adapter",
+   "library": "aws-architecture-icons",
+   "index": 91,
+   "itemId": "rlMW98Ly234gaamvUCXNc",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 137,
+    "height": 120
+   },
+   "caption": "Elastic Fabric\nAdapter",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/elastic-inference",
+   "name": "Elastic Inference",
+   "library": "aws-architecture-icons",
+   "index": 25,
+   "itemId": "lr8Q2XfD5EEyfy30wiRzg",
+   "category": "general",
+   "icon": {
+    "width": 71,
+    "height": 69,
+    "x": 52,
+    "y": 0
+   },
+   "size": {
+    "width": 169,
+    "height": 93
+   },
+   "caption": "Elastic Inference",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/elastic-views",
+   "name": "Elastic Views",
+   "library": "aws-architecture-icons",
+   "index": 13,
+   "itemId": "_rtYsqF1Wyxa1Cf1aQvAy",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 127,
+    "height": 91
+   },
+   "caption": "Elastic Views",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/elasticache",
+   "name": "ElastiCache",
+   "library": "aws-architecture-icons",
+   "index": 65,
+   "itemId": "NmC3bqg6mq9C-W-sGRG1V",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 25,
+    "y": 0
+   },
+   "size": {
+    "width": 116,
+    "height": 94
+   },
+   "caption": "ElastiCache",
+   "aliases": [
+    "cache",
+    "redis",
+    "memcached"
+   ]
+  },
+  {
+   "symbol": "aws/elb",
+   "name": "ELB",
+   "library": "aws-architecture-icons",
+   "index": 228,
+   "itemId": "SnBXLbCU63NM1wKc7XdFF",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 94
+   },
+   "caption": "ELB",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/emr",
+   "name": "EMR",
+   "library": "aws-architecture-icons",
+   "index": 1,
+   "itemId": "BAsmroCEEbmkwhLbgQnJA",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 92
+   },
+   "caption": "EMR",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/endpoint",
+   "name": "Endpoint",
+   "library": "aws-architecture-icons",
+   "index": 234,
+   "itemId": "8T4G9zZkbBlAdRZSkeRXQ",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 27,
+    "y": 0
+   },
+   "size": {
+    "width": 90,
+    "height": 98
+   },
+   "caption": "Endpoint",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/eni",
+   "name": "ENI",
+   "library": "aws-architecture-icons",
+   "index": 220,
+   "itemId": "PqxPMfP_nBFLJPoqs2q05",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 63,
+    "height": 94
+   },
+   "caption": "ENI",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/event",
+   "name": "Event",
+   "library": "aws-architecture-icons",
+   "index": 111,
+   "itemId": "HPhzJXlKtYzdB7vK7_4da",
+   "category": "general",
+   "icon": {
+    "width": 43,
+    "height": 49,
+    "x": 6,
+    "y": 0
+   },
+   "size": {
+    "width": 56,
+    "height": 69
+   },
+   "caption": "Event",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/event-bus",
+   "name": "Event bus",
+   "library": "aws-architecture-icons",
+   "index": 113,
+   "itemId": "jmkt4nbQ4IVMHJOeldmXz",
+   "category": "general",
+   "icon": {
+    "width": 45,
+    "height": 36,
+    "x": 27,
+    "y": 0
+   },
+   "size": {
+    "width": 98,
+    "height": 56
+   },
+   "caption": "Event bus",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/eventbridge",
+   "name": "EventBridge",
+   "library": "aws-architecture-icons",
+   "index": 110,
+   "itemId": "kehSOw0KeBtuWbi3qRP_3",
+   "category": "application integration",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 26,
+    "y": 0
+   },
+   "size": {
+    "width": 115,
+    "height": 92
+   },
+   "caption": "EventBridge",
+   "aliases": [
+    "event bus",
+    "events"
+   ]
+  },
+  {
+   "symbol": "aws/fargate",
+   "name": "Fargate",
+   "library": "aws-architecture-icons",
+   "index": 104,
+   "itemId": "KPwhx57yq7U1-uWww0qx3",
+   "category": "compute",
+   "icon": {
+    "width": 76,
+    "height": 64,
+    "x": 8,
+    "y": 0
+   },
+   "size": {
+    "width": 84,
+    "height": 92
+   },
+   "caption": "Fargate",
+   "aliases": [
+    "serverless containers"
+   ]
+  },
+  {
+   "symbol": "aws/fault-injection-simulator",
+   "name": "Fault Injection Simulator",
+   "library": "aws-architecture-icons",
+   "index": 136,
+   "itemId": "rWbLsG_ryEDerpB4NyGIR",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 73,
+    "x": 41,
+    "y": 0
+   },
+   "size": {
+    "width": 147,
+    "height": 117
+   },
+   "caption": "Fault Injection\nSimulator",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/firewall-manager",
+   "name": "Firewall Manager",
+   "library": "aws-architecture-icons",
+   "index": 191,
+   "itemId": "jbKzntSyDzvxwwizIqo8w",
+   "category": "application integration",
+   "icon": {
+    "width": 73,
+    "height": 84,
+    "x": 49,
+    "y": 0
+   },
+   "size": {
+    "width": 162,
+    "height": 94
+   },
+   "caption": "Firewall Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/flow-logs",
+   "name": "Flow logs",
+   "library": "aws-architecture-icons",
+   "index": 218,
+   "itemId": "kg-KQMhItfwSrl5ls1E2F",
+   "category": "general",
+   "icon": {
+    "width": 72,
+    "height": 63,
+    "x": 12,
+    "y": 0
+   },
+   "size": {
+    "width": 87,
+    "height": 94
+   },
+   "caption": "Flow logs",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/forecast",
+   "name": "Forecast",
+   "library": "aws-architecture-icons",
+   "index": 26,
+   "itemId": "ZwGj_v1esnnDbetsfaU4f",
+   "category": "machine learning",
+   "icon": {
+    "width": 93,
+    "height": 65,
+    "x": 12,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 93
+   },
+   "caption": "Forecast",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/fraud-detector",
+   "name": "Fraud Detector",
+   "library": "aws-architecture-icons",
+   "index": 41,
+   "itemId": "T_wrU-VJ5rZeLQFDAZKgS",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 83,
+    "x": 45,
+    "y": 0
+   },
+   "size": {
+    "width": 156,
+    "height": 93
+   },
+   "caption": "Fraud Detector",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/fsx",
+   "name": "FSx",
+   "library": "aws-architecture-icons",
+   "index": 71,
+   "itemId": "EPB5IzYkW6ZIfeix7ZeCc",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 94
+   },
+   "caption": "FSx",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/geospatial-ml",
+   "name": "Geospatial ML",
+   "library": "aws-architecture-icons",
+   "index": 36,
+   "itemId": "RmcSVDIwCTN0-YicFBXYz",
+   "category": "general",
+   "icon": {
+    "width": 96,
+    "height": 115,
+    "x": 25,
+    "y": 0
+   },
+   "size": {
+    "width": 121,
+    "height": 115
+   },
+   "caption": "Geospatial\nML",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/glacier",
+   "name": "Glacier",
+   "library": "aws-architecture-icons",
+   "index": 75,
+   "itemId": "Dx7YqXBOmb7EhRiC9yFmn",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 3,
+    "y": 0
+   },
+   "size": {
+    "width": 70,
+    "height": 95
+   },
+   "caption": "Glacier",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/glb",
+   "name": "GLB",
+   "library": "aws-architecture-icons",
+   "index": 231,
+   "itemId": "lkBXIBF2zstkpnNc2FciS",
+   "category": "general",
+   "icon": {
+    "width": 66,
+    "height": 66,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 93
+   },
+   "caption": "GLB",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/global-accelerator",
+   "name": "Global Accelerator",
+   "library": "aws-architecture-icons",
+   "index": 225,
+   "itemId": "G-L8_G2GZudGYS_0-_K8f",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 89,
+    "height": 77,
+    "x": 24,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 123
+   },
+   "caption": "Global\nAccelerator",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/glue",
+   "name": "Glue",
+   "library": "aws-architecture-icons",
+   "index": 10,
+   "itemId": "u1zbiR-3E2Eo93QzvufWn",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 91
+   },
+   "caption": "Glue",
+   "aliases": [
+    "etl"
+   ]
+  },
+  {
+   "symbol": "aws/glue-databrew",
+   "name": "Glue DataBrew",
+   "library": "aws-architecture-icons",
+   "index": 20,
+   "itemId": "JuH6SPYn2YvGjmDBOXe67",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 75,
+    "x": 45,
+    "y": 0
+   },
+   "size": {
+    "width": 153,
+    "height": 92
+   },
+   "caption": "Glue DataBrew",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ground-truth",
+   "name": "Ground Truth",
+   "library": "aws-architecture-icons",
+   "index": 37,
+   "itemId": "lqj5_Dff0TZfX4ms1pULH",
+   "category": "machine learning",
+   "icon": {
+    "width": 85,
+    "height": 73,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 135,
+    "height": 93
+   },
+   "caption": "Ground Truth",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/guardduty",
+   "name": "GuardDuty",
+   "library": "aws-architecture-icons",
+   "index": 184,
+   "itemId": "14q7Ba1Y-7QknWn42yyjI",
+   "category": "application integration",
+   "icon": {
+    "width": 77,
+    "height": 115,
+    "x": 22,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 115
+   },
+   "caption": "GuardDuty",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iam",
+   "name": "IAM",
+   "library": "aws-architecture-icons",
+   "index": 192,
+   "itemId": "deXvPT6En6Hyn2fGwdheI",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 64,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 92
+   },
+   "caption": "IAM",
+   "aliases": [
+    "identity",
+    "permissions",
+    "roles"
+   ]
+  },
+  {
+   "symbol": "aws/iam-identity-center",
+   "name": "IAM Identity Center",
+   "library": "aws-architecture-icons",
+   "index": 200,
+   "itemId": "L4akIiMaKCY_hjqqgjyRG",
+   "category": "application integration",
+   "icon": {
+    "width": 97,
+    "height": 64,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 130,
+    "height": 118
+   },
+   "caption": "IAM Identity\nCenter",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/image",
+   "name": "Image",
+   "library": "aws-architecture-icons",
+   "index": 97,
+   "itemId": "KtZLgr3T2bBsiqih33TOn",
+   "category": "general",
+   "icon": {
+    "width": 43,
+    "height": 46,
+    "x": 8,
+    "y": 0
+   },
+   "size": {
+    "width": 59,
+    "height": 71
+   },
+   "caption": "Image",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/incident-manager",
+   "name": "Incident Manager",
+   "library": "aws-architecture-icons",
+   "index": 171,
+   "itemId": "NfSS105G1B9A1-_YL9P4v",
+   "category": "general",
+   "icon": {
+    "width": 81,
+    "height": 46,
+    "x": 76,
+    "y": 0
+   },
+   "size": {
+    "width": 170,
+    "height": 65
+   },
+   "caption": "Incident Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/inspector",
+   "name": "Inspector",
+   "library": "aws-architecture-icons",
+   "index": 185,
+   "itemId": "4TknoTV-VJxfJRKgFW19I",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 14,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 94
+   },
+   "caption": "Inspector",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/instance",
+   "name": "Instance",
+   "library": "aws-architecture-icons",
+   "index": 81,
+   "itemId": "UF4uv5A9wdMFZeMQ3A3jT",
+   "category": "general",
+   "icon": {
+    "width": 55,
+    "height": 60,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 86,
+    "height": 87
+   },
+   "caption": "Instance",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/instance-with-cloudwatch",
+   "name": "Instance with CloudWatch",
+   "library": "aws-architecture-icons",
+   "index": 85,
+   "itemId": "Z_e4oMNLBzE2Ts2WhukeW",
+   "category": "general",
+   "icon": {
+    "width": 108,
+    "height": 64,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 143,
+    "height": 117
+   },
+   "caption": "Instance with\nCloudWatch",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/instances",
+   "name": "Instances",
+   "library": "aws-architecture-icons",
+   "index": 83,
+   "itemId": "xRurKduPPe22AZ7Zr7uiL",
+   "category": "general",
+   "icon": {
+    "width": 60,
+    "height": 48,
+    "x": 19,
+    "y": 0
+   },
+   "size": {
+    "width": 97,
+    "height": 75
+   },
+   "caption": "Instances",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/interface-endpoint",
+   "name": "Interface Endpoint",
+   "library": "aws-architecture-icons",
+   "index": 219,
+   "itemId": "PApLCKICv1FnqNHTWFByO",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 74,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 105,
+    "height": 119
+   },
+   "caption": "Interface \nEndpoint",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/internet-gateway",
+   "name": "Internet gateway",
+   "library": "aws-architecture-icons",
+   "index": 215,
+   "itemId": "RQ_lFikEQ4_QKuLvUzGi_",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 88,
+    "x": 56,
+    "y": 0
+   },
+   "size": {
+    "width": 173,
+    "height": 98
+   },
+   "caption": "Internet gateway",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-analytics",
+   "name": "IoT Analytics",
+   "library": "aws-architecture-icons",
+   "index": 117,
+   "itemId": "meFnC9E_cf7hyAm1uM9T7",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 79,
+    "x": 35,
+    "y": 0
+   },
+   "size": {
+    "width": 135,
+    "height": 94
+   },
+   "caption": "IoT Analytics",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-core",
+   "name": "IoT Core",
+   "library": "aws-architecture-icons",
+   "index": 118,
+   "itemId": "XO6hYBcfnZ5ekcbNSMWNG",
+   "category": "storage",
+   "icon": {
+    "width": 68,
+    "height": 83,
+    "x": 13,
+    "y": 0
+   },
+   "size": {
+    "width": 92,
+    "height": 94
+   },
+   "caption": "IoT Core",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-expresslink",
+   "name": "IoT ExpressLink",
+   "library": "aws-architecture-icons",
+   "index": 121,
+   "itemId": "oITT5bk4wQ7W789Ot-5yW",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 69,
+    "x": 47,
+    "y": 0
+   },
+   "size": {
+    "width": 159,
+    "height": 94
+   },
+   "caption": "IoT ExpressLink",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-greengrass",
+   "name": "Iot Greengrass",
+   "library": "aws-architecture-icons",
+   "index": 119,
+   "itemId": "tWOXY9SPstBsg12Y3UkqI",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 88,
+    "x": 46,
+    "y": 0
+   },
+   "size": {
+    "width": 157,
+    "height": 94
+   },
+   "caption": "IoT Greengrass",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-greengrass-2",
+   "name": "IoT Greengrass",
+   "library": "aws-architecture-icons",
+   "index": 246,
+   "itemId": "-nPHvDx-HdFIX9qZ4UHGe",
+   "category": "storage",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "IoT Greengrass",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-roborunner",
+   "name": "IoT RoboRunner",
+   "library": "aws-architecture-icons",
+   "index": 122,
+   "itemId": "DhTd1faCISrzkLUoEHOFE",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 46,
+    "y": 0
+   },
+   "size": {
+    "width": 157,
+    "height": 94
+   },
+   "caption": "IoT RoboRunner",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-sensor",
+   "name": "IoT sensor",
+   "library": "aws-architecture-icons",
+   "index": 123,
+   "itemId": "W2NA-dOyH55JDcrCkzdU2",
+   "category": "general",
+   "icon": {
+    "width": 67,
+    "height": 30,
+    "x": 31,
+    "y": 0
+   },
+   "size": {
+    "width": 111,
+    "height": 51
+   },
+   "caption": "IoT sensor",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-sitewise",
+   "name": "IoT SiteWise",
+   "library": "aws-architecture-icons",
+   "index": 120,
+   "itemId": "lY4ICPZrEHD2S5si0bsHP",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 31,
+    "y": 0
+   },
+   "size": {
+    "width": 128,
+    "height": 94
+   },
+   "caption": "IoT SiteWise",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/iot-topic",
+   "name": "IoT topic",
+   "library": "aws-architecture-icons",
+   "index": 124,
+   "itemId": "oCvtJT8TDXlfG3pPZIyLo",
+   "category": "general",
+   "icon": {
+    "width": 30,
+    "height": 44,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 95,
+    "height": 71
+   },
+   "caption": "IoT topic",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kendra",
+   "name": "Kendra",
+   "library": "aws-architecture-icons",
+   "index": 42,
+   "itemId": "TPANsRJD_eZGVdR4zJI3P",
+   "category": "machine learning",
+   "icon": {
+    "width": 79,
+    "height": 98,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 79,
+    "height": 98
+   },
+   "caption": "Kendra",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/keyspaces",
+   "name": "Keyspaces",
+   "library": "aws-architecture-icons",
+   "index": 58,
+   "itemId": "DaQedZw5-94utE7wL8qAh",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 98,
+    "height": 93
+   },
+   "caption": "Keyspaces",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kinesis",
+   "name": "Kinesis",
+   "library": "aws-architecture-icons",
+   "index": 4,
+   "itemId": "T3FuHtK3EBYeTJP0boMHF",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 106,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 106,
+    "height": 93
+   },
+   "caption": "Kinesis",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kinesis-data-analytics",
+   "name": "Kinesis Data Analytics",
+   "library": "aws-architecture-icons",
+   "index": 8,
+   "itemId": "Ki_V6zDs57_ckg5MKLpcS",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 106,
+    "height": 65,
+    "x": 43,
+    "y": 0
+   },
+   "size": {
+    "width": 151,
+    "height": 118
+   },
+   "caption": "Kinesis \nData Analytics",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kinesis-data-firehose",
+   "name": "Kinesis Data Firehose",
+   "library": "aws-architecture-icons",
+   "index": 7,
+   "itemId": "C58zu1KdXoSMYivUlTtEB",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 38,
+    "y": 0
+   },
+   "size": {
+    "width": 142,
+    "height": 116
+   },
+   "caption": "Kinesis \nData Firehose",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kinesis-data-streams",
+   "name": "Kinesis Data Streams",
+   "library": "aws-architecture-icons",
+   "index": 6,
+   "itemId": "DC4EiqBiNf3W1kN8R9osc",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 106,
+    "height": 65,
+    "x": 39,
+    "y": 0
+   },
+   "size": {
+    "width": 145,
+    "height": 117
+   },
+   "caption": "Kinesis \nData Streams",
+   "aliases": [
+    "stream",
+    "event stream"
+   ]
+  },
+  {
+   "symbol": "aws/kinesis-video-streams",
+   "name": "Kinesis Video Streams",
+   "library": "aws-architecture-icons",
+   "index": 5,
+   "itemId": "1jrAOlYdT5DEKjhotxv55",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 106,
+    "height": 65,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 142,
+    "height": 117
+   },
+   "caption": "Kinesis \nVideo Streams",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/kms",
+   "name": "KMS",
+   "library": "aws-architecture-icons",
+   "index": 196,
+   "itemId": "WzWVWot20VuMnjHuKslfT",
+   "category": "application integration",
+   "icon": {
+    "width": 67,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 67,
+    "height": 94
+   },
+   "caption": "KMS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/lake-formation",
+   "name": "Lake Formation",
+   "library": "aws-architecture-icons",
+   "index": 2,
+   "itemId": "5du5KSJZWSqV1JPvQGp5r",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 43,
+    "y": 0
+   },
+   "size": {
+    "width": 149,
+    "height": 91
+   },
+   "caption": "Lake Formation",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/lambda",
+   "name": "Lambda",
+   "library": "aws-architecture-icons",
+   "index": 87,
+   "itemId": "dYGb58-C8SFy9aZ8QjtN-",
+   "category": "compute",
+   "icon": {
+    "width": 84,
+    "height": 87,
+    "x": 4,
+    "y": 0
+   },
+   "size": {
+    "width": 89,
+    "height": 93
+   },
+   "caption": "Lambda",
+   "aliases": [
+    "function",
+    "serverless",
+    "faas",
+    "aws lambda"
+   ]
+  },
+  {
+   "symbol": "aws/lex",
+   "name": "Lex",
+   "library": "aws-architecture-icons",
+   "index": 27,
+   "itemId": "FJmR_qcChZOYltzjeoEzV",
+   "category": "machine learning",
+   "icon": {
+    "width": 83,
+    "height": 88,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 83,
+    "height": 93
+   },
+   "caption": "Lex",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/license-manager",
+   "name": "License Manager",
+   "library": "aws-architecture-icons",
+   "index": 162,
+   "itemId": "wN3icfnnn-NJ-TirbHiHK",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 86,
+    "x": 48,
+    "y": 0
+   },
+   "size": {
+    "width": 160,
+    "height": 93
+   },
+   "caption": "License Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/location-service",
+   "name": "Location Service",
+   "library": "aws-architecture-icons",
+   "index": 139,
+   "itemId": "gQceiSGAGy01QjDWgZokB",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 72,
+    "height": 65,
+    "x": 9,
+    "y": 0
+   },
+   "size": {
+    "width": 83,
+    "height": 118
+   },
+   "caption": "Location\nService",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/logs",
+   "name": "Logs",
+   "library": "aws-architecture-icons",
+   "index": 157,
+   "itemId": "WgTI3OhFmChMRdiYwvfJQ",
+   "category": "general",
+   "icon": {
+    "width": 53,
+    "height": 37,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 53,
+    "height": 69
+   },
+   "caption": "Logs",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/macie",
+   "name": "Macie",
+   "library": "aws-architecture-icons",
+   "index": 186,
+   "itemId": "tTUBWST0mv3-fWMWQ3bzf",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 94
+   },
+   "caption": "Macie",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/managed-blockchain",
+   "name": "Managed Blockchain",
+   "library": "aws-architecture-icons",
+   "index": 76,
+   "itemId": "FwwDm2XBmb0rwM7LgGkmg",
+   "category": "compute",
+   "icon": {
+    "width": 112,
+    "height": 65,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 128,
+    "height": 117
+   },
+   "caption": "Managed\nBlockchain",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/managed-service-for-apache-flink",
+   "name": "Managed Service for Apache Flink",
+   "library": "aws-architecture-icons",
+   "index": 9,
+   "itemId": "RD_sp7HWiOXZmyp3bOkvq",
+   "category": "compute",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 49,
+    "y": 0
+   },
+   "size": {
+    "width": 161,
+    "height": 113
+   },
+   "caption": "Managed Service\nfor Apache Flink",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/managed-service-for-grafana",
+   "name": "Managed Service for Grafana",
+   "library": "aws-architecture-icons",
+   "index": 179,
+   "itemId": "4AIp_qrAX75K1Obn4I-J5",
+   "category": "application integration",
+   "icon": {
+    "width": 67,
+    "height": 64,
+    "x": 48,
+    "y": 0
+   },
+   "size": {
+    "width": 161,
+    "height": 117
+   },
+   "caption": "Managed Service\nfor Grafana",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/managed-service-for-prometheus",
+   "name": "Managed Service for Prometheus",
+   "library": "aws-architecture-icons",
+   "index": 180,
+   "itemId": "E9RLux1wQWdi9PmvQXXkJ",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 66,
+    "x": 48,
+    "y": 0
+   },
+   "size": {
+    "width": 161,
+    "height": 116
+   },
+   "caption": "Managed Service\nfor Prometheus",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/managed-streaming-for-apache-kafka",
+   "name": "Managed Streaming for Apache Kafka",
+   "library": "aws-architecture-icons",
+   "index": 18,
+   "itemId": "G1IOYyFe2sYiFHAUzVEhB",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 61,
+    "y": 0
+   },
+   "size": {
+    "width": 186,
+    "height": 115
+   },
+   "caption": "Managed Streaming\nfor Apache Kafka",
+   "aliases": [
+    "kafka",
+    "msk"
+   ]
+  },
+  {
+   "symbol": "aws/managed-workflows-for-apache-airflow",
+   "name": "Managed Workflows for Apache Airflow",
+   "library": "aws-architecture-icons",
+   "index": 116,
+   "itemId": "eaGAqnI3EIsOtCikYEUf0",
+   "category": "application integration",
+   "icon": {
+    "width": 70,
+    "height": 65,
+    "x": 61,
+    "y": 0
+   },
+   "size": {
+    "width": 187,
+    "height": 117
+   },
+   "caption": "Managed Workflows\nfor Apache Airflow",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/memorydb-for-redis",
+   "name": "MemoryDB for Redis",
+   "library": "aws-architecture-icons",
+   "index": 64,
+   "itemId": "EyubmdrgX4vXAovibO_xv",
+   "category": "database",
+   "icon": {
+    "width": 88,
+    "height": 70,
+    "x": 16,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 117
+   },
+   "caption": "MemoryDB\nfor Redis",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/migration-evaluator",
+   "name": "Migration Evaluator",
+   "library": "aws-architecture-icons",
+   "index": 149,
+   "itemId": "peYXIQTA1LJaTx6in0Bdu",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 91,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 98,
+    "height": 117
+   },
+   "caption": "Migration\nEvaluator",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/migration-hub",
+   "name": "Migration Hub",
+   "library": "aws-architecture-icons",
+   "index": 147,
+   "itemId": "TaUXB9RlEry-B5UGw3qFI",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 33,
+    "y": 0
+   },
+   "size": {
+    "width": 130,
+    "height": 94
+   },
+   "caption": "Migration Hub",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/model",
+   "name": "Model",
+   "library": "aws-architecture-icons",
+   "index": 34,
+   "itemId": "_GTa0AlZsXAkjntv7Z72P",
+   "category": "general",
+   "icon": {
+    "width": 75,
+    "height": 69,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 75,
+    "height": 87
+   },
+   "caption": "Model",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/multi-az-db-cluster",
+   "name": "Multi-AZ DB cluster",
+   "library": "aws-architecture-icons",
+   "index": 63,
+   "itemId": "0ipBVhurlj5ELrSrkPmcn",
+   "category": "general",
+   "icon": {
+    "width": 50,
+    "height": 50,
+    "x": 30,
+    "y": 0
+   },
+   "size": {
+    "width": 110,
+    "height": 100
+   },
+   "caption": "Multi-AZ\nDB cluster",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/nacl",
+   "name": "NACL",
+   "library": "aws-architecture-icons",
+   "index": 221,
+   "itemId": "_PBtGqlVayIrUijv1vsU0",
+   "category": "general",
+   "icon": {
+    "width": 66,
+    "height": 63,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 93
+   },
+   "caption": "NACL",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/nat-gateway",
+   "name": "NAT gateway",
+   "library": "aws-architecture-icons",
+   "index": 217,
+   "itemId": "jLaMow1f9O6qVAGx7UxFt",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 133,
+    "height": 95
+   },
+   "caption": "NAT gateway",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/neptune",
+   "name": "Neptune",
+   "library": "aws-architecture-icons",
+   "index": 60,
+   "itemId": "lKFvAbfaVd64-PvUK_wbf",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 6,
+    "y": 0
+   },
+   "size": {
+    "width": 77,
+    "height": 93
+   },
+   "caption": "Neptune",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/network-firewall",
+   "name": "Network Firewall",
+   "library": "aws-architecture-icons",
+   "index": 205,
+   "itemId": "xzCZJ8xV6VWCXsOJekLeW",
+   "category": "application integration",
+   "icon": {
+    "width": 105,
+    "height": 84,
+    "x": 47,
+    "y": 0
+   },
+   "size": {
+    "width": 158,
+    "height": 94
+   },
+   "caption": "Network Firewall",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/nlb",
+   "name": "NLB",
+   "library": "aws-architecture-icons",
+   "index": 230,
+   "itemId": "IbFkPzntnGHoJ8xxGmCaa",
+   "category": "general",
+   "icon": {
+    "width": 66,
+    "height": 66,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 93
+   },
+   "caption": "NLB",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/notebook",
+   "name": "Notebook",
+   "library": "aws-architecture-icons",
+   "index": 32,
+   "itemId": "rvXDmHTpckYcwZhlgM2NP",
+   "category": "general",
+   "icon": {
+    "width": 55,
+    "height": 63,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 88,
+    "height": 91
+   },
+   "caption": "Notebook",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/opensearch-service",
+   "name": "OpenSearch Service",
+   "library": "aws-architecture-icons",
+   "index": 14,
+   "itemId": "oXPko_hDvU9LDJacj-adl",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 120,
+    "height": 114
+   },
+   "caption": "OpenSearch \nService",
+   "aliases": [
+    "search",
+    "elasticsearch"
+   ]
+  },
+  {
+   "symbol": "aws/opsworks",
+   "name": "OpsWorks",
+   "library": "aws-architecture-icons",
+   "index": 164,
+   "itemId": "0mKioqwekT5loNVuxsQHZ",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 13,
+    "y": 0
+   },
+   "size": {
+    "width": 90,
+    "height": 92
+   },
+   "caption": "OpsWorks",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/organizations",
+   "name": "Organizations",
+   "library": "aws-architecture-icons",
+   "index": 175,
+   "itemId": "r0XoLNkRu_Yfm6pOiaDdb",
+   "category": "application integration",
+   "icon": {
+    "width": 69,
+    "height": 64,
+    "x": 34,
+    "y": 0
+   },
+   "size": {
+    "width": 132,
+    "height": 93
+   },
+   "caption": "Organizations",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/outposts",
+   "name": "Outposts",
+   "library": "aws-architecture-icons",
+   "index": 89,
+   "itemId": "hsGuJcwwfFQPhgiavuB4S",
+   "category": "compute",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 13,
+    "y": 0
+   },
+   "size": {
+    "width": 91,
+    "height": 91
+   },
+   "caption": "Outposts",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/panorama",
+   "name": "Panorama",
+   "library": "aws-architecture-icons",
+   "index": 45,
+   "itemId": "tlbzUiJxbi1oSoCJ_7a8f",
+   "category": "machine learning",
+   "icon": {
+    "width": 70,
+    "height": 65,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 95,
+    "height": 93
+   },
+   "caption": "Panorama",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/parameter-store",
+   "name": "Parameter Store",
+   "library": "aws-architecture-icons",
+   "index": 170,
+   "itemId": "ze01CoCjhyRISws8RXibX",
+   "category": "general",
+   "icon": {
+    "width": 56,
+    "height": 53,
+    "x": 69,
+    "y": 0
+   },
+   "size": {
+    "width": 168,
+    "height": 78
+   },
+   "caption": "Parameter Store",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/peering-connection",
+   "name": "Peering connection",
+   "library": "aws-architecture-icons",
+   "index": 223,
+   "itemId": "U89s5-TbdH_ttu5f-mr5w",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 70,
+    "height": 65,
+    "x": 56,
+    "y": 0
+   },
+   "size": {
+    "width": 174,
+    "height": 95
+   },
+   "caption": "Peering connection",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/permissions",
+   "name": "Permissions",
+   "library": "aws-architecture-icons",
+   "index": 193,
+   "itemId": "GeWMF1-4Bipnho_-kwipU",
+   "category": "general",
+   "icon": {
+    "width": 42,
+    "height": 55,
+    "x": 32,
+    "y": 0
+   },
+   "size": {
+    "width": 107,
+    "height": 79
+   },
+   "caption": "Permissions",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/personal-health-dashboard",
+   "name": "Personal Health Dashboard",
+   "library": "aws-architecture-icons",
+   "index": 163,
+   "itemId": "ysmn9wxIhN5ie0DyowvvA",
+   "category": "application integration",
+   "icon": {
+    "width": 79,
+    "height": 64,
+    "x": 45,
+    "y": 0
+   },
+   "size": {
+    "width": 154,
+    "height": 118
+   },
+   "caption": "Personal Health\nDashboard",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/personalize",
+   "name": "Personalize",
+   "library": "aws-architecture-icons",
+   "index": 28,
+   "itemId": "L5_GCiWbeIc6khWrvm2j9",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 22,
+    "y": 0
+   },
+   "size": {
+    "width": 109,
+    "height": 93
+   },
+   "caption": "Personalize",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/polly",
+   "name": "Polly",
+   "library": "aws-architecture-icons",
+   "index": 29,
+   "itemId": "0zkWdGckeKIKe6GgVHLLN",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 93
+   },
+   "caption": "Polly",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/private-certificate-authority",
+   "name": "Private Certificate Authority",
+   "library": "aws-architecture-icons",
+   "index": 206,
+   "itemId": "MQdTI_rd1KzmkOVV_EcMW",
+   "category": "application integration",
+   "icon": {
+    "width": 85,
+    "height": 93,
+    "x": 63,
+    "y": 0
+   },
+   "size": {
+    "width": 191,
+    "height": 117
+   },
+   "caption": "Private Certificate\nAuthority",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/privatelink",
+   "name": "PrivateLink",
+   "library": "aws-architecture-icons",
+   "index": 232,
+   "itemId": "FAF0_koZsBOIarY6Ij36I",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 118,
+    "height": 81,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 139,
+    "height": 94
+   },
+   "caption": "PrivateLink",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/quantum-ledger-database",
+   "name": "Quantum Ledger Database",
+   "library": "aws-architecture-icons",
+   "index": 77,
+   "itemId": "k-i-X8z8I5ewYrzJ6XUaq",
+   "category": "compute",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 46,
+    "y": 0
+   },
+   "size": {
+    "width": 158,
+    "height": 117
+   },
+   "caption": "Quantum Ledger\nDatabase",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/quicksight",
+   "name": "QuickSight",
+   "library": "aws-architecture-icons",
+   "index": 16,
+   "itemId": "L9i-G1P2Sxd05i6CnwGDt",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 91,
+    "height": 64,
+    "x": 17,
+    "y": 0
+   },
+   "size": {
+    "width": 108,
+    "height": 92
+   },
+   "caption": "QuickSight",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/rds",
+   "name": "RDS",
+   "library": "aws-architecture-icons",
+   "index": 62,
+   "itemId": "IjAjPgKESVfuqT1RATkyC",
+   "category": "compute",
+   "icon": {
+    "width": 66,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 66,
+    "height": 94
+   },
+   "caption": "RDS",
+   "aliases": [
+    "relational database",
+    "postgres",
+    "mysql",
+    "sql database"
+   ]
+  },
+  {
+   "symbol": "aws/rds-instance",
+   "name": "RDS instance",
+   "library": "aws-architecture-icons",
+   "index": 66,
+   "itemId": "pXBx71a9Wxz0_PnXmaSaC",
+   "category": "general",
+   "icon": {
+    "width": 52,
+    "height": 82,
+    "x": 70,
+    "y": 19
+   },
+   "size": {
+    "width": 132,
+    "height": 101
+   },
+   "caption": "RDS instance",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/redshift",
+   "name": "Redshift",
+   "library": "aws-architecture-icons",
+   "index": 15,
+   "itemId": "H04NAYnEA2T7rXK_UxnN4",
+   "category": "management",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 9,
+    "y": 0
+   },
+   "size": {
+    "width": 82,
+    "height": 92
+   },
+   "caption": "Redshift",
+   "aliases": [
+    "data warehouse",
+    "warehouse"
+   ]
+  },
+  {
+   "symbol": "aws/region",
+   "name": "Region",
+   "library": "aws-architecture-icons",
+   "index": 241,
+   "itemId": "DS3ucOAI769BUwmKNzt62",
+   "category": "management",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "Region",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/registry",
+   "name": "Registry",
+   "library": "aws-architecture-icons",
+   "index": 96,
+   "itemId": "RcrAIdTU3XrJPEYhZYTfQ",
+   "category": "general",
+   "icon": {
+    "width": 44,
+    "height": 44,
+    "x": 18,
+    "y": 0
+   },
+   "size": {
+    "width": 80,
+    "height": 71
+   },
+   "caption": "Registry",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/rekognition",
+   "name": "Rekognition",
+   "library": "aws-architecture-icons",
+   "index": 30,
+   "itemId": "mofSAlttXoVSLx-y58Reo",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 20,
+    "y": 0
+   },
+   "size": {
+    "width": 105,
+    "height": 94
+   },
+   "caption": "Rekognition",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/resilience-hub",
+   "name": "Resilience Hub",
+   "library": "aws-architecture-icons",
+   "index": 182,
+   "itemId": "yxNjh4MSaEX2uScl_ZIDw",
+   "category": "application integration",
+   "icon": {
+    "width": 114,
+    "height": 74,
+    "x": 34,
+    "y": 0
+   },
+   "size": {
+    "width": 148,
+    "height": 94
+   },
+   "caption": "Resilience Hub",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/resolver",
+   "name": "Resolver",
+   "library": "aws-architecture-icons",
+   "index": 212,
+   "itemId": "WZX4khv-ARd8YVOnr88TA",
+   "category": "general",
+   "icon": {
+    "width": 77,
+    "height": 88,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 92,
+    "height": 88
+   },
+   "caption": "Resolver",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/resource-access-manager",
+   "name": "Resource Access Manager",
+   "library": "aws-architecture-icons",
+   "index": 203,
+   "itemId": "EILKv_ecU6saAngYdNqDK",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 99,
+    "x": 49,
+    "y": 0
+   },
+   "size": {
+    "width": 163,
+    "height": 118
+   },
+   "caption": "Resource Access\nManager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/role",
+   "name": "Role",
+   "library": "aws-architecture-icons",
+   "index": 194,
+   "itemId": "wQ_EcRFCijrgIEFXtfVIQ",
+   "category": "general",
+   "icon": {
+    "width": 54,
+    "height": 42,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 54,
+    "height": 59
+   },
+   "caption": "Role",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/route-53",
+   "name": "Route 53",
+   "library": "aws-architecture-icons",
+   "index": 211,
+   "itemId": "FYeAY1vO2DcVakYKzRCqV",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 83,
+    "height": 103,
+    "x": 15,
+    "y": 0
+   },
+   "size": {
+    "width": 98,
+    "height": 103
+   },
+   "caption": "Route 53",
+   "aliases": [
+    "dns",
+    "domain"
+   ]
+  },
+  {
+   "symbol": "aws/route-table",
+   "name": "Route table",
+   "library": "aws-architecture-icons",
+   "index": 213,
+   "itemId": "ODBupuSDqhKXAUyIDdJCf",
+   "category": "general",
+   "icon": {
+    "width": 48,
+    "height": 49,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 120,
+    "height": 77
+   },
+   "caption": "Route table",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/rule",
+   "name": "Rule",
+   "library": "aws-architecture-icons",
+   "index": 112,
+   "itemId": "OTTcWa_g4ZNMXCZlp9wSn",
+   "category": "general",
+   "icon": {
+    "width": 49,
+    "height": 49,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 49,
+    "height": 69
+   },
+   "caption": "Rule",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/s3",
+   "name": "S3",
+   "library": "aws-architecture-icons",
+   "index": 74,
+   "itemId": "eijGLomCQ7GyJlHFut5dB",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 93
+   },
+   "caption": "S3",
+   "aliases": [
+    "bucket",
+    "object storage",
+    "blob storage",
+    "simple storage service"
+   ]
+  },
+  {
+   "symbol": "aws/sagemaker",
+   "name": "SageMaker",
+   "library": "aws-architecture-icons",
+   "index": 31,
+   "itemId": "F9lxWEMM2Bs-zg4s7DI6W",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 71,
+    "x": 20,
+    "y": 0
+   },
+   "size": {
+    "width": 104,
+    "height": 94
+   },
+   "caption": "SageMaker",
+   "aliases": [
+    "ml training",
+    "machine learning"
+   ]
+  },
+  {
+   "symbol": "aws/sagemaker-studio-lab",
+   "name": "SageMaker Studio Lab",
+   "library": "aws-architecture-icons",
+   "index": 46,
+   "itemId": "FAXy0_dREic4WLWXyZzmD",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 21,
+    "y": 0
+   },
+   "size": {
+    "width": 107,
+    "height": 117
+   },
+   "caption": "SageMaker\nStudio Lab",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/saving-plans",
+   "name": "Saving Plans",
+   "library": "aws-architecture-icons",
+   "index": 238,
+   "itemId": "DEhILIcxaMxDjtQSQ2Mm7",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 69,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 122,
+    "height": 94
+   },
+   "caption": "Saving Plans",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/scheduler",
+   "name": "Scheduler",
+   "library": "aws-architecture-icons",
+   "index": 114,
+   "itemId": "Pt2VuJnztVsRsEoCTfB4b",
+   "category": "general",
+   "icon": {
+    "width": 45,
+    "height": 57,
+    "x": 23,
+    "y": 0
+   },
+   "size": {
+    "width": 92,
+    "height": 68
+   },
+   "caption": "Scheduler",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/secrets-manager",
+   "name": "Secrets Manager",
+   "library": "aws-architecture-icons",
+   "index": 197,
+   "itemId": "d2NJBTE8iAUWJkivcWGzV",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 96,
+    "x": 51,
+    "y": 0
+   },
+   "size": {
+    "width": 166,
+    "height": 96
+   },
+   "caption": "Secrets Manager",
+   "aliases": [
+    "secrets"
+   ]
+  },
+  {
+   "symbol": "aws/security-hub",
+   "name": "Security Hub",
+   "library": "aws-architecture-icons",
+   "index": 198,
+   "itemId": "dTViCr5kzY71AXMfDAUTt",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 64,
+    "x": 28,
+    "y": 0
+   },
+   "size": {
+    "width": 121,
+    "height": 94
+   },
+   "caption": "Security Hub",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/server-migration-service",
+   "name": "Server Migration Service",
+   "library": "aws-architecture-icons",
+   "index": 150,
+   "itemId": "394yBsKKqwLIcWXKbZo4g",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 70,
+    "x": 47,
+    "y": 0
+   },
+   "size": {
+    "width": 159,
+    "height": 118
+   },
+   "caption": "Server Migration\nService",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/service",
+   "name": "Service",
+   "library": "aws-architecture-icons",
+   "index": 102,
+   "itemId": "eoYvRHyMKOYGwjXDERTge",
+   "category": "general",
+   "icon": {
+    "width": 48,
+    "height": 41,
+    "x": 25,
+    "y": 0
+   },
+   "size": {
+    "width": 74,
+    "height": 70
+   },
+   "caption": "Service",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/service-catalog",
+   "name": "Service Catalog",
+   "library": "aws-architecture-icons",
+   "index": 166,
+   "itemId": "BOCH74QLWbncjY7JL1Uu5",
+   "category": "application integration",
+   "icon": {
+    "width": 69,
+    "height": 64,
+    "x": 42,
+    "y": 0
+   },
+   "size": {
+    "width": 155,
+    "height": 93
+   },
+   "caption": "Service Catalog",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/ses",
+   "name": "SES",
+   "library": "aws-architecture-icons",
+   "index": 154,
+   "itemId": "X3CbgfBUJbOsd9Fp7vj8B",
+   "category": "front-end and mobile",
+   "icon": {
+    "width": 64,
+    "height": 88,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 92
+   },
+   "caption": "SES",
+   "aliases": [
+    "email"
+   ]
+  },
+  {
+   "symbol": "aws/session-manager",
+   "name": "Session Manager",
+   "library": "aws-architecture-icons",
+   "index": 172,
+   "itemId": "A50LzHs5HmT_OqBDSY_OQ",
+   "category": "general",
+   "icon": {
+    "width": 73,
+    "height": 48,
+    "x": 58,
+    "y": 0
+   },
+   "size": {
+    "width": 162,
+    "height": 72
+   },
+   "caption": "Session Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/shield",
+   "name": "Shield",
+   "library": "aws-architecture-icons",
+   "index": 199,
+   "itemId": "1VZep6mrRo-YtXPnSLJSB",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 96,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 96
+   },
+   "caption": "Shield",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/site-to-site-vpn",
+   "name": "Site-to-Site VPN",
+   "library": "aws-architecture-icons",
+   "index": 227,
+   "itemId": "IRD7f9bMknmBXZCR28bR4",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 31,
+    "y": 0
+   },
+   "size": {
+    "width": 126,
+    "height": 118
+   },
+   "caption": "Site-to-Site \nVPN",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/snowball",
+   "name": "Snowball",
+   "library": "aws-architecture-icons",
+   "index": 72,
+   "itemId": "FRAUaqBdb6N-_hC5AqxZY",
+   "category": "storage",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 7,
+    "y": 0
+   },
+   "size": {
+    "width": 79,
+    "height": 91
+   },
+   "caption": "Snowball",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/sns",
+   "name": "SNS",
+   "library": "aws-architecture-icons",
+   "index": 105,
+   "itemId": "xNMp9K9f3ficovk5-G0PE",
+   "category": "application integration",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 93
+   },
+   "caption": "SNS",
+   "aliases": [
+    "topic",
+    "pub sub",
+    "notification",
+    "simple notification service"
+   ]
+  },
+  {
+   "symbol": "aws/spot-fleet",
+   "name": "Spot Fleet",
+   "library": "aws-architecture-icons",
+   "index": 244,
+   "itemId": "uyCu5rJoBmiAuYD7f_muk",
+   "category": "compute",
+   "icon": {
+    "width": 270,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 270,
+    "height": 165
+   },
+   "caption": "Spot Fleet",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/spot-instance",
+   "name": "Spot instance",
+   "library": "aws-architecture-icons",
+   "index": 84,
+   "itemId": "erIsr_wdOm0Ulep-XH0Q4",
+   "category": "general",
+   "icon": {
+    "width": 65,
+    "height": 66,
+    "x": 33,
+    "y": 0
+   },
+   "size": {
+    "width": 134,
+    "height": 91
+   },
+   "caption": "Spot instance",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/sqs",
+   "name": "SQS",
+   "library": "aws-architecture-icons",
+   "index": 106,
+   "itemId": "938jZm3jleMeDGTc-1PTZ",
+   "category": "application integration",
+   "icon": {
+    "width": 65,
+    "height": 71,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 93
+   },
+   "caption": "SQS",
+   "aliases": [
+    "queue",
+    "message queue",
+    "simple queue service"
+   ]
+  },
+  {
+   "symbol": "aws/step-functions",
+   "name": "Step Functions",
+   "library": "aws-architecture-icons",
+   "index": 109,
+   "itemId": "ktP3XAjM9Z8oOrj0VvxPz",
+   "category": "application integration",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 40,
+    "y": 0
+   },
+   "size": {
+    "width": 143,
+    "height": 93
+   },
+   "caption": "Step Functions",
+   "aliases": [
+    "workflow",
+    "state machine",
+    "orchestration"
+   ]
+  },
+  {
+   "symbol": "aws/storage-gateway",
+   "name": "Storage Gateway",
+   "library": "aws-architecture-icons",
+   "index": 69,
+   "itemId": "ZXlsAHd4wiV3yRhsL_amz",
+   "category": "storage",
+   "icon": {
+    "width": 93,
+    "height": 84,
+    "x": 11,
+    "y": 0
+   },
+   "size": {
+    "width": 105,
+    "height": 118
+   },
+   "caption": "Storage \nGateway",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/stream",
+   "name": "Stream",
+   "library": "aws-architecture-icons",
+   "index": 57,
+   "itemId": "fZFsFOwgmt_sPz8CcVCPs",
+   "category": "general",
+   "icon": {
+    "width": 53,
+    "height": 46,
+    "x": 8,
+    "y": 0
+   },
+   "size": {
+    "width": 69,
+    "height": 74
+   },
+   "caption": "Stream",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/support",
+   "name": "Support",
+   "library": "aws-architecture-icons",
+   "index": 239,
+   "itemId": "FnWho_duWIfkF4_zaC9jq",
+   "category": "management",
+   "icon": {
+    "width": 79,
+    "height": 105,
+    "x": 5,
+    "y": 0
+   },
+   "size": {
+    "width": 83,
+    "height": 105
+   },
+   "caption": "Support",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/system-manager",
+   "name": "System Manager",
+   "library": "aws-architecture-icons",
+   "index": 167,
+   "itemId": "kWlcTXXY9FhvAS0_ijB5n",
+   "category": "application integration",
+   "icon": {
+    "width": 108,
+    "height": 84,
+    "x": 47,
+    "y": 0
+   },
+   "size": {
+    "width": 158,
+    "height": 94
+   },
+   "caption": "System Manager",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/task",
+   "name": "Task",
+   "library": "aws-architecture-icons",
+   "index": 101,
+   "itemId": "f0ni9PAxZTIIuoEVbGoOV",
+   "category": "general",
+   "icon": {
+    "width": 33,
+    "height": 44,
+    "x": 10,
+    "y": 0
+   },
+   "size": {
+    "width": 52,
+    "height": 72
+   },
+   "caption": "Task",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/textract",
+   "name": "Textract",
+   "library": "aws-architecture-icons",
+   "index": 38,
+   "itemId": "taIOgDPp5n8wdmtLzSR6i",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 14,
+    "y": 0
+   },
+   "size": {
+    "width": 93,
+    "height": 93
+   },
+   "caption": "Textract",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/timestream",
+   "name": "Timestream",
+   "library": "aws-architecture-icons",
+   "index": 61,
+   "itemId": "EVPPKKIno4z_X_ExDuuyu",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 23,
+    "y": 0
+   },
+   "size": {
+    "width": 112,
+    "height": 93
+   },
+   "caption": "Timestream",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/tools-and-sdks",
+   "name": "Tools and SDKs",
+   "library": "aws-architecture-icons",
+   "index": 131,
+   "itemId": "gWv35LyzfPsdoNzZNjJo7",
+   "category": "database",
+   "icon": {
+    "width": 64,
+    "height": 65,
+    "x": 23,
+    "y": 0
+   },
+   "size": {
+    "width": 110,
+    "height": 116
+   },
+   "caption": "Tools and \nSDKS",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/train",
+   "name": "Train",
+   "library": "aws-architecture-icons",
+   "index": 35,
+   "itemId": "jXPICXM-tKq4ONBSpLPx5",
+   "category": "general",
+   "icon": {
+    "width": 59,
+    "height": 53,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 59,
+    "height": 81
+   },
+   "caption": "Train",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/transcribe",
+   "name": "Transcribe",
+   "library": "aws-architecture-icons",
+   "index": 39,
+   "itemId": "DiV2BRI2lJ_NOpkCQOfB_",
+   "category": "machine learning",
+   "icon": {
+    "width": 70,
+    "height": 65,
+    "x": 19,
+    "y": 0
+   },
+   "size": {
+    "width": 102,
+    "height": 93
+   },
+   "caption": "Transcribe",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/transfer-family",
+   "name": "Transfer Family",
+   "library": "aws-architecture-icons",
+   "index": 143,
+   "itemId": "Czb2rvmsNRPz1Yh5GbId7",
+   "category": "machine learning",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 44,
+    "y": 0
+   },
+   "size": {
+    "width": 154,
+    "height": 94
+   },
+   "caption": "Transfer Family",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/transit-gateway",
+   "name": "Transit Gateway",
+   "library": "aws-architecture-icons",
+   "index": 207,
+   "itemId": "rNXrVB26xOfTrOAjvvUI_",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 65,
+    "height": 65,
+    "x": 53,
+    "y": 0
+   },
+   "size": {
+    "width": 170,
+    "height": 94
+   },
+   "caption": "Transit Gateway",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/vpc",
+   "name": "VPC",
+   "library": "aws-architecture-icons",
+   "index": 214,
+   "itemId": "D3qMNxM4FpG1aGfR3L1mi",
+   "category": "analytics and networking",
+   "icon": {
+    "width": 114,
+    "height": 76,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 114,
+    "height": 94
+   },
+   "caption": "VPC",
+   "aliases": [
+    "network",
+    "virtual private cloud"
+   ]
+  },
+  {
+   "symbol": "aws/vpn-connection",
+   "name": "VPN Connection",
+   "library": "aws-architecture-icons",
+   "index": 222,
+   "itemId": "mbn1tMb5PHPMr2UasP89-",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 18,
+    "y": 0
+   },
+   "size": {
+    "width": 100,
+    "height": 114
+   },
+   "caption": "VPN \nConnection",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/vpn-gateway",
+   "name": "VPN gateway",
+   "library": "aws-architecture-icons",
+   "index": 216,
+   "itemId": "3shwlUNGa4KJUAbqmNl2Q",
+   "category": "general",
+   "icon": {
+    "width": 63,
+    "height": 63,
+    "x": 36,
+    "y": 0
+   },
+   "size": {
+    "width": 127,
+    "height": 95
+   },
+   "caption": "VPN gateway",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/waf",
+   "name": "WAF",
+   "library": "aws-architecture-icons",
+   "index": 201,
+   "itemId": "5cwie-54jF1d0k0xeDzFR",
+   "category": "application integration",
+   "icon": {
+    "width": 64,
+    "height": 90,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 64,
+    "height": 94
+   },
+   "caption": "WAF",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/well-arhitected-tool",
+   "name": "Well-Arhitected Tool",
+   "library": "aws-architecture-icons",
+   "index": 173,
+   "itemId": "yq7AZsc_wIXKJMrCGKx5p",
+   "category": "application integration",
+   "icon": {
+    "width": 87,
+    "height": 64,
+    "x": 46,
+    "y": 0
+   },
+   "size": {
+    "width": 157,
+    "height": 118
+   },
+   "caption": "Well-Architected\nTool",
+   "aliases": []
+  },
+  {
+   "symbol": "aws/x-ray",
+   "name": "X-Ray",
+   "library": "aws-architecture-icons",
+   "index": 132,
+   "itemId": "jn6yAgiIQe90t-E8QImr4",
+   "category": "database",
+   "icon": {
+    "width": 65,
+    "height": 75,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 65,
+    "height": 92
+   },
+   "caption": "X-Ray",
+   "aliases": []
+  },
+  {
+   "symbol": "software/actor",
+   "name": "Actor",
+   "library": "software-architecture",
+   "index": 3,
+   "itemId": "software-architecture-3",
+   "category": "people",
+   "icon": {
+    "width": 143,
+    "height": 155,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 143,
+    "height": 155
+   },
+   "caption": null,
+   "aliases": [
+    "user",
+    "person",
+    "human"
+   ]
+  },
+  {
+   "symbol": "software/browser-window",
+   "name": "Browser window",
+   "library": "software-architecture",
+   "index": 4,
+   "itemId": "software-architecture-4",
+   "category": "client",
+   "icon": {
+    "width": 88,
+    "height": 123,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 88,
+    "height": 123
+   },
+   "caption": null,
+   "aliases": [
+    "browser",
+    "web client",
+    "frontend"
+   ]
+  },
+  {
+   "symbol": "software/cloud",
+   "name": "Cloud",
+   "library": "software-architecture",
+   "index": 1,
+   "itemId": "software-architecture-1",
+   "category": "network",
+   "icon": {
+    "width": 91,
+    "height": 165,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 91,
+    "height": 165
+   },
+   "caption": null,
+   "aliases": []
+  },
+  {
+   "symbol": "software/connector",
+   "name": "Connector",
+   "library": "software-architecture",
+   "index": 0,
+   "itemId": "software-architecture-0",
+   "category": "general",
+   "icon": {
+    "width": 116,
+    "height": 104,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 116,
+    "height": 104
+   },
+   "caption": null,
+   "aliases": []
+  },
+  {
+   "symbol": "software/database-cylinder",
+   "name": "Database cylinder",
+   "library": "software-architecture",
+   "index": 6,
+   "itemId": "software-architecture-6",
+   "category": "storage",
+   "icon": {
+    "width": 71,
+    "height": 108,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 71,
+    "height": 108
+   },
+   "caption": null,
+   "aliases": [
+    "database",
+    "db",
+    "cylinder"
+   ]
+  },
+  {
+   "symbol": "software/decision",
+   "name": "Decision",
+   "library": "software-architecture",
+   "index": 2,
+   "itemId": "software-architecture-2",
+   "category": "control",
+   "icon": {
+    "width": 113,
+    "height": 71,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 113,
+    "height": 71
+   },
+   "caption": null,
+   "aliases": []
+  },
+  {
+   "symbol": "software/server-rack",
+   "name": "Server rack",
+   "library": "software-architecture",
+   "index": 5,
+   "itemId": "software-architecture-5",
+   "category": "compute",
+   "icon": {
+    "width": 129,
+    "height": 77,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 129,
+    "height": 77
+   },
+   "caption": null,
+   "aliases": [
+    "server",
+    "on prem",
+    "rack"
+   ]
+  }
+ ]
+}

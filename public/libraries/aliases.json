@@ -1,0 +1,200 @@
+{
+  "names": {
+    "software-architecture": {
+      "0": "Connector",
+      "1": "Cloud",
+      "2": "Decision",
+      "3": "Actor",
+      "4": "Browser window",
+      "5": "Server rack",
+      "6": "Database cylinder"
+    }
+  },
+  "categories": {
+    "software-architecture": {
+      "Connector": "general",
+      "Cloud": "network",
+      "Decision": "control",
+      "Actor": "people",
+      "Browser window": "client",
+      "Server rack": "compute",
+      "Database cylinder": "storage"
+    }
+  },
+  "aliases": {
+    "aws/amazon-bedrock": [
+      "llm",
+      "foundation model",
+      "genai"
+    ],
+    "aws/api-gateway": [
+      "rest api",
+      "api endpoint",
+      "gateway",
+      "http api"
+    ],
+    "aws/athena": [
+      "query",
+      "sql on s3"
+    ],
+    "aws/aurora": [
+      "aurora postgres",
+      "aurora mysql"
+    ],
+    "aws/aws-cloud": [
+      "aws account",
+      "cloud boundary"
+    ],
+    "aws/cloudformation": [
+      "infrastructure as code",
+      "iac",
+      "stack"
+    ],
+    "aws/cloudfront": [
+      "cdn",
+      "edge cache"
+    ],
+    "aws/cloudwatch": [
+      "monitoring",
+      "metrics",
+      "logs",
+      "alarms"
+    ],
+    "aws/codepipeline": [
+      "ci cd",
+      "pipeline"
+    ],
+    "aws/cognito": [
+      "auth",
+      "user pool",
+      "login"
+    ],
+    "aws/dynamodb": [
+      "nosql",
+      "key value store",
+      "dynamo"
+    ],
+    "aws/ec2": [
+      "virtual machine",
+      "vm",
+      "instance",
+      "server"
+    ],
+    "aws/ecs": [
+      "container service",
+      "containers"
+    ],
+    "aws/eks": [
+      "kubernetes",
+      "k8s"
+    ],
+    "aws/elasticache": [
+      "cache",
+      "redis",
+      "memcached"
+    ],
+    "aws/eventbridge": [
+      "event bus",
+      "events"
+    ],
+    "aws/fargate": [
+      "serverless containers"
+    ],
+    "aws/glue": [
+      "etl"
+    ],
+    "aws/iam": [
+      "identity",
+      "permissions",
+      "roles"
+    ],
+    "aws/kinesis-data-streams": [
+      "stream",
+      "event stream"
+    ],
+    "aws/lambda": [
+      "function",
+      "serverless",
+      "faas",
+      "aws lambda"
+    ],
+    "aws/managed-streaming-for-apache-kafka": [
+      "kafka",
+      "msk"
+    ],
+    "aws/opensearch-service": [
+      "search",
+      "elasticsearch"
+    ],
+    "aws/rds": [
+      "relational database",
+      "postgres",
+      "mysql",
+      "sql database"
+    ],
+    "aws/redshift": [
+      "data warehouse",
+      "warehouse"
+    ],
+    "aws/route-53": [
+      "dns",
+      "domain"
+    ],
+    "aws/s3": [
+      "bucket",
+      "object storage",
+      "blob storage",
+      "simple storage service"
+    ],
+    "aws/sagemaker": [
+      "ml training",
+      "machine learning"
+    ],
+    "aws/secrets-manager": [
+      "secrets"
+    ],
+    "aws/ses": [
+      "email"
+    ],
+    "aws/sns": [
+      "topic",
+      "pub sub",
+      "notification",
+      "simple notification service"
+    ],
+    "aws/sqs": [
+      "queue",
+      "message queue",
+      "simple queue service"
+    ],
+    "aws/step-functions": [
+      "workflow",
+      "state machine",
+      "orchestration"
+    ],
+    "aws/vpc": [
+      "network",
+      "virtual private cloud"
+    ],
+    "software/actor": [
+      "user",
+      "person",
+      "human"
+    ],
+    "software/browser-window": [
+      "browser",
+      "web client",
+      "frontend"
+    ],
+    "software/database-cylinder": [
+      "database",
+      "db",
+      "cylinder"
+    ],
+    "software/server-rack": [
+      "server",
+      "on prem",
+      "rack"
+    ]
+  }
+}
