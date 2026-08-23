@@ -14,7 +14,8 @@ import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type 
 import { computeTiers } from "../scene/tiers";
 import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
 import { absolutePoints, assignPorts, dropCollinear, nudgeRoutes, passesThrough, polylineThroughBox, ROUTE_PAD, routeEdge, softenCorners, type Point } from "./route";
-import { DEFAULT_STYLE, freshFill, houseStyle, resolveLook, type Shape } from "./style";
+import { pickKindLook, toneLook, toneOfTag, type Role, type Tone } from "./palette";
+import { DEFAULT_STYLE, houseStyle, kindOf, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
 // the operations
@@ -94,6 +95,10 @@ export interface DefineKind {
   op: "define_kind";
   kind: string;
   shape?: Shape;
+  /** What the kind means to a reader — picks the conventional hue (D77). */
+  tone?: Tone;
+  /** What family of thing it is, when no tone applies (D77). */
+  role?: Role;
   style?: { backgroundColor?: string; strokeColor?: string; strokeStyle?: string; fillStyle?: string; strokeWidth?: number };
 }
 
@@ -262,6 +267,37 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
   };
 
+  /**
+   * A tag with a conventional name colours itself (D77): the legend gains a
+   * stroke rule for it and the component wears that stroke, so the export
+   * reads the tag back off the picture. The kind is the louder meaning,
+   * though — if the stroke would stop the component reading as the kind it
+   * is (a legend rule that names a stroke colour), the tag keeps quiet.
+   */
+  const tagTones = (tags: readonly string[], shape: Shape, style: WriteStyle, about: string): WriteStyle => {
+    let next = style;
+    const was = kindOf(style, shape, legend);
+    for (const tag of tags) {
+      if (legend.some((r) => r.key === "tag" && r.meaning === tag)) continue;
+      const tone = toneOfTag(tag);
+      if (!tone) continue;
+      const look = toneLook(tone);
+      const candidate: WriteStyle = { ...next, strokeColor: look.stroke, ...(look.strokeStyle ? { strokeStyle: look.strokeStyle } : {}) };
+      const rule: LegendRule = { attr: "strokeColor", value: look.stroke, key: "tag", meaning: tag };
+      if (look.strokeStyle) rule.also = [{ attr: "strokeStyle", value: look.strokeStyle }];
+      const trial = [...legend, rule];
+      if (kindOf(candidate, shape, trial) !== was) {
+        notes.push(`${about}: tag ${tag} kept the kind's stroke — a ${tone} one would change what kind it reads as`);
+        continue;
+      }
+      legend = trial;
+      legendChanged = true;
+      next = candidate;
+      notes.push(`tag ${tag} → ${look.name} stroke (${tone})`);
+    }
+    return next;
+  };
+
   for (const [i, op] of ops.entries()) {
     const at = `op ${i + 1} (${op.op})`;
     switch (op.op) {
@@ -275,18 +311,29 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           notes.push(`${kind} is already in the legend — kept as is`);
           break;
         }
-        const fill = op.style?.backgroundColor ?? freshFill(legend.filter((r) => r.attr === "backgroundColor").map((r) => r.value));
+        // Colour means something (D77): a tone or a role picks the hue the
+        // reader already knows, and without either the fill that stands
+        // furthest from every kind the legend draws — with a second channel
+        // once hue alone has stopped separating. A raw style still wins,
+        // field by field, as it always has (D59).
+        const picked = pickKindLook({ kind, tone: op.tone, role: op.role, taken: legend, shape: op.shape });
+        const fill = op.style?.backgroundColor ?? picked.backgroundColor;
+        const shape = op.shape ?? picked.shape;
+        const strokeColor = op.style?.strokeColor ?? picked.strokeColor;
+        const strokeStyle = op.style?.strokeStyle ?? picked.strokeStyle;
+        const fillStyle = op.style?.fillStyle ?? picked.fillStyle;
         const rule: LegendRule = { attr: "backgroundColor", value: fill, key: "kind", meaning: kind };
         const also: { attr: LegendRule["attr"]; value: string }[] = [];
-        if (op.shape) also.push({ attr: "shape", value: op.shape });
-        if (op.style?.strokeColor) also.push({ attr: "strokeColor", value: op.style.strokeColor });
-        if (op.style?.strokeStyle) also.push({ attr: "strokeStyle", value: op.style.strokeStyle });
-        if (op.style?.fillStyle) also.push({ attr: "fillStyle", value: op.style.fillStyle });
+        if (shape) also.push({ attr: "shape", value: shape });
+        if (strokeColor) also.push({ attr: "strokeColor", value: strokeColor });
+        if (strokeStyle) also.push({ attr: "strokeStyle", value: strokeStyle });
+        if (fillStyle) also.push({ attr: "fillStyle", value: fillStyle });
         if (op.style?.strokeWidth) also.push({ attr: "strokeWidth", value: String(op.style.strokeWidth) });
         if (also.length) rule.also = also;
         legend = [...legend, rule];
         legendChanged = true;
-        notes.push(`legend: ${kind} → ${op.shape ?? "any shape"} with fill ${fill}`);
+        const chosen = `legend: ${kind} → ${shape ?? "any shape"} with ${fill === "transparent" ? "no fill" : `fill ${fill}`}`;
+        notes.push(op.style ? chosen : `${chosen} — ${picked.why}`);
         break;
       }
       case "add_frame": {
@@ -379,7 +426,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           notes.push(`${label}: kind "${kind}" is not in the legend and nothing is drawn as it yet — define_kind to give it a look`);
         }
         const shape: Shape = op.shape ?? look.shape;
-        const style: WriteStyle = { ...look.style, ...(op.style ?? {}) };
+        const tags = op.tags?.length ? op.tags.map(clean).filter(Boolean) : [];
+        let style: WriteStyle = { ...look.style, ...(op.style ?? {}) };
+        // A raw stroke is the author's own; otherwise a conventional tag may
+        // colour it (D77).
+        if (tags.length && !op.style?.strokeColor) style = tagTones(tags, shape, style, label);
         const size = sizeForLabel(label, style.fontSize, shape);
         let anchor: Box | null = null;
         // The gap from the anchor is at least the words on the edge between them (D70).
@@ -416,7 +467,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         noteGrow(frameId, box);
         const id = nextId();
         const meaning: WriteMeaning = {};
-        if (op.tags?.length) meaning.tags = op.tags.map(clean).filter(Boolean);
+        if (tags.length) meaning.tags = tags;
         if (op.intents?.length) meaning.intents = op.intents.map(clean).filter(Boolean);
         if (op.logic) meaning.logic = op.logic;
         const node: WriteShape = {
@@ -524,6 +575,21 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
                 noteGrow(f, placed);
               }
             }
+          }
+        }
+        // Tags gained here colour themselves the same way they do on a new
+        // component (D77) — on the shape this batch just made, or as a patch.
+        if (meaning.tags?.length && kindOfTarget === "node") {
+          const made = write.shapes.find((s) => s.id === target);
+          const node = graph.nodes.find((n) => n.sourceId === target);
+          const tagShape = (made?.type ?? node?.shape ?? house.defaultShape) as Shape;
+          const before: WriteStyle = { ...(made?.style ?? { ...DEFAULT_STYLE, ...(node?.style ?? {}) }), ...(patch.style ?? {}) };
+          const toned = tagTones(meaning.tags, tagShape, before, patch.label ?? node?.label ?? op.id);
+          if (toned !== before) {
+            if (made) {
+              made.style = toned;
+              delete patch.style;
+            } else patch.style = { ...(patch.style ?? {}), strokeColor: toned.strokeColor, strokeStyle: toned.strokeStyle };
           }
         }
         if (Object.keys(meaning).length) patch.meaning = meaning;
