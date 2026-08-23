@@ -83,6 +83,7 @@ describe("mcp streamable http", () => {
       "dive",
       "edit",
       "find",
+      "find_symbol",
       "flow",
       "focus",
       "get_mermaid",
@@ -119,6 +120,20 @@ describe("mcp streamable http", () => {
     };
     expect(body.result.isError).toBe(true);
     expect(body.result.content[0].text).toContain("No canvas connected");
+  });
+
+  it("answers find_symbol from the checked-in catalog, with no canvas (D82)", async () => {
+    const res = await rpc("tools/call", { name: "find_symbol", arguments: { query: "queue" } }, 6);
+    const body = (await res.json()) as {
+      result: { isError?: boolean; content: { text: string }[] };
+    };
+    expect(body.result.isError).toBeUndefined();
+    const answer = JSON.parse(body.result.content[0].text) as {
+      hits: { symbol: string; name: string }[];
+      libraries: string[];
+    };
+    expect(answer.hits[0].symbol).toBe("aws/sqs");
+    expect(answer.libraries).toContain("aws-architecture-icons");
   });
 
   it("rejects unknown tools and unknown methods per JSON-RPC", async () => {
@@ -202,7 +217,7 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(34);
+    expect(tools.result.tools).toHaveLength(35);
   });
 
   it("relays tool calls, including their errors", async () => {

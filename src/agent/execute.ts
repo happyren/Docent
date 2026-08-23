@@ -17,9 +17,18 @@ import type { SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
 import { listProjects, listScenes } from "../portfolio/client";
+import catalogJson from "../../public/libraries/catalog.json";
+import { answerFindSymbol, loadCatalog, type SymbolCatalog } from "../libraries/catalog";
 
 /** Above this many components, get_scene_graph answers with the outline (D45). */
 export const WALL_THRESHOLD = 150;
+
+/**
+ * The bundled symbol catalog (D81), parsed once: `find_symbol` reads static
+ * data, so it needs no canvas and never touches the scene (D82).
+ */
+let catalog: SymbolCatalog | null = null;
+const symbolCatalog = (): SymbolCatalog => (catalog ??= loadCatalog(catalogJson));
 
 /**
  * The table of contents (D45): tiers, frames with their tier and parentage,
@@ -305,6 +314,8 @@ export async function execute(
       return buildOutline(commands, commands.getSceneGraph());
     case "find":
       return findInDiagram(commands, commands.getSceneGraph(), String(params.query ?? ""));
+    case "find_symbol":
+      return answerFindSymbol(symbolCatalog(), params);
     case "get_mermaid":
       return exportScene(commands.getSceneSnapshot()).mermaid;
     case "read_frame": {
