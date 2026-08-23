@@ -76,10 +76,17 @@ const saturate = (weight: number, measure: number, hopeless: number): number =>
 
 /** A direction change smaller than this is not a bend a reader would name. */
 const TURN_DEGREES = 20;
-/** Within this of an axis, a segment reads as horizontal or vertical. */
-const AXIS_DEGREES = 3;
+/**
+ * Within this of an axis, a segment reads as horizontal or vertical. Wide
+ * enough that an edge leaving one port and entering another a little
+ * higher (D75) is still a straight flow to the eye; a real diagonal is
+ * well past it.
+ */
+const AXIS_DEGREES = 12;
 /** Centres this close on the cross axis read as lined up. */
 const ALIGN_PX = 2;
+/** Edge ends this close on a component meet there; farther apart are separate ports. */
+const MEETING_PX = 10;
 /**
  * Turns closer together than this along the line are ONE bend: D75 draws a
  * right-angle corner as two points a radius either side of it, so a
@@ -341,13 +348,43 @@ function alignmentPart(nodes: readonly GraphNode[], edges: readonly EdgeGeom[]):
       if (Math.min(angle, 90 - angle) > AXIS_DEGREES) offAxis += 1;
     }
   }
+  // A straight edge of a fan — one parent to several children, or the
+  // reverse — is a diagonal by nature; it is counted as the fan's shape,
+  // not as a segment off the axis.
+  const fanEdges = new Set<EdgeGeom>();
+  {
+    const outs = new Map<string, number>();
+    const ins = new Map<string, number>();
+    for (const e of edges) {
+      outs.set(e.from.id, (outs.get(e.from.id) ?? 0) + 1);
+      ins.set(e.to.id, (ins.get(e.to.id) ?? 0) + 1);
+    }
+    for (const e of edges) if (e.points.length === 2 && ((outs.get(e.from.id) ?? 0) > 1 || (ins.get(e.to.id) ?? 0) > 1)) fanEdges.add(e);
+  }
+  for (const e of fanEdges) {
+    const [p, q] = [e.points[0], e.points[1]];
+    if (Math.hypot(q[0] - p[0], q[1] - p[1]) <= SHORT_SEGMENT) continue;
+    const angle = (Math.atan2(Math.abs(q[1] - p[1]), Math.abs(q[0] - p[0])) * 180) / Math.PI;
+    if (Math.min(angle, 90 - angle) > AXIS_DEGREES) {
+      offAxis -= 1;
+    }
+  }
   const rank = ranksOf(nodes, edges);
+  // Only a one-to-one link can be level: a parent of three children is level
+  // with one of them at best, and the other two are no fault of the layout.
+  const outDegree = new Map<string, number>();
+  const inDegree = new Map<string, number>();
+  for (const e of edges) {
+    outDegree.set(e.from.id, (outDegree.get(e.from.id) ?? 0) + 1);
+    inDegree.set(e.to.id, (inDegree.get(e.to.id) ?? 0) + 1);
+  }
   let pairs = 0;
   let offLine = 0;
   for (const e of edges) {
     const a = rank.get(e.from.id);
     const b = rank.get(e.to.id);
     if (a === undefined || b === undefined || Math.abs(a - b) !== 1) continue;
+    if ((outDegree.get(e.from.id) ?? 0) !== 1 || (inDegree.get(e.to.id) ?? 0) !== 1) continue;
     pairs += 1;
     const p = centre(e.from.bounds);
     const q = centre(e.to.bounds);
@@ -384,7 +421,9 @@ function lengthsPart(edges: readonly EdgeGeom[]): CraftPart {
   const variance = lengths.reduce((a, l) => a + (l - mean) ** 2, 0) / lengths.length;
   const cv = mean > 1e-9 ? Math.sqrt(variance) / mean : 0;
   // Hopeless at a spread as wide as the mean itself.
-  const penalty = saturate(CRAFT_WEIGHTS.lengths, cv, 1);
+  // One routed edge among short ones already varies lengths by their mean;
+  // a spread of twice the mean is where a frame reads as scattered.
+  const penalty = saturate(CRAFT_WEIGHTS.lengths, cv, 2);
   return {
     key: "lengths",
     value: round2(cv),
@@ -396,13 +435,17 @@ function lengthsPart(edges: readonly EdgeGeom[]): CraftPart {
 
 /** The tightest angle between two edges meeting at one component (D75). */
 function anglesPart(edges: readonly EdgeGeom[]): CraftPart {
-  const atNode = new Map<string, { label: string; angles: number[] }>();
+  // Two edges meet only when they touch the component at the same place;
+  // edges spread along a side by their ports (D75) leave from different
+  // points and are told apart by that, whatever their directions.
+  const atNode = new Map<string, { label: string; angles: number[]; at: Point[] }>();
   const add = (node: GraphNode, away: Point, at: Point) => {
     const dx = away[0] - at[0];
     const dy = away[1] - at[1];
     if (Math.hypot(dx, dy) < 1e-9) return;
-    const slot = atNode.get(node.id) ?? { label: node.label ?? node.id, angles: [] };
+    const slot = atNode.get(node.id) ?? { label: node.label ?? node.id, angles: [], at: [] };
     slot.angles.push((Math.atan2(dy, dx) * 180) / Math.PI);
+    slot.at.push(at);
     atNode.set(node.id, slot);
   };
   for (const e of edges) {
@@ -414,6 +457,7 @@ function anglesPart(edges: readonly EdgeGeom[]): CraftPart {
   for (const [, slot] of [...atNode].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
     for (let i = 0; i < slot.angles.length; i++) {
       for (let j = i + 1; j < slot.angles.length; j++) {
+        if (Math.hypot(slot.at[i][0] - slot.at[j][0], slot.at[i][1] - slot.at[j][1]) > MEETING_PX) continue;
         let between = Math.abs(slot.angles[i] - slot.angles[j]);
         if (between > 180) between = 360 - between;
         if (between < tightest) {
