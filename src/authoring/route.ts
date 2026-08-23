@@ -344,7 +344,12 @@ export function routeEdge(
   // A grid segment is open when it passes through no padded obstacle, and
   // not through the ends' own interiors either (the ports sit on their
   // padded edges; the path must not re-enter).
-  const solid = [...blocks, pad(from, 0), pad(to, 0)];
+  // The ends' own clearance is solid too (D78): a route leaves a port
+  // outward and never comes back inside the band between the box and the
+  // port to run along a neighbour's grid line — that was a hairpin at the
+  // port, drawn for all to see. Ports sit on the band's edge, so the stub
+  // from outline to port is the one leg allowed through it.
+  const solid = [...blocks, pad(from, Math.max(0, clearance - 1)), pad(to, Math.max(0, clearance - 1))];
   const open = (p: Point, q: Point) => !solid.some((o) => segmentThroughBox(p, q, o));
 
   // The four ports D72 knew: the middle of each padded side of each end.

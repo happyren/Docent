@@ -257,14 +257,19 @@ export interface LayoutOptions {
 
 /**
  * The order the components were authored in, as dense indices: the
- * caller's when it can say, position order otherwise (D79).
+ * caller's when it can say, position order otherwise (D79) — left to
+ * right first, since that is the way a flow is drawn, by the centre so a
+ * taller component in a row does not come first for its lower top, then
+ * top to bottom.
  */
 function authoredOrder(nodes: readonly GraphNode[], order?: (id: string) => number): Map<string, number> {
   const byId = (a: GraphNode, b: GraphNode) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const cx = (n: GraphNode) => n.bounds.x + n.bounds.width / 2;
+  const cy = (n: GraphNode) => n.bounds.y + n.bounds.height / 2;
   const sorted = [...nodes].sort(
     order
       ? (a, b) => order(a.id) - order(b.id) || byId(a, b)
-      : (a, b) => a.bounds.y - b.bounds.y || a.bounds.x - b.bounds.x || byId(a, b),
+      : (a, b) => cx(a) - cx(b) || cy(a) - cy(b) || byId(a, b),
   );
   return new Map(sorted.map((n, i) => [n.id, i]));
 }
