@@ -1165,8 +1165,12 @@ mod tests {
 
     #[test]
     fn provider_path_is_own_then_shell_then_fallback_without_repeats() {
+        // Joined with the platform's own separator: a colon on Unix, a
+        // semicolon on Windows.
+        let own = ["/usr/bin", "/bin"].join(PATH_SEPARATOR);
+        let shell = ["/opt/homebrew/bin", "/usr/bin", ""].join(PATH_SEPARATOR);
         let fallback = ["/home/k/.local/bin".to_string(), "/usr/bin".to_string()];
-        let merged = merge_paths("/usr/bin:/bin", "/opt/homebrew/bin:/usr/bin:", &fallback);
+        let merged = merge_paths(&own, &shell, &fallback);
         let parts: Vec<&str> = merged.split(PATH_SEPARATOR).collect();
         assert_eq!(
             parts,
