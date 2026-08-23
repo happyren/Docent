@@ -26,7 +26,13 @@ export const CORNER_RADIUS = 24;
 /** Ports keep to this share of a side, centred — a corner never carries one (D75). */
 export const PORT_SPAN = 0.7;
 /** What one bend costs, in scene units of length. */
-const BEND_COST = 80;
+/**
+ * What a turn costs in length (D72, D78): dear enough that a back edge goes
+ * over its row as a two-turn U rather than out of the facing side and down
+ * in four, which is shorter; not so dear that the router buys a screen of
+ * detour to save one turn.
+ */
+const BEND_COST = 300;
 /** Obstacles farther than this from the pair's bounding box are not in the way. */
 const REACH = 240;
 
@@ -484,32 +490,92 @@ export function routeCost(points: readonly Point[], bendCost = BEND_COST): numbe
  * and straight back down. Ties go to the facing sides, then to a fixed side
  * order, so two runs of the same diagram give one picture (I3).
  */
-export function chooseSides(from: PortNode, to: PortNode, obstacles: readonly Box[], clearance = ROUTE_PAD): SidePair | null {
+/** What crossing a line already drawn costs a candidate (D78): a turn and a half. */
+const CROSS_COST = 450;
+
+/** Whether two segments meet at all — crossing, touching, or running along each other. */
+function segmentsMeet(a: Point, b: Point, c: Point, d: Point): boolean {
+  const o = (p: Point, q: Point, r: Point) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const on = (p: Point, q: Point, r: Point) =>
+    Math.min(p[0], q[0]) - 1e-6 <= r[0] && r[0] <= Math.max(p[0], q[0]) + 1e-6 && Math.min(p[1], q[1]) - 1e-6 <= r[1] && r[1] <= Math.max(p[1], q[1]) + 1e-6;
+  const d1 = o(c, d, a);
+  const d2 = o(c, d, b);
+  const d3 = o(a, b, c);
+  const d4 = o(a, b, d);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  if (Math.abs(d1) < 1e-9 && on(c, d, a)) return true;
+  if (Math.abs(d2) < 1e-9 && on(c, d, b)) return true;
+  if (Math.abs(d3) < 1e-9 && on(a, b, c)) return true;
+  if (Math.abs(d4) < 1e-9 && on(a, b, d)) return true;
+  return false;
+}
+
+/**
+ * How many of the other lines a polyline meets (D78) — each counted once,
+ * whether it is crossed, touched, or run along: a line either conflicts
+ * with another or it does not, and nudging settles the rest.
+ */
+export function lineCrossings(line: readonly Point[], others: readonly (readonly Point[])[]): number {
+  let n = 0;
+  for (const other of others) {
+    let meets = false;
+    for (let i = 0; i + 1 < line.length && !meets; i++) {
+      for (let j = 0; j + 1 < other.length; j++) {
+        if (segmentsMeet(line[i], line[i + 1], other[j], other[j + 1])) {
+          meets = true;
+          break;
+        }
+      }
+    }
+    if (meets) n += 1;
+  }
+  return n;
+}
+
+export function chooseSides(from: PortNode, to: PortNode, obstacles: readonly Box[], clearance = ROUTE_PAD, avoid: readonly (readonly Point[])[] = []): SidePair | null {
+  return chooseSidesWithLine(from, to, obstacles, clearance, avoid)?.pair ?? null;
+}
+
+/**
+ * `chooseSides`, answering the probe's line as well, so the lines already
+ * chosen can be kept out of the next edge's way: a second return over the
+ * same row goes under it instead of across the first (D78).
+ */
+export function chooseSidesWithLine(
+  from: PortNode,
+  to: PortNode,
+  obstacles: readonly Box[],
+  clearance = ROUTE_PAD,
+  avoid: readonly (readonly Point[])[] = [],
+): { pair: SidePair; line: Point[] } | null {
   const near = obstaclesNear(from, to, obstacles).filter((o) => o !== from && o !== to);
   const a = centre(from);
   const b = centre(to);
   if (!near.some((o) => segmentThroughBox(a, b, o, 4))) return null;
   const facing: SidePair = { start: sideTowards(from, b), end: sideTowards(to, a) };
   // Sixteen probes at most, over the obstacle list the caller already has.
-  let best: { pair: SidePair; cost: number; rank: number } | null = null;
+  let best: { pair: SidePair; cost: number; rank: number; line: Point[] } | null = null;
   for (const start of SIDE_ORDER) {
     for (const end of SIDE_ORDER) {
       const ports: PortEnds = {
         start: portAt(from, from.shape, start, middleOf(from, start), clearance),
         end: portAt(to, to.shape, end, middleOf(to, end), clearance),
       };
-      const turns = routeEdge(from, to, near, clearance, ports, { leaveBySide: true });
+      const found = routeEdge(from, to, near, clearance, ports, { leaveBySide: true });
       // A route the router had to take from a side's middle instead is not
       // this pair's route, and says nothing about what this pair costs.
-      if (turns && !(aligned(ports.start.at, turns[0]) && aligned(ports.end.at, turns[turns.length - 1]))) continue;
-      const line: Point[] = turns ? [ports.start.at, ...turns, ports.end.at] : [ports.start.at, ports.end.at];
-      const cost = routeCost(line);
+      if (found && !(aligned(ports.start.at, found[0]) && aligned(ports.end.at, found[found.length - 1]))) continue;
+      const line: Point[] = found ? [ports.start.at, ...found, ports.end.at] : [ports.start.at, ports.end.at];
+      // Cheapest whole line — turns priced by BEND_COST, crossings of lines
+      // already chosen by CROSS_COST — then the facing sides and a fixed
+      // side order so two runs give one picture (I3).
+      const cost = routeCost(line) + lineCrossings(line, avoid) * CROSS_COST;
       const rank =
         (start === facing.start && end === facing.end ? 0 : 1) * 100 + SIDE_ORDER.indexOf(start) * 4 + SIDE_ORDER.indexOf(end);
-      if (!best || cost < best.cost - TIGHT || (cost < best.cost + TIGHT && rank < best.rank)) best = { pair: { start, end }, cost, rank };
+      if (!best || cost < best.cost - TIGHT || (cost < best.cost + TIGHT && rank < best.rank)) best = { pair: { start, end }, cost, rank, line };
     }
   }
-  return best ? best.pair : null;
+  return best ? { pair: best.pair, line: best.line } : null;
 }
 
 /** How far off a straight line a point must sit to count as a turn, in scene units. */

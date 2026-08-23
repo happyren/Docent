@@ -17,7 +17,7 @@ import {
   absolutePoints,
   arcCorners,
   assignPorts,
-  chooseSides,
+  chooseSidesWithLine,
   dropCollinear,
   edgeWiggles,
   nudgeRoutes,
@@ -863,9 +863,15 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // Sides by route cost where the straight line is blocked (D78); the ports
   // are then spread along the chosen sides, as D75 has always spread them.
   const chosen = new Map<string, SidePair>();
+  // Lines already chosen are kept out of the next edge's way: a second
+  // return over one row goes under it rather than across the first.
+  const taken: Point[][] = [];
   for (const job of jobs) {
-    const pair = chooseSides(finalBoxes.get(job.from)!, finalBoxes.get(job.to)!, around(job.from, job.to), ROUTE_PAD);
-    if (pair) chosen.set(job.id, pair);
+    const choice = chooseSidesWithLine(finalBoxes.get(job.from)!, finalBoxes.get(job.to)!, around(job.from, job.to), ROUTE_PAD, taken);
+    if (choice) {
+      chosen.set(job.id, choice.pair);
+      taken.push(choice.line);
+    }
   }
   const ports = assignPorts(jobs, finalBoxes, ROUTE_PAD, chosen);
   // The whole drawn polyline of each routed edge — port, turns, port.

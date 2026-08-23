@@ -83,27 +83,30 @@ export const ROLE_FAMILIES: Readonly<Record<Role, readonly Swatch[]>> = {
     { fill: "#bac8ff", stroke: "#4263eb", name: "indigo" },
     { fill: "#99e9f2", stroke: "#0c8599", name: "cyan" },
   ],
+  // Warm, but not the caution tone's amber: a tone's hue is a reader's
+  // warning and is kept for it.
   compute: [
-    { fill: "#ffec99", stroke: "#e8590c", name: "amber" },
     { fill: "#ffd8a8", stroke: "#d9480f", name: "orange" },
     { fill: "#fff3bf", stroke: "#f08c00", name: "pale yellow" },
+    { fill: "#ffe8cc", stroke: "#e8590c", name: "peach" },
   ],
   messaging: [
     { fill: "#d0bfff", stroke: "#6741d9", name: "violet" },
     { fill: "#eebefa", stroke: "#9c36b5", name: "grape" },
     { fill: "#e5dbff", stroke: "#7048e8", name: "pale violet" },
   ],
+  // Slate and light grey, not the neutral tone's blue-grey.
   external: [
-    { fill: "#e9ecef", stroke: "#495057", name: "grey" },
     { fill: "#ced4da", stroke: "#343a40", name: "slate" },
     // Not the palest grey: that one belongs to the inactive tone, and an
     // external thing is not a retired one.
     { fill: "#dee2e6", stroke: "#868e96", name: "light grey" },
   ],
+  // Teal and lime, not the positive tone's green.
   people: [
     { fill: "#96f2d7", stroke: "#0ca678", name: "teal" },
-    { fill: "#b2f2bb", stroke: "#2f9e44", name: "green" },
     { fill: "#c0eb75", stroke: "#66a80f", name: "lime" },
+    { fill: "#c3fae8", stroke: "#099268", name: "mint" },
   ],
   // A boundary is not a thing on the canvas, it is a line around things:
   // no fill, and a dashed stroke that says "this edge is drawn, not built".
