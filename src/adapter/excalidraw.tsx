@@ -32,6 +32,7 @@ import type { ExcalidrawElement, ExcalidrawTextElement } from "@excalidraw/excal
 import "@excalidraw/excalidraw/index.css";
 import type { LegendRule, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
+import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
 
 // Excalidraw's zoom limits (MIN_ZOOM/MAX_ZOOM are not runtime-exported).
 const ZOOM_MIN = 0.1;
@@ -169,6 +170,8 @@ export interface WriteArrow {
   label: string | null;
   /** Turning points in scene coordinates, all outside both ends (D72); absent = straight. */
   via?: [number, number][];
+  /** Where the edge meets each end's outline (D75); absent = aim at the centres. */
+  ends?: { start: [number, number]; end: [number, number] };
   frameId: string | null;
   style: WriteStyle;
   startArrowhead: string | null;
@@ -200,6 +203,8 @@ export interface WritePatch {
   meaning?: WriteMeaning;
   /** An arrow's new turning points (D72); `[]` makes it straight between its ends. */
   via?: [number, number][];
+  /** Where the re-routed edge meets each end's outline (D75). */
+  ends?: { start: [number, number]; end: [number, number] };
 }
 
 export interface SceneWrite {
@@ -1368,37 +1373,29 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       };
       // Where the centre line leaves the shape's own outline — a rectangle's
       // side, an ellipse's curve, a diamond's edge — so the arrow meets the
-      // drawing, not its bounding box.
+      // drawing, not its bounding box. One rule, shared with the authoring
+      // layer, so the ports it picks (D75) land exactly where this draws.
       const edgePoint = (box: SceneBounds & { type: string }, towards: { x: number; y: number }) => {
-        const cx = box.x + box.width / 2;
-        const cy = box.y + box.height / 2;
-        const dx = towards.x - cx;
-        const dy = towards.y - cy;
-        if (dx === 0 && dy === 0) return { x: cx, y: cy };
-        const a = box.width / 2;
-        const b = box.height / 2;
-        let t: number;
-        if (box.type === "ellipse") {
-          t = 1 / Math.sqrt((dx * dx) / (a * a) + (dy * dy) / (b * b));
-        } else if (box.type === "diamond") {
-          t = 1 / (Math.abs(dx) / a + Math.abs(dy) / b);
-        } else {
-          const sx = dx !== 0 ? a / Math.abs(dx) : Infinity;
-          const sy = dy !== 0 ? b / Math.abs(dy) : Infinity;
-          t = Math.min(sx, sy);
-        }
-        return { x: cx + dx * t, y: cy + dy * t };
+        const [x, y] = outlinePoint(box, box.type, [towards.x, towards.y]);
+        return { x, y };
       };
       const GAP = 6;
       // The line of an arrow: from one outline to the other, through its
-      // turning points (D72), each end backed off by the binding gap.
-      const lineOf = (a: SceneBounds & { type: string }, b: SceneBounds & { type: string }, via: readonly [number, number][]) => {
+      // turning points (D72), each end backed off by the binding gap. With
+      // `ends` the outline points are given — the ports D75 spread along
+      // each side — instead of being found towards the other centre.
+      const lineOf = (
+        a: SceneBounds & { type: string },
+        b: SceneBounds & { type: string },
+        via: readonly [number, number][],
+        ends?: { start: [number, number]; end: [number, number] },
+      ) => {
         const centerB = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
         const centerA = { x: a.x + a.width / 2, y: a.y + a.height / 2 };
         const first = via.length ? { x: via[0][0], y: via[0][1] } : centerB;
         const last = via.length ? { x: via[via.length - 1][0], y: via[via.length - 1][1] } : centerA;
-        const start = edgePoint(a, first);
-        const end = edgePoint(b, last);
+        const start = ends ? { x: ends.start[0], y: ends.start[1] } : edgePoint(a, first);
+        const end = ends ? { x: ends.end[0], y: ends.end[1] } : edgePoint(b, last);
         const towards = via.length ? first : end;
         const from = via.length ? last : start;
         const l1 = Math.hypot(towards.x - start.x, towards.y - start.y) || 1;
@@ -1408,24 +1405,24 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
           ...via,
           [end.x - ((end.x - from.x) / l2) * GAP, end.y - ((end.y - from.y) / l2) * GAP],
         ];
-        // A turning point that does not turn is dropped.
-        const kept = pts.filter((p, i) => {
-          if (i === 0 || i === pts.length - 1) return true;
-          const q = pts[i - 1];
-          const r = pts[i + 1];
-          const cross = (p[0] - q[0]) * (r[1] - q[1]) - (p[1] - q[1]) * (r[0] - q[0]);
-          return Math.abs(cross) > 1e-6;
-        });
+        // A turning point that does not turn is dropped — but the two points
+        // a softened corner leaves either side of a bend do turn (D75), so
+        // the tolerance is the authoring layer's, not a bare epsilon.
+        const kept = dropCollinear(pts);
+        // Where the arrow meets each shape decides its binding focus, so
+        // Excalidraw keeps it at its port when the author moves the shape.
+        const startFocus = kept.length > 1 ? bindingFocus(a, a.type, kept[0], kept[1]) : 0;
+        const endFocus = kept.length > 1 ? bindingFocus(b, b.type, kept[kept.length - 1], kept[kept.length - 2]) : 0;
         const [ox, oy] = kept[0];
         const points = kept.map(([px, py]): [number, number] => [px - ox, py - oy]);
         const xs = points.map((pt) => pt[0]);
         const ys = points.map((pt) => pt[1]);
-        return { x: ox, y: oy, points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+        return { x: ox, y: oy, points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), startFocus, endFocus };
       };
       const arrowElements: ExcalidrawElement[] = [];
       const boundTo = new Map<string, { id: string; type: "arrow" }[]>();
       for (const arrow of write.arrows ?? []) {
-        const line = lineOf(boxOf(arrow.from), boxOf(arrow.to), arrow.via ?? []);
+        const line = lineOf(boxOf(arrow.from), boxOf(arrow.to), arrow.via ?? [], arrow.ends);
         const [made] = convertToExcalidrawElements(
           [
             {
@@ -1456,8 +1453,8 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         const drawn = made.find((el) => el.id === arrow.id);
         if (!drawn) throw new Error("Failed to construct arrow");
         Object.assign(drawn, {
-          startBinding: { elementId: arrow.from, focus: 0, gap: GAP },
-          endBinding: { elementId: arrow.to, focus: 0, gap: GAP },
+          startBinding: { elementId: arrow.from, focus: line.startFocus, gap: GAP },
+          endBinding: { elementId: arrow.to, focus: line.endFocus, gap: GAP },
         });
         arrowElements.push(...made);
         for (const endId of [arrow.from, arrow.to]) {
@@ -1531,12 +1528,15 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
             const a = createdById.get(out.startBinding.elementId) ?? live.get(out.startBinding.elementId);
             const b = createdById.get(out.endBinding.elementId) ?? live.get(out.endBinding.elementId);
             if (a && b) {
-              const line = lineOf(boxOf(a.id), boxOf(b.id), patch.via);
+              const line = lineOf(boxOf(a.id), boxOf(b.id), patch.via, patch.ends);
               fields.x = line.x;
               fields.y = line.y;
               fields.points = line.points;
               fields.width = line.width;
               fields.height = line.height;
+              // The re-routed edge keeps its new ports when its shapes move.
+              fields.startBinding = { ...out.startBinding, focus: line.startFocus };
+              fields.endBinding = { ...out.endBinding, focus: line.endFocus };
             }
           }
           if (patch.style) {
