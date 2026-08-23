@@ -76,6 +76,8 @@ const saturate = (weight: number, measure: number, hopeless: number): number =>
 
 /** A direction change smaller than this is not a bend a reader would name. */
 const TURN_DEGREES = 20;
+/** Below this, in degrees, a vertex does not turn at all — it is on the line. */
+const TURN_EPSILON = 0.5;
 /**
  * Within this of an axis, a segment reads as horizontal or vertical. Wide
  * enough that an edge leaving one port and entering another a little
@@ -88,9 +90,10 @@ const ALIGN_PX = 2;
 /** Edge ends this close on a component meet there; farther apart are separate ports. */
 const MEETING_PX = 10;
 /**
- * Turns closer together than this along the line are ONE bend: D75 draws a
- * right-angle corner as two points a radius either side of it, so a
- * softened corner arrives as two gentle turns the eye reads as one.
+ * Turns closer together than this along the line are ONE bend: D78 draws a
+ * right-angle corner as an arc of the corner radius, which arrives as a
+ * handful of small turns over about a radius and a half of line — well
+ * inside this window — and which the eye reads as one bend.
  */
 const SOFT_SPAN = 2 * CORNER_RADIUS;
 /**
@@ -293,12 +296,21 @@ function crossingsPart(edges: readonly EdgeGeom[]): CraftPart {
   };
 }
 
-/** Bends per edge, a softened corner counted as the one bend it draws (D75). */
+/** Bends per edge, an arc counted as the one bend it draws (D75, D78). */
 function bendsPart(edges: readonly EdgeGeom[]): CraftPart {
   let bends = 0;
   for (const e of edges) {
-    let last = Number.NEGATIVE_INFINITY;
+    // Turns within a corner's length of each other are ONE bend, and their
+    // angles ADD: D78 draws a right angle as an arc of several small turns,
+    // none of which a reader would name on its own but which together are
+    // the one corner they round.
+    let started = Number.NEGATIVE_INFINITY;
+    let turned = 0;
     let along = 0;
+    const close = () => {
+      if (turned > TURN_DEGREES) bends += 1;
+      turned = 0;
+    };
     for (let i = 1; i + 1 < e.points.length; i++) {
       const prev = e.points[i - 1];
       const p = e.points[i];
@@ -308,13 +320,14 @@ function bendsPart(edges: readonly EdgeGeom[]): CraftPart {
       const outAngle = Math.atan2(next[1] - p[1], next[0] - p[0]);
       let turn = Math.abs(((outAngle - inAngle) * 180) / Math.PI);
       if (turn > 180) turn = 360 - turn;
-      if (turn <= TURN_DEGREES) continue;
-      // Two turns a corner's radius apart are the two points D75 leaves
-      // either side of one right angle — one bend, not two.
-      if (along - last <= SOFT_SPAN) continue;
-      last = along;
-      bends += 1;
+      if (turn <= TURN_EPSILON) continue;
+      if (along - started > SOFT_SPAN) {
+        close();
+        started = along;
+      }
+      turned += turn;
     }
+    close();
   }
   const perEdge = edges.length ? bends / edges.length : 0;
   // Hopeless at two bends on the average edge: a line that turns twice on

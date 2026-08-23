@@ -172,6 +172,8 @@ export interface WriteArrow {
   via?: [number, number][];
   /** Where the edge meets each end's outline (D75); absent = aim at the centres. */
   ends?: { start: [number, number]; end: [number, number] };
+  /** The points carry their own arcs (D78): draw them sharp, not curved. */
+  sharp?: boolean;
   frameId: string | null;
   style: WriteStyle;
   startArrowhead: string | null;
@@ -205,6 +207,8 @@ export interface WritePatch {
   via?: [number, number][];
   /** Where the re-routed edge meets each end's outline (D75). */
   ends?: { start: [number, number]; end: [number, number] };
+  /** The points carry their own arcs (D78): draw them sharp, not curved. */
+  sharp?: boolean;
 }
 
 export interface SceneWrite {
@@ -1435,6 +1439,10 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
               points: line.points,
               frameId: arrow.frameId,
               ...styleProps(arrow.style),
+              // A routed edge carries an explicit arc at every turn (D78):
+              // it is a sharp polyline, so what is drawn is exactly the
+              // route. An edge with no turning points keeps the house curve.
+              ...(arrow.sharp ? { roundness: null } : {}),
               startArrowhead: arrow.startArrowhead,
               endArrowhead: arrow.endArrowhead,
               ...docentData(arrow.meaning),
@@ -1537,6 +1545,10 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
               fields.points = line.points;
               fields.width = line.width;
               fields.height = line.height;
+              // Turning points mean the edge carries its own arcs (D78) and
+              // is drawn sharp; a re-routed edge that came out straight gets
+              // the house curvature back.
+              fields.roundness = (patch.sharp ?? patch.via.length > 0) ? null : (out.roundness ?? { type: 2 });
               // The re-routed edge keeps its new ports when its shapes move.
               fields.startBinding = { ...out.startBinding, focus: line.startFocus };
               fields.endBinding = { ...out.endBinding, focus: line.endFocus };

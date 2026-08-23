@@ -535,7 +535,7 @@ export const TOOLS = [
   {
     name: "tidy",
     description:
-      "Tidy re-lays out a frame, a tier, a selection, or the diagram — the layered pipeline, routed edges — and is guaranteed to change nothing but the picture: its semantic changelog is empty. The one command that moves hand-placed work, because it was asked.\nExample: tidy({frame:'f_core'})",
+      "Tidy re-lays out a frame, a tier, a selection, or the diagram — the layered pipeline, routed edges — and is guaranteed to change nothing but the picture: its semantic changelog is empty. It also RE-ROUTES every edge in the scope, whether or not its ends moved: what can be straight is straightened, and what cannot is redrawn as one stroke around what is in the way. The one command that moves hand-placed work, because it was asked.\nExample: tidy({frame:'f_core'})",
     inputSchema: {
       type: "object",
       properties: {
