@@ -1,12 +1,17 @@
 /**
- * Edge routing (D72) and edges that flow (D75): an edge never cuts through a
- * component, and it leaves and enters at a port spread along the side it
- * uses. The straight line between two ports is kept when nothing lies on it;
- * otherwise an orthogonal path is found on the grid the obstacles' padded
- * edges define — fewest bends first, shortest second. Routed segments that
- * would run along one line are nudged apart, and every right-angle turn is
- * softened into an arc, so the house arrow's curvature draws a bend and not
- * a cusp. Pure and deterministic (I3).
+ * Edge routing (D72), edges that flow (D75), and an edge that reads as one
+ * stroke (D78): an edge never cuts through a component, it leaves and
+ * enters at a port spread along the side it uses, and when its straight
+ * line is blocked the sides it leaves and enters are the pair that routes
+ * cheapest — so a back edge along a row goes over it as a U rather than out
+ * of the side facing its target and straight back down. The straight line
+ * between two ports is kept when nothing lies on it; otherwise an
+ * orthogonal path is found on the grid the obstacles' padded edges define —
+ * fewest bends first, shortest second. The route is then simplified (jogs
+ * collapsed, hairpins removed, no leg shorter than a corner), segments that
+ * would run along one line are nudged apart, and every turn is drawn as an
+ * explicit circular arc, so what Excalidraw draws is exactly the route.
+ * Pure and deterministic (I3).
  */
 import type { Box } from "./layout";
 
@@ -173,18 +178,37 @@ function portAt(box: Box, shape: string | undefined, side: Side, pos: number, cl
   return { side, at: outlinePoint(box, shape, onBox), outside, dir: side === "left" || side === "right" ? 0 : 1 };
 }
 
+/** The sides in the order a tie between two equal routes is broken (D78). */
+export const SIDE_ORDER: readonly Side[] = ["top", "right", "bottom", "left"];
+
+/** The outward normal of each side — which way an edge leaves through it. */
+const NORMAL: Record<Side, Point> = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] };
+
+/** The middle of a side, in the coordinate the port is positioned along. */
+function middleOf(box: Box, side: Side): number {
+  return side === "top" || side === "bottom" ? box.x + box.width / 2 : box.y + box.height / 2;
+}
+
+/** The pair of sides an edge leaves and enters through. */
+export interface SidePair {
+  start: Side;
+  end: Side;
+}
+
 /**
  * Ports for a set of edges (D75). Every edge leaves and enters through the
- * side that faces its other end; the edges sharing one side are spread
- * evenly across the middle of it, in the order of their other ends across
- * the side's cross axis — so they arrive in the order they come from and do
- * not cross each other at the component. Ties break by edge id, so two runs
- * of the same diagram give one picture (I3).
+ * side that faces its other end — or, when `sides` names a pair chosen by
+ * route cost (D78), through those — and the edges sharing one side are
+ * spread evenly across the middle of it, in the order of their other ends
+ * across the side's cross axis, so they arrive in the order they come from
+ * and do not cross each other at the component. Ties break by edge id, so
+ * two runs of the same diagram give one picture (I3).
  */
 export function assignPorts(
   edges: readonly PortEdge[],
   nodes: ReadonlyMap<string, PortNode>,
   clearance = ROUTE_PAD,
+  sides?: ReadonlyMap<string, SidePair>,
 ): Map<string, PortEnds> {
   interface Slot {
     edgeId: string;
@@ -207,7 +231,8 @@ export function assignPorts(
       [1, edge.to, to, a],
     ];
     for (const [which, nodeId, box, other] of pairs) {
-      const side = sideTowards(box, other);
+      const picked = sides?.get(edge.id);
+      const side = (which === 0 ? picked?.start : picked?.end) ?? sideTowards(box, other);
       const across = side === "top" || side === "bottom" ? other[0] : other[1];
       const key = `${side}:${nodeId}`;
       const list = groups.get(key) ?? [];
@@ -242,6 +267,15 @@ export function assignPorts(
   return out;
 }
 
+export interface RouteOptions {
+  /**
+   * When set, the straight line is kept only if it heads outward from both
+   * ports' sides. The sides were chosen by route cost (D78), so a line that
+   * grazes along one of them is not the route that was costed.
+   */
+  leaveBySide?: boolean;
+}
+
 /**
  * The turning points of an edge from `from` to `to`, or null when the
  * straight line is clear. The points are in scene coordinates and all lie
@@ -251,7 +285,14 @@ export function assignPorts(
  * ends at the given ports (D75); without them, at the middle of a side, as
  * D72 alone did.
  */
-export function routeEdge(from: Box, to: Box, obstacles: readonly Box[], clearance = ROUTE_PAD, ports?: PortEnds): Point[] | null {
+export function routeEdge(
+  from: Box,
+  to: Box,
+  obstacles: readonly Box[],
+  clearance = ROUTE_PAD,
+  ports?: PortEnds,
+  options?: RouteOptions,
+): Point[] | null {
   const near = obstaclesNear(from, to, obstacles).filter((o) => o !== from && o !== to);
   const a = centre(from);
   const b = centre(to);
@@ -260,7 +301,16 @@ export function routeEdge(from: Box, to: Box, obstacles: readonly Box[], clearan
   // one that will be drawn: between the ports when there are ports.
   const lineA = ports ? ports.start.at : a;
   const lineB = ports ? ports.end.at : b;
-  if (!near.some((o) => segmentThroughBox(lineA, lineB, o, 4))) return null;
+  // Sides chosen by route cost (D78) must actually be left through: a line
+  // that runs along the side it claims to leave — the whole shape of a back
+  // edge drawn straight over the tops of a row — is not a straight edge, it
+  // is the route refusing to turn.
+  const outward =
+    !ports || !options?.leaveBySide
+      ? true
+      : (lineB[0] - lineA[0]) * NORMAL[ports.start.side][0] + (lineB[1] - lineA[1]) * NORMAL[ports.start.side][1] > 1e-6 &&
+        (lineA[0] - lineB[0]) * NORMAL[ports.end.side][0] + (lineA[1] - lineB[1]) * NORMAL[ports.end.side][1] > 1e-6;
+  if (outward && !near.some((o) => segmentThroughBox(lineA, lineB, o, 4))) return null;
 
   const blocks = near.map((o) => pad(o, clearance));
   const fromPad = pad(from, clearance);
@@ -404,6 +454,64 @@ export function routeEdge(from: Box, to: Box, obstacles: readonly Box[], clearan
   return dropCollinear(path);
 }
 
+/** Two coordinates this close share a line. */
+const TIGHT = 1e-6;
+
+/** Whether two points share a row or a column — the ends of one orthogonal leg. */
+function aligned(p: Point, q: Point): boolean {
+  return Math.abs(p[0] - q[0]) < TIGHT || Math.abs(p[1] - q[1]) < TIGHT;
+}
+
+/**
+ * What a drawn polyline costs the way the router counts: its length plus a
+ * fixed price for every turn. This is the number the choice of sides is made
+ * on (D78), so the choice and the search agree about what is expensive.
+ */
+export function routeCost(points: readonly Point[], bendCost = BEND_COST): number {
+  const pts = dropCollinear(points);
+  let cost = 0;
+  for (let i = 0; i + 1 < pts.length; i++) cost += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+  return cost + Math.max(0, pts.length - 2) * bendCost;
+}
+
+/**
+ * The pair of sides an edge should leave and enter through (D78), or null
+ * when the straight line between the centres is clear and D75's facing
+ * sides stand. Every pair of sides is routed once, from the middle of each,
+ * and the cheapest whole drawn line wins — length plus what its turns cost.
+ * A back edge along a row therefore leaves over or under the row and comes
+ * back along one channel, rather than out of the side that faces its target
+ * and straight back down. Ties go to the facing sides, then to a fixed side
+ * order, so two runs of the same diagram give one picture (I3).
+ */
+export function chooseSides(from: PortNode, to: PortNode, obstacles: readonly Box[], clearance = ROUTE_PAD): SidePair | null {
+  const near = obstaclesNear(from, to, obstacles).filter((o) => o !== from && o !== to);
+  const a = centre(from);
+  const b = centre(to);
+  if (!near.some((o) => segmentThroughBox(a, b, o, 4))) return null;
+  const facing: SidePair = { start: sideTowards(from, b), end: sideTowards(to, a) };
+  // Sixteen probes at most, over the obstacle list the caller already has.
+  let best: { pair: SidePair; cost: number; rank: number } | null = null;
+  for (const start of SIDE_ORDER) {
+    for (const end of SIDE_ORDER) {
+      const ports: PortEnds = {
+        start: portAt(from, from.shape, start, middleOf(from, start), clearance),
+        end: portAt(to, to.shape, end, middleOf(to, end), clearance),
+      };
+      const turns = routeEdge(from, to, near, clearance, ports, { leaveBySide: true });
+      // A route the router had to take from a side's middle instead is not
+      // this pair's route, and says nothing about what this pair costs.
+      if (turns && !(aligned(ports.start.at, turns[0]) && aligned(ports.end.at, turns[turns.length - 1]))) continue;
+      const line: Point[] = turns ? [ports.start.at, ...turns, ports.end.at] : [ports.start.at, ports.end.at];
+      const cost = routeCost(line);
+      const rank =
+        (start === facing.start && end === facing.end ? 0 : 1) * 100 + SIDE_ORDER.indexOf(start) * 4 + SIDE_ORDER.indexOf(end);
+      if (!best || cost < best.cost - TIGHT || (cost < best.cost + TIGHT && rank < best.rank)) best = { pair: { start, end }, cost, rank };
+    }
+  }
+  return best ? best.pair : null;
+}
+
 /** How far off a straight line a point must sit to count as a turn, in scene units. */
 const COLLINEAR = 0.01;
 
@@ -431,7 +539,97 @@ export function dropCollinear(points: readonly Point[], tolerance = COLLINEAR): 
 }
 
 // ---------------------------------------------------------------------------
-// nudging and softened corners (D75)
+// simplification (D78)
+// ---------------------------------------------------------------------------
+
+/** The unit direction of a leg, or null when it has no length. */
+function legDir(p: Point, q: Point): Point | null {
+  const dx = q[0] - p[0];
+  const dy = q[1] - p[1];
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return null;
+  return [dx / len, dy / len];
+}
+
+/** How nearly two leg directions must agree to count as one direction. */
+const SAME_DIR = 0.999;
+
+/**
+ * One simplification of an orthogonal route, or null when none applies and
+ * none is refused (D78). Legs alternate axis, so every short interior leg is
+ * either a JOG — the two legs either side run the same way, and the shorter
+ * of them slides onto the other's line — or a HAIRPIN, where they run
+ * opposite ways and the two turns are replaced by the one corner they were
+ * pretending to be. A simplification that would put the edge through
+ * something is refused: D72 outranks the stroke.
+ */
+function simplifyOnce(pts: readonly Point[], radius: number, clear: (candidate: readonly Point[]) => boolean): Point[] | null {
+  const last = pts.length - 1;
+  for (let i = 1; i + 2 <= last; i++) {
+    const before = legDir(pts[i - 1], pts[i]);
+    const after = legDir(pts[i + 1], pts[i + 2]);
+    if (!before || !after) continue;
+    const len = Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    const agree = before[0] * after[0] + before[1] * after[1];
+    // The axis the two parallel legs are offset along: the leg between them.
+    const cross = Math.abs(before[0]) > 0.5 ? 1 : 0;
+    if (agree < -SAME_DIR && len <= 2 * radius) {
+      // A hairpin: one corner where the line went out and came straight back.
+      const corner: Point = cross === 1 ? [pts[i + 2][0], pts[i][1]] : [pts[i][0], pts[i + 2][1]];
+      const candidate = dropCollinear([...pts.slice(0, i), corner, ...pts.slice(i + 2)]);
+      if (clear(candidate)) return candidate;
+      continue;
+    }
+    if (agree > SAME_DIR && len < radius) {
+      // A jog: slide the shorter of the two parallel legs onto the other's
+      // line. A leg that carries a port cannot move — the port is where the
+      // edge meets the component (D75).
+      const movePrev = i - 1 > 0;
+      const moveNext = i + 2 < last;
+      const lenPrev = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+      const lenNext = Math.hypot(pts[i + 2][0] - pts[i + 1][0], pts[i + 2][1] - pts[i + 1][1]);
+      const order: ("prev" | "next")[] = lenPrev <= lenNext ? ["prev", "next"] : ["next", "prev"];
+      for (const which of order) {
+        if (which === "prev" ? !movePrev : !moveNext) continue;
+        const copy = pts.map((p): Point => [p[0], p[1]]);
+        if (which === "prev") {
+          const onto = pts[i + 1][cross];
+          copy[i - 1][cross] = onto;
+          copy[i][cross] = onto;
+        } else {
+          const onto = pts[i][cross];
+          copy[i + 1][cross] = onto;
+          copy[i + 2][cross] = onto;
+        }
+        const candidate = dropCollinear(copy);
+        if (clear(candidate)) return candidate;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * A route simplified before it is drawn (D78): a jog shorter than a corner
+ * collapsed, a hairpin removed, and no leg left shorter than the corner
+ * radius except the two port stubs. Each step is refused when the polyline
+ * it would leave passes through an obstacle — D72 outranks the stroke — and
+ * the ports at either end never move. Pure and deterministic (I3).
+ */
+export function simplifyRoute(points: readonly Point[], obstacles: readonly Box[], radius = CORNER_RADIUS, inset = 2): Point[] {
+  let pts = dropCollinear(points);
+  const clear = (candidate: readonly Point[]) => !obstacles.some((o) => polylineThroughBox(candidate, o, inset));
+  // Every step drops at least one point, so the run is bounded by the input.
+  for (let guard = points.length + 4; guard > 0; guard--) {
+    const next = simplifyOnce(pts, radius, clear);
+    if (!next) break;
+    pts = next;
+  }
+  return pts;
+}
+
+// ---------------------------------------------------------------------------
+// nudging (D75)
 // ---------------------------------------------------------------------------
 
 export interface NudgeRoute {
@@ -475,6 +673,14 @@ export function nudgeRoutes(routes: readonly NudgeRoute[], gap = NUDGE): Map<str
     for (let i = 1; i + 2 < pts.length; i++) {
       const p = pts[i];
       const q = pts[i + 1];
+      // A leg either side that could not absorb the shift would come out of
+      // the nudge shorter than a corner — a jog the simplification (D78)
+      // just took out. Only legs with room to give are nudged.
+      const room = Math.min(
+        Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]),
+        Math.hypot(pts[i + 2][0] - q[0], pts[i + 2][1] - q[1]),
+      );
+      if (room < CORNER_RADIUS + 2 * gap) continue;
       if (Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) > 1e-6) {
         segs.push({ r, i, axis: 1, coord: p[0], lo: Math.min(p[1], q[1]), hi: Math.max(p[1], q[1]) });
       } else if (Math.abs(p[1] - q[1]) < 1e-6 && Math.abs(p[0] - q[0]) > 1e-6) {
@@ -528,14 +734,23 @@ export function nudgeRoutes(routes: readonly NudgeRoute[], gap = NUDGE): Map<str
   return new Map(work.map((w) => [w.route.id, w.pts]));
 }
 
+/** A turn shallower than this is not a corner; it gets no arc (D78). */
+const ARC_DEGREES = 10;
+/** Interior points an arc gets per right angle — fewer on a shallower turn. */
+const ARC_POINTS_PER_QUARTER = 4;
+
 /**
- * A polyline with its right-angle turns softened into arcs (D75): each
- * corner becomes two points `radius` before and after it along its legs —
- * less when a leg is shorter than twice the radius — so the house arrow's
- * curvature draws a gentle bend where there was a cusp. The eye follows a
- * line by continuity, and a cusp ends one line and starts another.
+ * A polyline with every turn drawn as a circular arc tangent to both its
+ * legs (D78). The radius is the corner radius, or half the shorter of the
+ * two legs when there is not room for it, and the arc arrives as explicit
+ * points — four per right angle, fewer on a shallower turn — so what
+ * Excalidraw draws is exactly the route rather than its own curvature
+ * through the turning points. A turn under ten degrees is not a corner and
+ * keeps its point. The eye follows a line by continuity; a cusp ends one
+ * line and starts another, and an overshooting curve says the line was not
+ * drawn on purpose.
  */
-export function softenCorners(points: readonly Point[], radius = CORNER_RADIUS): Point[] {
+export function arcCorners(points: readonly Point[], radius = CORNER_RADIUS): Point[] {
   if (points.length < 3) return points.map((p): Point => [p[0], p[1]]);
   const out: Point[] = [[points[0][0], points[0][1]]];
   for (let i = 1; i + 1 < points.length; i++) {
@@ -544,18 +759,142 @@ export function softenCorners(points: readonly Point[], radius = CORNER_RADIUS):
     const next = points[i + 1];
     const d1 = Math.hypot(p[0] - prev[0], p[1] - prev[1]);
     const d2 = Math.hypot(next[0] - p[0], next[1] - p[1]);
-    const cross = (p[0] - prev[0]) * (next[1] - prev[1]) - (p[1] - prev[1]) * (next[0] - prev[0]);
-    const r = Math.min(radius, d1 / 2, d2 / 2);
-    if (d1 < 1e-9 || d2 < 1e-9 || Math.abs(cross) < 1e-9 || r < 1e-6) {
+    if (d1 < 1e-9 || d2 < 1e-9) {
       out.push([p[0], p[1]]);
       continue;
     }
-    out.push([p[0] - ((p[0] - prev[0]) / d1) * r, p[1] - ((p[1] - prev[1]) / d1) * r]);
-    out.push([p[0] + ((next[0] - p[0]) / d2) * r, p[1] + ((next[1] - p[1]) / d2) * r]);
+    const u1: Point = [(p[0] - prev[0]) / d1, (p[1] - prev[1]) / d1];
+    const u2: Point = [(next[0] - p[0]) / d2, (next[1] - p[1]) / d2];
+    const cross = u1[0] * u2[1] - u1[1] * u2[0];
+    const dot = u1[0] * u2[0] + u1[1] * u2[1];
+    const turn = Math.atan2(Math.abs(cross), dot);
+    if ((turn * 180) / Math.PI < ARC_DEGREES) {
+      out.push([p[0], p[1]]);
+      continue;
+    }
+    // The tangent length a radius needs at this turn, capped by the legs it
+    // has to fit between — a short leg halves the radius rather than the arc
+    // running past the next corner.
+    let r = Math.min(radius, d1 / 2, d2 / 2);
+    const bite = Math.tan(turn / 2);
+    let t = r * bite;
+    if (t > Math.min(d1, d2) / 2) {
+      t = Math.min(d1, d2) / 2;
+      r = t / bite;
+    }
+    if (r < 1e-6 || t < 1e-6) {
+      out.push([p[0], p[1]]);
+      continue;
+    }
+    const a: Point = [p[0] - u1[0] * t, p[1] - u1[1] * t];
+    const b: Point = [p[0] + u2[0] * t, p[1] + u2[1] * t];
+    // The centre sits a radius off the incoming leg, on the side it turns to.
+    const sign = cross >= 0 ? 1 : -1;
+    const centreOfArc: Point = [a[0] - u1[1] * r * sign, a[1] + u1[0] * r * sign];
+    const from = Math.atan2(a[1] - centreOfArc[1], a[0] - centreOfArc[0]);
+    const steps = Math.max(1, Math.round((ARC_POINTS_PER_QUARTER * turn) / (Math.PI / 2)));
+    out.push(a);
+    for (let k = 1; k <= steps; k++) {
+      const angle = from + sign * turn * (k / (steps + 1));
+      out.push([centreOfArc[0] + Math.cos(angle) * r, centreOfArc[1] + Math.sin(angle) * r]);
+    }
+    out.push(b);
   }
   const last = points[points.length - 1];
   out.push([last[0], last[1]]);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// what the lint sees in a drawn edge (D78)
+// ---------------------------------------------------------------------------
+
+/** Turns this far apart along the line are two corners; nearer, they are one arc. */
+const CORNER_SPAN = 2 * CORNER_RADIUS;
+/** A direction change smaller than this, in degrees, is not a turn. */
+const TURN_EPSILON = 0.5;
+/**
+ * A turn this sharp is a corner in its own right and joins no arc: an arc
+ * of Docent's own is several SMALL turns (a right angle in four points
+ * turns eighteen degrees at a time), so anything near a right angle is a
+ * corner the route really has.
+ */
+const SHARP_DEGREES = 45;
+
+/** Where two infinite lines cross, or null when they are parallel. */
+function lineCross(p1: Point, p2: Point, p3: Point, p4: Point): Point | null {
+  const d1x = p2[0] - p1[0];
+  const d1y = p2[1] - p1[1];
+  const d2x = p4[0] - p3[0];
+  const d2y = p4[1] - p3[1];
+  const den = d1x * d2y - d1y * d2x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((p3[0] - p1[0]) * d2y - (p3[1] - p1[1]) * d2x) / den;
+  return [p1[0] + t * d1x, p1[1] + t * d1y];
+}
+
+/**
+ * The corners of a drawn polyline: its two ends and one point per turn,
+ * with the several small turns of an arc (D78) read back as the single
+ * corner they round. Each corner is where the straight legs either side of
+ * the arc would have met, so the legs measured between them are the legs
+ * the route actually has.
+ */
+export function routeCorners(points: readonly Point[], span = CORNER_SPAN): Point[] {
+  const pts = dropCollinear(points);
+  if (pts.length < 3) return pts;
+  const turns: { i: number; along: number; sharp: boolean }[] = [];
+  let along = 0;
+  for (let i = 1; i + 1 < pts.length; i++) {
+    along += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const u1 = legDir(pts[i - 1], pts[i]);
+    const u2 = legDir(pts[i], pts[i + 1]);
+    if (!u1 || !u2) continue;
+    const angle = (Math.atan2(Math.abs(u1[0] * u2[1] - u1[1] * u2[0]), u1[0] * u2[0] + u1[1] * u2[1]) * 180) / Math.PI;
+    if (angle > TURN_EPSILON) turns.push({ i, along, sharp: angle >= SHARP_DEGREES });
+  }
+  const clusters: { i: number; along: number; sharp: boolean }[][] = [];
+  for (const turn of turns) {
+    const band = clusters[clusters.length - 1];
+    const joins = band && !turn.sharp && !band[0].sharp && turn.along - band[0].along <= span;
+    if (joins) band.push(turn);
+    else clusters.push([turn]);
+  }
+  const out: Point[] = [pts[0]];
+  for (const band of clusters) {
+    const first = band[0].i;
+    const last = band[band.length - 1].i;
+    const met = lineCross(pts[first - 1], pts[first], pts[last], pts[last + 1]);
+    // Legs that all but line up meet a long way off; that is not a corner
+    // anyone drew, so the cluster's own first point stands for it.
+    const near = met && Math.hypot(met[0] - pts[first][0], met[1] - pts[first][1]) <= 4 * span;
+    out.push(near ? met! : pts[first]);
+  }
+  out.push(pts[pts.length - 1]);
+  return dropCollinear(out);
+}
+
+/**
+ * Whether a drawn edge wiggles (D78): a leg between two corners shorter
+ * than the corner radius — the port stubs at either end do not count — or
+ * two turns that double back on each other within a corner's length. Both
+ * say the same thing to a reader: this line was not drawn on purpose. Arc
+ * points are read back into their corners first, so an arc is never a wiggle.
+ */
+export function edgeWiggles(points: readonly Point[], radius = CORNER_RADIUS): boolean {
+  const corners = routeCorners(points, 2 * radius);
+  const legs = corners.slice(0, -1).map((p, i) => ({
+    len: Math.hypot(corners[i + 1][0] - p[0], corners[i + 1][1] - p[1]),
+    dir: legDir(p, corners[i + 1]),
+  }));
+  for (let i = 1; i + 1 < legs.length; i++) if (legs[i].len < radius - 1e-6) return true;
+  for (let i = 0; i + 2 < legs.length; i++) {
+    const a = legs[i].dir;
+    const b = legs[i + 2].dir;
+    if (!a || !b || legs[i + 1].len > 2 * radius) continue;
+    if (a[0] * b[0] + a[1] * b[1] < -SAME_DIR) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

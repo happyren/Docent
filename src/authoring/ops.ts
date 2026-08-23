@@ -13,7 +13,22 @@ import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
 import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
-import { absolutePoints, assignPorts, dropCollinear, nudgeRoutes, passesThrough, polylineThroughBox, ROUTE_PAD, routeEdge, softenCorners, type Point } from "./route";
+import {
+  absolutePoints,
+  arcCorners,
+  assignPorts,
+  chooseSides,
+  dropCollinear,
+  edgeWiggles,
+  nudgeRoutes,
+  passesThrough,
+  polylineThroughBox,
+  ROUTE_PAD,
+  routeEdge,
+  simplifyRoute,
+  type Point,
+  type SidePair,
+} from "./route";
 import { pickKindLook, toneLook, toneOfTag, type Role, type Tone } from "./palette";
 import { craftScore, type CraftScore } from "./score";
 import { DEFAULT_STYLE, houseStyle, kindOf, resolveLook, type Shape } from "./style";
@@ -201,6 +216,9 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   const created = new Map<string, Box & { type: string; frameId: string | null; label: string | null; kind: string | null }>();
   const createdFrames = new Map<string, WriteFrame & { members: string[] }>();
   const removed = new Set<string>();
+  // What a `layout` re-laid, moved or not: tidy re-routes every bound edge
+  // in its scope, so the whole frame is redrawn as one stroke each (D73, D78).
+  const relaid = new Set<string>();
 
   const resolve = (handle: string, what: string, kinds: ("node" | "edge" | "frame")[]): string | null => {
     if (handle.startsWith("$")) {
@@ -693,6 +711,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           // read: position order, which is what the layout defaults to (D79).
         });
         for (const n of members) {
+          relaid.add(n.sourceId);
           const box = boxes.get(n.id);
           if (!box) continue;
           const sized = box.width !== n.bounds.width || box.height !== n.bounds.height;
@@ -797,9 +816,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // Every edge the batch draws or moves leaves and enters at a port spread
   // along the side it uses (D75) and is routed around what lies between its
   // ends (D72) — over the final boxes of every component, and the legend.
-  // Then the segments that would run along one line are nudged apart and
-  // every corner is softened, each step given up when it would put the edge
-  // through something: D72's guarantee stands beneath D75.
+  // When the straight line is blocked the sides are chosen by route cost
+  // (D78) before the ports are spread on them; the route is then simplified,
+  // the segments that would run along one line are nudged apart, and every
+  // turn is drawn as an explicit arc. Each step is given up when it would
+  // put the edge through something: D72's guarantee stands beneath all of it.
   // A component that was resized moved as far as its edges are concerned (D74).
   const moved = new Set(
     write.patches.filter((p) => p.x !== undefined || p.y !== undefined || p.width !== undefined || p.height !== undefined).map((p) => p.id),
@@ -821,8 +842,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   if (legendArea) finalBoxes.set("__legend", { id: "__legend", ...legendArea });
   const obstacles = [...finalBoxes.values()];
   const around = (from: string, to: string) => obstacles.filter((o) => o.id !== from && o.id !== to);
-  // The edges this write is responsible for: the ones it draws, and the
-  // existing ones whose ends it moves. Untouched edges keep what they have.
+  // The edges this write is responsible for: the ones it draws, the existing
+  // ones whose ends it moves, and — since a tidy re-routes every bound edge
+  // in its scope (D73, amended by A19) — every edge of a frame it re-laid,
+  // moved or not. Untouched edges of an ordinary edit keep what they have.
   const jobs: { id: string; from: string; to: string; arrow?: WriteArrow }[] = [];
   for (const arrow of write.arrows) {
     if (finalBoxes.has(arrow.from) && finalBoxes.has(arrow.to)) jobs.push({ id: arrow.id, from: arrow.from, to: arrow.to, arrow });
@@ -831,11 +854,20 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     if (!e.from || !e.to || removed.has(e.sourceId)) continue;
     const from = graph.nodes.find((n) => n.id === e.from)?.sourceId;
     const to = graph.nodes.find((n) => n.id === e.to)?.sourceId;
-    if (!from || !to || (!moved.has(from) && !moved.has(to))) continue;
+    if (!from || !to) continue;
+    const inScope = moved.has(from) || moved.has(to) || relaid.has(from) || relaid.has(to);
+    if (!inScope) continue;
     if (!finalBoxes.has(from) || !finalBoxes.has(to)) continue;
     jobs.push({ id: e.sourceId, from, to });
   }
-  const ports = assignPorts(jobs, finalBoxes);
+  // Sides by route cost where the straight line is blocked (D78); the ports
+  // are then spread along the chosen sides, as D75 has always spread them.
+  const chosen = new Map<string, SidePair>();
+  for (const job of jobs) {
+    const pair = chooseSides(finalBoxes.get(job.from)!, finalBoxes.get(job.to)!, around(job.from, job.to), ROUTE_PAD);
+    if (pair) chosen.set(job.id, pair);
+  }
+  const ports = assignPorts(jobs, finalBoxes, ROUTE_PAD, chosen);
   // The whole drawn polyline of each routed edge — port, turns, port.
   const lines = new Map<string, Point[]>();
   const endsOf = new Map<string, { start: Point; end: Point }>();
@@ -844,7 +876,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const a = finalBoxes.get(job.from)!;
     const b = finalBoxes.get(job.to)!;
     const port = ports.get(job.id);
-    const turns = routeEdge(a, b, around(job.from, job.to), ROUTE_PAD, port);
+    const turns = routeEdge(a, b, around(job.from, job.to), ROUTE_PAD, port, chosen.has(job.id) ? { leaveBySide: true } : undefined);
     // An edge whose route could not leave from its port — the router fell
     // back to a side's middle to get through at all — keeps D72's line to
     // the centres: the guarantee outranks the port.
@@ -857,28 +889,39 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
   }
   const jobOf = new Map(jobs.map((j) => [j.id, j]));
+  // Simplified before it is drawn (D78): a jog collapsed, a hairpin taken
+  // out, no leg left shorter than a corner — each step refused when it would
+  // put the edge through a component.
+  for (const [id, points] of lines) {
+    lines.set(id, simplifyRoute(points, around(jobOf.get(id)!.from, jobOf.get(id)!.to)));
+  }
   for (const [id, points] of nudgeRoutes([...lines].map(([id, points]) => ({ id, points, obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to) })))) {
     lines.set(id, points);
   }
   for (const [id, points] of lines) {
-    const soft = dropCollinear(softenCorners(points));
-    const blocked = around(jobOf.get(id)!.from, jobOf.get(id)!.to).some((o) => polylineThroughBox(soft, o, 2));
-    lines.set(id, blocked ? points : soft);
+    const drawn = dropCollinear(arcCorners(points));
+    const blocked = around(jobOf.get(id)!.from, jobOf.get(id)!.to).some((o) => polylineThroughBox(drawn, o, 2));
+    lines.set(id, blocked ? points : drawn);
   }
   let routed = 0;
   for (const job of jobs) {
     const ends = endsOf.get(job.id);
     const line = lines.get(job.id);
     const via = line ? line.slice(1, -1) : null;
+    // Turning points are arc points now (D78), so the arrow is drawn sharp:
+    // what the reader sees is the route and not Excalidraw's curve through it.
+    const sharp = !!via && via.length > 0;
     if (job.arrow) {
       if (ends) job.arrow.ends = ends;
       if (via) job.arrow.via = via;
+      if (sharp) job.arrow.sharp = true;
     } else {
       const patch = write.patches.find((p) => p.id === job.id);
       if (patch) {
         patch.via = via ?? [];
+        patch.sharp = sharp;
         if (ends) patch.ends = ends;
-      } else write.patches.push({ id: job.id, via: via ?? [], ...(ends ? { ends } : {}) });
+      } else write.patches.push({ id: job.id, via: via ?? [], sharp, ...(ends ? { ends } : {}) });
       if (!touched.includes(job.id)) touched.push(job.id);
     }
     if (via) routed += 1;
@@ -1017,6 +1060,8 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     const by = arrow.ends ? arrow.ends.end[1] : b ? b.y + b.height / 2 : 0;
     const el = blank(arrow.id, "arrow", { x: ax, y: ay, width: Math.abs(bx - ax), height: Math.abs(by - ay) }, arrow.style, arrow.frameId);
     el.points = [[0, 0], ...(arrow.via ?? []).map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
+    // A routed edge is a sharp polyline carrying its own arcs (D78).
+    if (arrow.sharp) el.look = { ...el.look, roundness: null };
     el.startBindingId = arrow.from;
     el.endBindingId = arrow.to;
     el.docent = docentFromMeaning(arrow.meaning, el.docent);
@@ -1046,6 +1091,9 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     el.x = ax;
     el.y = ay;
     el.points = [[0, 0], ...patch.via.map(([px, py]): [number, number] => [px - ax, py - ay]), [bx - ax, by - ay]];
+    // Turning points mean arcs of Docent's own (D78) and a sharp polyline;
+    // a re-route that came out straight gets the house curvature back.
+    el.look = { ...el.look, roundness: patch.via.length ? null : (el.look.roundness ?? 2) };
   }
   if (write.legend) {
     const carrier = out.find((el) => el.docent.legend !== null);
@@ -1102,11 +1150,18 @@ export function lint(snapshot: SceneSnapshot): LintReport {
     // An edge through a component says the component is on its path (D72).
     const el = elementOf.get(edge.sourceId);
     if (from && to && el?.points && el.points.length >= 2) {
-      const through = passesThrough(absolutePoints(el.x, el.y, el.points), nodeBoxes, new Set([from.id, to.id]));
+      const drawn = absolutePoints(el.x, el.y, el.points);
+      const through = passesThrough(drawn, nodeBoxes, new Set([from.id, to.id]));
       if (through.length) {
         const names = through.map((b) => clean(graph.nodes.find((n) => n.id === b.id)?.label) || b.id);
         const frame = from.frameId ? `layout({frame:'${from.frameId}'})` : "layout({frame:null})";
         findings.push({ level: "warn", about: edge.id, message: `edge ${clean(from.label)} → ${clean(to.label)} passes through ${names.join(", ")} — ${frame} re-routes it, or move what is in the way` });
+      }
+      // A leg shorter than a corner, or a turn that doubles straight back,
+      // both say the line was not drawn on purpose (D78).
+      if (edgeWiggles(drawn)) {
+        const scope = from.frameId ? `tidy({frame:'${from.frameId}'})` : "tidy({frame:null})";
+        findings.push({ level: "warn", about: edge.id, message: `edge ${clean(from.label)} → ${clean(to.label)} doubles back on itself — ${scope} redraws it as one stroke` });
       }
     }
   }

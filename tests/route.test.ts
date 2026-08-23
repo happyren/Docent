@@ -1,15 +1,20 @@
 /**
- * Edges that flow (D75): ports spread along a side, routed segments nudged
- * off the lines they would share, and right-angle turns softened into arcs
- * — over D72's guarantee that an edge never cuts through a component.
+ * Edges that flow (D75) and read as one stroke (D78): ports spread along a
+ * side, sides chosen by route cost when the straight line is blocked, jogs
+ * and hairpins simplified away, routed segments nudged off the lines they
+ * would share, and every turn drawn as an arc Docent puts down itself —
+ * over D72's guarantee that an edge never cuts through a component.
  */
 import { describe, expect, it } from "vitest";
 import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import {
+  arcCorners,
   assignPorts,
   bindingFocus,
+  chooseSides,
   CORNER_RADIUS,
   dropCollinear,
+  edgeWiggles,
   NUDGE,
   nudgeRoutes,
   outlinePoint,
@@ -17,8 +22,9 @@ import {
   PORT_SPAN,
   ROUTE_PAD,
   routeEdge,
+  routeCorners,
   sideTowards,
-  softenCorners,
+  simplifyRoute,
   type Point,
 } from "../src/authoring/route";
 import { idSource, lint, plan, simulate } from "../src/authoring/ops";
@@ -162,39 +168,125 @@ describe("segments that would share a line are nudged apart (D75)", () => {
   });
 });
 
-describe("right-angle turns are softened into arcs (D75)", () => {
-  it("replaces a corner with two points at the radius", () => {
-    const soft = softenCorners([[0, 0], [100, 0], [100, 100]]);
-    expect(soft).toEqual([[0, 0], [100 - CORNER_RADIUS, 0], [100, CORNER_RADIUS], [100, 100]]);
+describe("Docent draws the arcs itself (D78)", () => {
+  it("puts a right angle's points on a circle of the corner radius, tangent at both ends", () => {
+    const arc = arcCorners([[0, 0], [100, 0], [100, 100]]);
+    // Two tangent points and four between them, plus the two ends.
+    expect(arc).toHaveLength(8);
+    expect(arc[0]).toEqual([0, 0]);
+    expect(arc[arc.length - 1]).toEqual([100, 100]);
+    // Tangent where the arc meets each leg: a radius back along it.
+    expect(arc[1][0]).toBeCloseTo(100 - CORNER_RADIUS, 6);
+    expect(arc[1][1]).toBeCloseTo(0, 6);
+    expect(arc[arc.length - 2][0]).toBeCloseTo(100, 6);
+    expect(arc[arc.length - 2][1]).toBeCloseTo(CORNER_RADIUS, 6);
+    // Every point of the arc a radius from the centre of the turn.
+    const centre = [100 - CORNER_RADIUS, CORNER_RADIUS];
+    for (const p of arc.slice(1, -1)) {
+      expect(Math.hypot(p[0] - centre[0], p[1] - centre[1])).toBeCloseTo(CORNER_RADIUS, 1);
+      expect(Math.abs(Math.hypot(p[0] - centre[0], p[1] - centre[1]) - CORNER_RADIUS)).toBeLessThan(0.5);
+    }
+    // And it sweeps the quarter turn in order, never doubling back.
+    const angles = arc.slice(1, -1).map((p) => Math.atan2(p[1] - centre[1], p[0] - centre[0]));
+    for (let i = 0; i + 1 < angles.length; i++) expect(angles[i + 1]).toBeGreaterThan(angles[i]);
   });
 
-  it("takes a shorter radius when a leg is shorter than twice the radius", () => {
-    const soft = softenCorners([[0, 0], [30, 0], [30, 100]]);
-    expect(soft).toEqual([[0, 0], [15, 0], [30, 15], [30, 100]]);
+  it("halves the radius when a leg is too short to carry it", () => {
+    const arc = arcCorners([[0, 0], [30, 0], [30, 100]]);
+    expect(arc[1][0]).toBeCloseTo(15, 6);
+    expect(arc[arc.length - 2][1]).toBeCloseTo(15, 6);
+    const centre = [15, 15];
+    for (const p of arc.slice(1, -1)) expect(Math.hypot(p[0] - centre[0], p[1] - centre[1])).toBeCloseTo(15, 6);
   });
 
   it("leaves a straight run and the two ends alone", () => {
-    expect(softenCorners([[0, 0], [50, 0], [100, 0]])).toEqual([[0, 0], [50, 0], [100, 0]]);
-    expect(softenCorners([[0, 0], [100, 0]])).toEqual([[0, 0], [100, 0]]);
+    expect(arcCorners([[0, 0], [50, 0], [100, 0]])).toEqual([[0, 0], [50, 0], [100, 0]]);
+    expect(arcCorners([[0, 0], [100, 0]])).toEqual([[0, 0], [100, 0]]);
+    // A turn under ten degrees is not a corner and keeps its point.
+    expect(arcCorners([[0, 0], [100, 0], [200, 10]])).toEqual([[0, 0], [100, 0], [200, 10]]);
   });
 
   it("survives the drop of points that do not turn — they do turn, slightly", () => {
-    const soft = softenCorners([[0, 0], [100, 0], [100, 100]]);
-    expect(dropCollinear(soft)).toEqual(soft);
+    const arc = arcCorners([[0, 0], [100, 0], [100, 100]]);
+    expect(dropCollinear(arc)).toEqual(arc);
     // What is truly collinear still goes, and so do duplicates.
     expect(dropCollinear([[0, 0], [50, 0], [100, 0]])).toEqual([[0, 0], [100, 0]]);
     expect(dropCollinear([[0, 0], [0, 0], [100, 0]])).toEqual([[0, 0], [100, 0]]);
   });
 
-  it("softens every corner of a routed edge without leaving its corridor", () => {
+  it("reads the arc back as the one corner it rounds", () => {
+    const line: Point[] = [[0, 0], [100, 0], [100, 100]];
+    const back = routeCorners(arcCorners(line));
+    expect(back).toHaveLength(3);
+    for (let i = 0; i < 3; i++) {
+      expect(back[i][0]).toBeCloseTo(line[i][0], 6);
+      expect(back[i][1]).toBeCloseTo(line[i][1], 6);
+    }
+    expect(edgeWiggles(arcCorners(line))).toBe(false);
+  });
+
+  it("arcs every corner of a routed edge without leaving its corridor", () => {
     const from = { x: 0, y: 0, width: 160, height: 80 };
     const to = { x: 600, y: 0, width: 160, height: 80 };
     const between = { x: 300, y: -20, width: 160, height: 120 };
     const via = routeEdge(from, to, [between])!;
     const line: Point[] = [[160, 40], ...via, [600, 40]];
-    const soft = dropCollinear(softenCorners(line));
-    expect(soft.length).toBeGreaterThan(line.length);
-    expect(polylineThroughBox(soft, between)).toBe(false);
+    const drawn = dropCollinear(arcCorners(line));
+    expect(drawn.length).toBeGreaterThan(line.length);
+    expect(polylineThroughBox(drawn, between)).toBe(false);
+  });
+});
+
+describe("a route is simplified before it is drawn (D78)", () => {
+  it("collapses a jog shorter than a corner", () => {
+    const jog: Point[] = [[0, 0], [60, 0], [60, 10], [200, 10], [200, 120]];
+    expect(simplifyRoute(jog, [])).toEqual([[0, 0], [200, 0], [200, 120]]);
+  });
+
+  it("removes a hairpin — two turns that double straight back", () => {
+    const hairpin: Point[] = [[0, 0], [100, 0], [100, 20], [40, 20], [40, 200]];
+    expect(simplifyRoute(hairpin, [])).toEqual([[0, 0], [40, 0], [40, 200]]);
+  });
+
+  it("refuses a collapse that would put the edge through a component", () => {
+    const jog: Point[] = [[0, 0], [60, 0], [60, 10], [200, 10], [200, 120]];
+    // A box sitting on the line the collapse would slide the leg onto.
+    const blocker = { x: 100, y: -20, width: 40, height: 25 };
+    expect(simplifyRoute(jog, [blocker])).toEqual(jog);
+    expect(polylineThroughBox(simplifyRoute(jog, [blocker]), blocker, 2)).toBe(false);
+  });
+
+  it("leaves no interior leg shorter than a corner", () => {
+    const stairs: Point[] = [[0, 0], [40, 0], [40, 10], [100, 10], [100, 20], [160, 20], [160, 100]];
+    const out = simplifyRoute(stairs, []);
+    expect(out).toEqual([[0, 0], [160, 0], [160, 100]]);
+    for (let i = 1; i + 2 < out.length; i++) {
+      expect(Math.hypot(out[i + 1][0] - out[i][0], out[i + 1][1] - out[i][1])).toBeGreaterThanOrEqual(CORNER_RADIUS);
+    }
+  });
+
+  it("leaves the ports where they are, and a clean route alone", () => {
+    const clean: Point[] = [[0, 0], [0, -24], [600, -24], [600, 0]];
+    expect(simplifyRoute(clean, [])).toEqual(clean);
+    const jog: Point[] = [[0, 0], [60, 0], [60, 10], [200, 10], [200, 120]];
+    const out = simplifyRoute(jog, []);
+    expect(out[0]).toEqual(jog[0]);
+    expect(out[out.length - 1]).toEqual(jog[jog.length - 1]);
+  });
+
+  it("reads the same twice", () => {
+    const jog: Point[] = [[0, 0], [60, 0], [60, 10], [200, 10], [200, 120]];
+    expect(simplifyRoute(jog, [])).toEqual(simplifyRoute(jog, []));
+  });
+});
+
+describe("the lint sees a wiggle (D78)", () => {
+  it("names a leg shorter than a corner and a hairpin, and passes a clean route", () => {
+    expect(edgeWiggles([[0, 0], [60, 0], [60, 10], [200, 10], [200, 120]])).toBe(true);
+    expect(edgeWiggles([[0, 0], [100, 0], [100, 20], [40, 20], [40, 200]])).toBe(true);
+    expect(edgeWiggles([[0, 0], [600, 0]])).toBe(false);
+    // A U over a row is two turns far apart: one stroke, not a wiggle.
+    expect(edgeWiggles([[750, 150], [750, 126], [150, 126], [150, 150]])).toBe(false);
   });
 });
 
@@ -292,16 +384,168 @@ describe("a planned batch draws flowing edges (D75)", () => {
     const result = plan(twoWays, walled, idSource(3));
     const lines = result.write.arrows!.map((a) => [a.ends!.start, ...a.via!, a.ends!.end] as Point[]);
     expect(lines).toHaveLength(2);
-    const verticals = (line: Point[]) =>
-      line.slice(0, -1).map((p, i) => [p, line[i + 1]] as const).filter(([p, q]) => Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) > 1);
-    const [first, second] = lines.map((line) => verticals(line).map(([p]) => p[0]).sort((p, q) => p - q));
+    // Both edges cross the wall along one line above it (D78 takes each of
+    // them over the top rather than out of a side and straight back down).
+    const horizontals = (line: Point[]) =>
+      line.slice(0, -1).map((p, i) => [p, line[i + 1]] as const).filter(([p, q]) => Math.abs(p[1] - q[1]) < 1e-6 && Math.abs(p[0] - q[0]) > 100);
+    const [first, second] = lines.map((line) => horizontals(line).map(([p]) => p[1]).sort((p, q) => p - q));
     expect(first).toHaveLength(second.length);
-    // Every long vertical of one edge sits a full gap from the other's.
+    expect(first.length).toBeGreaterThan(0);
+    // Every long run of one edge sits a full gap from the other's.
     for (let i = 0; i < first.length; i++) expect(Math.abs(first[i] - second[i])).toBeCloseTo(NUDGE, 6);
     const wall = { x: 300, y: -60, width: 160, height: 1200 };
     for (const line of lines) expect(polylineThroughBox(line, wall, 2)).toBe(false);
     // And D72 stands: the scene the write would make has nothing crossed.
     const after = simulate(walled, result.write);
     expect(lint(after).findings.some((f) => f.message.includes("passes through"))).toBe(false);
+  });
+});
+
+describe("a routed edge reads as one stroke (D78)", () => {
+  const base = {
+    angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
+    fillStyle: "solid", strokeWidth: 2, roughness: 1, roundness: { type: 3 }, opacity: 100,
+    groupIds: [], frameId: null, isDeleted: false, locked: false,
+  };
+  /** A hand-placed component of the row: a 220 × 110 ellipse with its label. */
+  const oval = (id: string, x: number, label: string) => [
+    { ...base, id, type: "ellipse", x, y: 150, width: 220, height: 110, boundElements: [{ id: `${id}_t`, type: "text" }] },
+    { ...base, id: `${id}_t`, type: "text", x: x + 20, y: 195, width: 180, height: 20, text: label, containerId: id, fontFamily: 5, fontSize: 20 },
+  ];
+  /** An arrow drawn where it says it is — absolute points, relative to its origin. */
+  const drawn = (id: string, from: string, to: string, points: readonly Point[]) => ({
+    ...base, id, type: "arrow", roundness: { type: 2 }, endArrowhead: "arrow",
+    x: points[0][0], y: points[0][1],
+    width: Math.abs(points[points.length - 1][0] - points[0][0]),
+    height: Math.abs(points[points.length - 1][1] - points[0][1]),
+    points: points.map((p) => [p[0] - points[0][0], p[1] - points[0][1]]),
+    startBinding: { elementId: from }, endBinding: { elementId: to },
+  });
+  // A row of four, left to right, each edge straight between the outlines.
+  const row = snapshotFromRawElements([
+    ...oval("a", 40, "Alpha"),
+    ...oval("b", 340, "Beta"),
+    ...oval("c", 640, "Gamma"),
+    ...oval("d", 940, "Delta"),
+    drawn("ab", "a", "b", [[260, 205], [340, 205]]),
+    drawn("bc", "b", "c", [[560, 205], [640, 205]]),
+    drawn("cd", "c", "d", [[860, 205], [940, 205]]),
+  ] as never);
+  const backEdge = [{ op: "add_edge" as const, from: "c", to: "a", label: "retry" }];
+
+  it("takes the back edge over or under the row, in one channel, with two turns", () => {
+    const result = plan(backEdge, row, idSource(11));
+    const arrow = result.write.arrows![0];
+    const line: Point[] = [arrow.ends!.start, ...arrow.via!, arrow.ends!.end];
+    // It leaves Gamma through the top or the bottom, and enters Alpha the same way.
+    expect([150, 260]).toContain(arrow.ends!.start[1]);
+    expect(arrow.ends!.end[1]).toBe(arrow.ends!.start[1]);
+    expect(arrow.ends!.start[0]).toBe(750);
+    expect(arrow.ends!.end[0]).toBe(150);
+    // Two turns, no more: out of the row, along one channel, and back in.
+    const corners = routeCorners(line);
+    expect(corners).toHaveLength(4);
+    // No leg between the turns is shorter than a corner.
+    for (let i = 1; i + 2 < corners.length; i++) {
+      expect(Math.hypot(corners[i + 1][0] - corners[i][0], corners[i + 1][1] - corners[i][1])).toBeGreaterThanOrEqual(CORNER_RADIUS);
+    }
+    expect(edgeWiggles(line)).toBe(false);
+    // Through nothing, and the lint has nothing to say about it.
+    const boxes = [{ id: "b", x: 340, y: 150, width: 220, height: 110 }, { id: "d", x: 940, y: 150, width: 220, height: 110 }];
+    for (const box of boxes) expect(polylineThroughBox(line, box, 2)).toBe(false);
+    const after = simulate(row, result.write);
+    expect(lint(after).findings.filter((f) => f.level === "warn" && f.message.includes("Gamma → Alpha"))).toEqual([]);
+  });
+
+  it("chooses those sides by what the route costs, not by which one faces", () => {
+    const boxOf = (x: number) => ({ x, y: 150, width: 220, height: 110, shape: "ellipse" });
+    const others = [{ x: 340, y: 150, width: 220, height: 110 }, { x: 940, y: 150, width: 220, height: 110 }];
+    // Gamma faces Alpha with its left side; the cheap way home is over the row.
+    expect(sideTowards(boxOf(640), [150, 205])).toBe("left");
+    expect(chooseSides(boxOf(640), boxOf(40), others)).toEqual({ start: "top", end: "top" });
+    // With nothing in the way the facing sides stand, as D75 left them.
+    expect(chooseSides(boxOf(640), boxOf(40), [])).toBeNull();
+  });
+
+  it("flags the routed arrow sharp, so Excalidraw draws the arcs and not its own curve", () => {
+    const result = plan(backEdge, row, idSource(11));
+    const arrow = result.write.arrows![0];
+    expect(arrow.via!.length).toBeGreaterThan(0);
+    expect(arrow.sharp).toBe(true);
+    // And the scene the write would make carries a sharp polyline.
+    const after = simulate(row, result.write);
+    expect(after.elements.find((el) => el.id === arrow.id)!.look.roundness).toBeNull();
+  });
+
+  it("reads the same twice", () => {
+    expect(plan(backEdge, row, idSource(11))).toEqual(plan(backEdge, row, idSource(11)));
+  });
+});
+
+describe("tidy re-routes every bound edge in its scope (D73, amended by A19)", () => {
+  const base = {
+    angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
+    fillStyle: "solid", strokeWidth: 2, roughness: 1, roundness: { type: 3 }, opacity: 100,
+    groupIds: [], frameId: null, isDeleted: false, locked: false,
+  };
+  const box = (id: string, x: number, y: number, label: string) => [
+    { ...base, id, type: "rectangle", x, y, width: 160, height: 80, frameId: "F", boundElements: [{ id: `${id}_t`, type: "text" }] },
+    { ...base, id: `${id}_t`, type: "text", x: x + 10, y: y + 20, width: 140, height: 20, text: label, containerId: id, frameId: "F", fontFamily: 5, fontSize: 20 },
+  ];
+  const arrow = (id: string, from: string, to: string) => ({
+    ...base, id, type: "arrow", x: 0, y: 0, width: 10, height: 10, frameId: "F", roundness: { type: 2 },
+    points: [[0, 0], [10, 10]], startBinding: { elementId: from }, endBinding: { elementId: to }, endArrowhead: "arrow",
+  });
+  const raw = [
+    { ...base, id: "F", type: "frame", name: "Flow", x: 0, y: 0, width: 900, height: 400, customData: { docent: { narrative: "One flow." } } },
+    ...box("one", 40, 100, "One"),
+    ...box("two", 340, 100, "Two"),
+    ...box("three", 640, 100, "Three"),
+    arrow("e1", "one", "two"),
+    arrow("e2", "two", "three"),
+  ];
+
+  /** The frame after one tidy: every component where the layout puts it. */
+  const settled = simulate(snapshotFromRawElements(raw as never), plan([{ op: "layout", frame: "F" }], snapshotFromRawElements(raw as never), idSource(21)).write);
+  // One edge hand-drawn as a zigzag, its ends left exactly where they are.
+  const zigzagged = {
+    elements: settled.elements.map((el) =>
+      el.id === "e1"
+        ? { ...el, x: 200, y: 140, points: [[0, 0], [60, 0], [60, 10], [100, 10], [100, -40], [160, -40], [160, 0]] as [number, number][] }
+        : el,
+    ),
+  };
+
+  it("re-routes an edge whose ends did not move, and draws it as one stroke", () => {
+    const result = plan([{ op: "layout", frame: "F" }], zigzagged, idSource(22));
+    const patches = result.write.patches ?? [];
+    // Nothing moved: a second tidy has nothing left to place.
+    for (const id of ["one", "two", "three"]) {
+      const patch = patches.find((p) => p.id === id);
+      expect(patch?.x).toBeUndefined();
+      expect(patch?.y).toBeUndefined();
+    }
+    // The zigzag is re-routed all the same, because the frame was re-laid.
+    const patch = patches.find((p) => p.id === "e1");
+    expect(patch).toBeDefined();
+    expect(patch!.via).toBeDefined();
+    expect(patch!.ends).toBeDefined();
+    const line: Point[] = [patch!.ends!.start, ...patch!.via!, patch!.ends!.end];
+    // Straight, or two turns at most — never the six the hand left.
+    expect(routeCorners(line).length).toBeLessThanOrEqual(4);
+    expect(edgeWiggles(line)).toBe(false);
+    expect(patch!.sharp).toBe(patch!.via!.length > 0);
+    // And the lint stops saying the edge doubles back.
+    expect(lint(zigzagged).findings.some((f) => f.message.includes("doubles back"))).toBe(true);
+    expect(lint(simulate(zigzagged, result.write)).findings.some((f) => f.message.includes("doubles back"))).toBe(false);
+  });
+
+  it("leaves the untouched edges of an ordinary edit alone", () => {
+    const added = plan([{ op: "add_node", label: "Four", kind: "service" }], zigzagged, idSource(23));
+    expect((added.write.patches ?? []).some((p) => p.id === "e1")).toBe(false);
+  });
+
+  it("reads the same twice", () => {
+    expect(plan([{ op: "layout", frame: "F" }], zigzagged, idSource(22))).toEqual(plan([{ op: "layout", frame: "F" }], zigzagged, idSource(22)));
   });
 });

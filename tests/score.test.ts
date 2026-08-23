@@ -1,7 +1,7 @@
 /**
  * The craft score (D76): the number the lint carries, measured off the
  * polylines a reader sees. A tidy diagram scores high, a tangled one
- * clearly lower, a softened corner (D75) counts as the one bend it draws,
+ * clearly lower, an arc at a corner (D78) counts as the one bend it draws,
  * and two kinds a reader could not tell apart cost the legend. The last
  * test is the watchdog: what Docent's own pipeline draws must keep scoring.
  */
@@ -10,7 +10,7 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { idSource, lint, plan, simulate } from "../src/authoring/ops";
 import { craftScore, type CraftKey, type CraftPart, type CraftScore } from "../src/authoring/score";
-import { softenCorners, type Point } from "../src/authoring/route";
+import { arcCorners, CORNER_RADIUS, type Point } from "../src/authoring/route";
 
 /**
  * What an agent-built frame must keep scoring, laid out by Docent's own
@@ -113,11 +113,13 @@ describe("the craft score (D76)", () => {
     expect(knot.perFrame[0].worst).toBe("crossings");
   });
 
-  it("counts a softened corner as the one bend it draws, and a straight line as none", () => {
+  it("counts an arc as the one bend it draws, and a straight line as none", () => {
     const corners: Point[] = [[100, 30], [350, 30], [350, 430], [600, 430]];
-    const softened = softenCorners(corners);
-    // D75 leaves two points either side of each right angle.
-    expect(softened.length).toBe(corners.length + 2);
+    const softened = arcCorners(corners);
+    // D78 draws each right angle as an arc: two tangent points and four between.
+    expect(softened.length).toBe(corners.length + 2 * 5);
+    for (const p of softened) expect(Number.isFinite(p[0]) && Number.isFinite(p[1])).toBe(true);
+    expect(CORNER_RADIUS).toBe(24);
     const withCorners = snapshotFromRawElements([
       { ...base, id: "F", type: "frame", name: "Turns", x: -100, y: -100, width: 1000, height: 700, customData: { docent: { narrative: "Two turns." } } },
       ...box("p", 0, 0, "P"),
