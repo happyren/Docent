@@ -7,7 +7,7 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
-import { columnsPerBand, edgeLabelSize, layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
+import { columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
 import { absolutePoints, polylineThroughBox, routeEdge } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
 
@@ -303,6 +303,88 @@ describe("long flows turn (D71)", () => {
     const sizes = new Map(graph.nodes.map((n) => [n.id, { width: 160, height: 80 }]));
     const boxes = layeredLayout(graph.nodes, graph.edges, sizes, { x: 0, y: 0 });
     expect(new Set([...boxes.values()].map((b) => b.y)).size).toBe(1);
+  });
+});
+
+describe("the layered pipeline, whole (D74)", () => {
+  const SIZE = { width: 160, height: 80 };
+  const nodesAt = (rows: readonly (readonly [string, number])[]) =>
+    rows.map(([id, y]) => ({ id, bounds: { x: 0, y, ...SIZE } })) as never[];
+  const link = (from: string, to: string) => ({ id: `${from}-${to}`, from, to, label: null }) as never;
+  const sizesFor = (rows: readonly (readonly [string, number])[]) => new Map(rows.map(([id]) => [id, SIZE]));
+  const middle = (b: { y: number; height: number }) => b.y + b.height / 2;
+
+  it("sweeps down and back up until the crossings are gone", () => {
+    // Two feeders share a component and a third feeds the one between
+    // them: no order of the second rank saves it, so the crossing only
+    // goes when the sweep back up re-orders the sources themselves.
+    const rows = [["p", 0], ["m", 50], ["q", 200], ["n", 250], ["r", 400]] as const;
+    const nodes = nodesAt(rows);
+    const edges = [link("p", "m"), link("q", "n"), link("r", "m")];
+    // As they arrive, the two ranks cross once.
+    expect(crossingsBetweenLayers(["p", "q", "r"], ["m", "n"], [["p", "m"], ["q", "n"], ["r", "m"]])).toBe(1);
+    const boxes = layeredLayout(nodes, edges, sizesFor(rows), { x: 0, y: 0 });
+    const placed = [...boxes.entries()].map(([id, bounds]) => ({ id, bounds })) as never[];
+    expect(countCrossings(placed, edges)).toBe(0);
+    // r came last and now sits above q — what the second sweep found.
+    expect(middle(boxes.get("r")!)).toBeLessThan(middle(boxes.get("q")!));
+  });
+
+  it("sits a parent on the median of its children, with the children balanced about it", () => {
+    const rows = [["parent", 0], ["first", 0], ["middle", 200], ["last", 400]] as const;
+    const boxes = layeredLayout(
+      nodesAt(rows),
+      [link("parent", "first"), link("parent", "middle"), link("parent", "last")],
+      sizesFor(rows),
+      { x: 0, y: 0 },
+    );
+    const at = (id: string) => middle(boxes.get(id)!);
+    expect(Math.abs(at("parent") - at("middle"))).toBeLessThanOrEqual(1);
+    expect(Math.abs(at("parent") - (at("first") + at("last")) / 2)).toBeLessThanOrEqual(1);
+  });
+
+  it("draws a chain of neighbouring ranks straight", () => {
+    const rows = [["a", 0], ["b", 300], ["c", 100], ["d", 200], ["e", 400]] as const;
+    const boxes = layeredLayout(
+      nodesAt(rows),
+      [link("a", "b"), link("b", "c"), link("c", "d"), link("d", "e")],
+      sizesFor(rows),
+      { x: 0, y: 0 },
+    );
+    expect(new Set([...boxes.values()].map(middle)).size).toBe(1);
+  });
+
+  it("draws one size for a kind and one height for a rank", () => {
+    const rows = [["svcA", 0], ["storeX", 200], ["svcB", 0], ["storeY", 200]] as const;
+    const nodes = nodesAt(rows);
+    const sizes = new Map([
+      ["svcA", { width: 160, height: 80 }],
+      ["storeX", { width: 200, height: 70 }],
+      ["svcB", { width: 140, height: 100 }],
+      ["storeY", { width: 180, height: 60 }],
+    ]);
+    const boxes = layeredLayout(nodes, [link("svcA", "svcB"), link("storeX", "storeY")], sizes, { x: 0, y: 0 }, {
+      kindOf: (id) => (id.startsWith("svc") ? "service" : "datastore"),
+    });
+    const box = (id: string) => boxes.get(id)!;
+    // One kind, one size — the widest and the tallest of it.
+    expect(box("svcA").width).toBe(160);
+    expect(box("svcB").width).toBe(160);
+    expect(box("storeX").width).toBe(200);
+    expect(box("storeY").width).toBe(200);
+    // One rank, one height — and here that is the tallest of everything.
+    for (const [id] of rows) expect(box(id).height).toBe(100);
+  });
+
+  it("gives one picture, whatever order the components arrive in", () => {
+    const rows = [["a", 0], ["b", 100], ["c", 200], ["d", 300], ["e", 400]] as const;
+    const nodes = nodesAt(rows);
+    const edges = [link("a", "b"), link("a", "c"), link("b", "d"), link("c", "d"), link("a", "d"), link("d", "e")];
+    const run = (from: readonly never[]) =>
+      Object.fromEntries([...layeredLayout(from, edges, sizesFor(rows), { x: 0, y: 0 }).entries()].sort(([x], [y]) => (x < y ? -1 : 1)));
+    const once = run(nodes);
+    expect(run(nodes)).toEqual(once);
+    expect(run([...nodes].reverse())).toEqual(once);
   });
 });
 

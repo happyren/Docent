@@ -1467,14 +1467,15 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         }
       }
 
-      // A label follows its container's move (a bound text keeps its own
-      // coordinates; Excalidraw does not re-centre it on updateScene).
+      // A label follows its container's centre (a bound text keeps its own
+      // coordinates; Excalidraw does not re-centre it on updateScene), so a
+      // container that was resized carries its label along too (D74).
       const shifted = new Map<string, { dx: number; dy: number }>();
       for (const p of write.patches ?? []) {
         const el = live.get(p.id);
         if (!el || el.type === "arrow") continue;
-        const dx = p.x !== undefined ? p.x - el.x : 0;
-        const dy = p.y !== undefined ? p.y - el.y : 0;
+        const dx = (p.x ?? el.x) + (p.width ?? el.width) / 2 - (el.x + el.width / 2);
+        const dy = (p.y ?? el.y) + (p.height ?? el.height) / 2 - (el.y + el.height / 2);
         if (!dx && !dy) continue;
         for (const b of el.boundElements ?? []) if (b.type === "text") shifted.set(b.id, { dx, dy });
       }

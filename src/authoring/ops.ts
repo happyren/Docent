@@ -593,12 +593,24 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const sizes = new Map(members.map((n) => [n.id, { width: n.bounds.width, height: n.bounds.height }]));
         const fb = frameSource ? (grownFrames.get(frameSource) ?? frameBox(frameSource)) : null;
         const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: Math.min(...members.map((m) => m.bounds.x)), y: Math.min(...members.map((m) => m.bounds.y)) };
-        const boxes = layeredLayout(members, graph.edges, sizes, origin, { labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize) });
+        // The legend is what says two components are the same thing, so it
+        // is what decides which of them are drawn one size (D74).
+        const kinds = new Map(members.map((n) => [n.id, applyLegend(n.style, n.shape, legend).kind]));
+        const boxes = layeredLayout(members, graph.edges, sizes, origin, {
+          labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
+          kindOf: (id) => kinds.get(id) ?? null,
+        });
         for (const n of members) {
           const box = boxes.get(n.id);
           if (!box) continue;
-          if (box.x !== n.bounds.x || box.y !== n.bounds.y) {
-            write.patches.push({ id: n.sourceId, x: box.x, y: box.y });
+          const sized = box.width !== n.bounds.width || box.height !== n.bounds.height;
+          if (box.x !== n.bounds.x || box.y !== n.bounds.y || sized) {
+            const patch: WritePatch = { id: n.sourceId, x: box.x, y: box.y };
+            if (sized) {
+              patch.width = box.width;
+              patch.height = box.height;
+            }
+            write.patches.push(patch);
             touched.push(n.sourceId);
           }
           noteGrow(frameSource, box);
@@ -628,7 +640,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const sizes = new Map(members.map(([id, c]) => [id, { width: c.width, height: c.height }]));
     const fb = grownFrames.get(frameId) ?? frameBox(frameId);
     const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: 0, y: 0 };
-    const boxes = layeredLayout(nodes, edges, sizes, origin, { labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize) });
+    const boxes = layeredLayout(nodes, edges, sizes, origin, {
+      labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
+      // The batch said what each component is, so peers are drawn one size (D74).
+      kindOf: (id) => created.get(id)?.kind ?? null,
+    });
     // Start the frame from its own origin again: what grew it is being re-placed.
     let grown: Box = fb ? { x: fb.x, y: fb.y, width: 0, height: 0 } : { x: 0, y: 0, width: 0, height: 0 };
     for (const [id, c] of members) {
@@ -636,10 +652,14 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       if (!box) continue;
       c.x = box.x;
       c.y = box.y;
+      c.width = box.width;
+      c.height = box.height;
       const shape = write.shapes.find((sh) => sh.id === id);
       if (shape) {
         shape.x = box.x;
         shape.y = box.y;
+        shape.width = box.width;
+        shape.height = box.height;
       }
       grown = growFrame(grown, [box]);
     }
@@ -674,12 +694,21 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 
   // Every edge the batch draws or moves is routed around what lies between
   // its ends (D72): the final boxes of every component, and the legend.
-  const moved = new Set(write.patches.filter((p) => p.x !== undefined || p.y !== undefined).map((p) => p.id));
+  // A component that was resized moved as far as its edges are concerned (D74).
+  const moved = new Set(
+    write.patches.filter((p) => p.x !== undefined || p.y !== undefined || p.width !== undefined || p.height !== undefined).map((p) => p.id),
+  );
   const finalBoxes = new Map<string, Box & { id: string }>();
   for (const n of graph.nodes) {
     if (removed.has(n.sourceId)) continue;
     const patch = write.patches.find((p) => p.id === n.sourceId);
-    finalBoxes.set(n.sourceId, { id: n.sourceId, x: patch?.x ?? n.bounds.x, y: patch?.y ?? n.bounds.y, width: n.bounds.width, height: n.bounds.height });
+    finalBoxes.set(n.sourceId, {
+      id: n.sourceId,
+      x: patch?.x ?? n.bounds.x,
+      y: patch?.y ?? n.bounds.y,
+      width: patch?.width ?? n.bounds.width,
+      height: patch?.height ?? n.bounds.height,
+    });
   }
   for (const [id, c] of created) if (c.type !== "arrow") finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height });
   if (legendArea) finalBoxes.set("__legend", { id: "__legend", ...legendArea });

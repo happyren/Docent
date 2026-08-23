@@ -173,27 +173,455 @@ export function placeFrame(existing: readonly Box[], size: Size): Box {
 }
 
 /**
- * A layered layout of a frame's components by their edges: rank by the
- * longest path from a source (left to right), order within a rank by the
- * mean rank-position of what feeds it (fewer crossings), stable
- * tie-breaks by current position then id. The gap between two columns is
- * at least the widest edge label that sits in it (D70), and a flow of
- * more than `TURN_AFTER` ranks folds into bands that alternate direction
- * (D71). Returns new boxes at the frame's origin; the caller grows the
- * frame.
+ * A layered layout of a frame's components by their edges, the Sugiyama
+ * pipeline whole (D74): rank by the longest path from a source (left to
+ * right); order within each rank by repeated median sweeps — down, then
+ * back up, a transpose pass after each — until a full sweep stops taking
+ * crossings out; then place along the cross axis by Brandes–Köpf, which
+ * straightens an edge between neighbouring ranks wherever it can and sits
+ * a component on the median of what it joins. Ties break by position then
+ * id, so two runs of one diagram give one picture (I3). The gap between
+ * two columns is at least the widest edge label that sits in it (D70), and
+ * a flow of more than `TURN_AFTER` ranks folds into bands that alternate
+ * direction (D71). Returns new boxes at the frame's origin; the caller
+ * grows the frame.
  */
 export interface LayoutOptions {
   /** The room an edge's label takes; nothing when absent. */
   labelSize?: (edge: GraphEdge) => Size;
+  /**
+   * A component's kind, when the caller can say. Given it, components of
+   * one kind are drawn one size and every component in a rank shares one
+   * height (D74) — so the boxes that come back carry sizes, not only
+   * places, and the caller writes both.
+   */
+  kindOf?: (id: string) => string | null;
 }
 
 /** A flow longer than this many ranks turns (D71). */
 export const TURN_AFTER = 5;
 
+/** Ordering sweeps before the order is taken as settled (D74). */
+const MAX_SWEEPS = 24;
+
 /** Columns per band for a flow of `ranks` ranks: the smallest balanced fold. */
 export function columnsPerBand(ranks: number): number {
   if (ranks <= TURN_AFTER) return Math.max(1, ranks);
   return Math.ceil(Math.sqrt(2 * ranks));
+}
+
+/**
+ * A place in a rank: a component, or a dummy standing in for an edge
+ * passing through on its way further along. Dummies are ordered and
+ * placed like everything else — that is what keeps a long edge straight
+ * and pushes the components it passes off its line.
+ */
+interface Slot {
+  id: string;
+  dummy: boolean;
+  size: Size;
+  /** Stable tie-break: position order for a component, its feeder's for a dummy. */
+  tie: number;
+  /** Neighbours one rank back and one rank on. */
+  up: Slot[];
+  down: Slot[];
+  /** Where it currently sits in its rank. */
+  index: number;
+}
+
+/** The room kept after a slot: half of it after a dummy, which is only a line. */
+const gapAfterSlot = (slot: Slot): number => (slot.dummy ? GAP_Y / 2 : GAP_Y);
+
+/** What two neighbours in a rank must keep between their centres. */
+const separation = (first: Slot, second: Slot): number =>
+  first.size.height / 2 + gapAfterSlot(first) + second.size.height / 2;
+
+/**
+ * The weighted median of a slot's neighbour positions (Gansner et al.);
+ * -1 when it has none in the rank being read, and such a slot stays put.
+ */
+function medianPosition(positions: readonly number[]): number {
+  if (!positions.length) return -1;
+  const p = [...positions].sort((a, b) => a - b);
+  const m = Math.floor(p.length / 2);
+  if (p.length % 2 === 1) return p[m];
+  if (p.length === 2) return (p[0] + p[1]) / 2;
+  const left = p[m - 1] - p[0];
+  const right = p[p.length - 1] - p[m];
+  return left + right === 0 ? (p[m - 1] + p[m]) / 2 : (p[m - 1] * right + p[m] * left) / (left + right);
+}
+
+function inversions(pairs: readonly (readonly [number, number])[]): number {
+  let count = 0;
+  for (let i = 0; i < pairs.length; i++) {
+    for (let j = i + 1; j < pairs.length; j++) {
+      if ((pairs[i][0] - pairs[j][0]) * (pairs[i][1] - pairs[j][1]) < 0) count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * How many pairs of edges between two neighbouring ranks cross, given the
+ * order of each rank — the number the sweeps bring down (D74). `links`
+ * names each edge by the id it leaves in the upper rank and the one it
+ * enters in the lower.
+ */
+export function crossingsBetweenLayers(
+  upper: readonly string[],
+  lower: readonly string[],
+  links: readonly (readonly [string, string])[],
+): number {
+  const above = new Map(upper.map((id, i) => [id, i]));
+  const below = new Map(lower.map((id, i) => [id, i]));
+  const pairs: [number, number][] = [];
+  for (const [a, b] of links) {
+    const i = above.get(a);
+    const j = below.get(b);
+    if (i !== undefined && j !== undefined) pairs.push([i, j]);
+  }
+  return inversions(pairs);
+}
+
+/** The crossings between a rank and the one after it, as the slots stand. */
+function crossingsAfter(upper: readonly Slot[]): number {
+  const pairs: [number, number][] = [];
+  for (const u of upper) for (const v of u.down) pairs.push([u.index, v.index]);
+  return inversions(pairs);
+}
+
+function totalCrossings(ranks: readonly Slot[][]): number {
+  let total = 0;
+  for (let r = 0; r + 1 < ranks.length; r++) total += crossingsAfter(ranks[r]);
+  return total;
+}
+
+/**
+ * What two neighbours in a rank cost, in this order: every pair of their
+ * segments whose other ends are the other way round. Swapping the two
+ * changes nothing else, so this is the whole question a transpose asks.
+ */
+function pairCrossings(first: Slot, second: Slot): number {
+  let count = 0;
+  for (const u of first.up) for (const v of second.up) if (u.index > v.index) count += 1;
+  for (const u of first.down) for (const v of second.down) if (u.index > v.index) count += 1;
+  return count;
+}
+
+function reindex(ranks: readonly Slot[][]): void {
+  for (const rank of ranks) {
+    rank.forEach((slot, i) => {
+      slot.index = i;
+    });
+  }
+}
+
+/**
+ * One sweep: every rank re-ordered by the weighted median of what it joins
+ * in the rank the sweep came from, barycentre breaking a tie and position
+ * order breaking that.
+ */
+function medianSweep(ranks: readonly Slot[][], downward: boolean): void {
+  const visit = downward
+    ? ranks.map((_, r) => r).slice(1)
+    : ranks.map((_, r) => r).slice(0, -1).reverse();
+  for (const r of visit) {
+    const rank = ranks[r];
+    const keys = new Map<Slot, { median: number; bary: number; here: number }>();
+    rank.forEach((slot, i) => {
+      const near = (downward ? slot.up : slot.down).map((n) => n.index);
+      const bary = near.length ? near.reduce((sum, n) => sum + n, 0) / near.length : -1;
+      keys.set(slot, { median: medianPosition(near), bary, here: i });
+    });
+    rank.sort((a, b) => {
+      const ka = keys.get(a)!;
+      const kb = keys.get(b)!;
+      const pa = ka.median < 0 ? ka.here : ka.median;
+      const pb = kb.median < 0 ? kb.here : kb.median;
+      return pa - pb || ka.bary - kb.bary || a.tie - b.tie;
+    });
+    rank.forEach((slot, i) => {
+      slot.index = i;
+    });
+  }
+}
+
+/**
+ * The transpose pass: neighbouring slots swap whenever the swap costs
+ * fewer crossings, left to right, until nothing improves. It catches what
+ * the medians cannot see.
+ */
+function transpose(ranks: readonly Slot[][]): void {
+  let improved = true;
+  let guard = 0;
+  while (improved && guard++ < MAX_SWEEPS) {
+    improved = false;
+    for (let r = 0; r < ranks.length; r++) {
+      const rank = ranks[r];
+      for (let i = 0; i + 1 < rank.length; i++) {
+        if (pairCrossings(rank[i], rank[i + 1]) <= pairCrossings(rank[i + 1], rank[i])) continue;
+        [rank[i], rank[i + 1]] = [rank[i + 1], rank[i]];
+        rank[i].index = i;
+        rank[i + 1].index = i + 1;
+        improved = true;
+      }
+    }
+  }
+}
+
+/** Sweeps down and up with a transpose after each, keeping the best order seen. */
+function orderRanks(ranks: readonly Slot[][]): void {
+  reindex(ranks);
+  let best = ranks.map((rank) => [...rank]);
+  let fewest = totalCrossings(ranks);
+  let stale = 0;
+  for (let sweep = 0; sweep < MAX_SWEEPS && fewest > 0; sweep++) {
+    medianSweep(ranks, sweep % 2 === 0);
+    transpose(ranks);
+    const count = totalCrossings(ranks);
+    if (count < fewest) {
+      fewest = count;
+      best = ranks.map((rank) => [...rank]);
+      stale = 0;
+    } else if (++stale >= 2) {
+      // A sweep down and one back up with nothing gained: this is the order.
+      break;
+    }
+  }
+  ranks.forEach((rank, r) => rank.splice(0, rank.length, ...best[r]));
+  reindex(ranks);
+}
+
+const segmentKey = (upper: Slot, lower: Slot): string => `${upper.id} ${lower.id}`;
+
+/**
+ * Type-1 conflicts: a segment between two dummies is a long edge passing
+ * through, and Brandes–Köpf will not bend one of those for an ordinary
+ * edge. The segments that cross one are marked here and refused alignment.
+ */
+function markConflicts(ranks: readonly Slot[][]): Set<string> {
+  const marked = new Set<string>();
+  for (let r = 0; r + 1 < ranks.length; r++) {
+    const upper = ranks[r];
+    const lower = ranks[r + 1];
+    let k0 = 0;
+    let l = 0;
+    for (let l1 = 0; l1 < lower.length; l1++) {
+      const v = lower[l1];
+      const inner = v.dummy ? v.up.find((u) => u.dummy) : undefined;
+      if (l1 !== lower.length - 1 && !inner) continue;
+      const k1 = inner ? inner.index : upper.length - 1;
+      for (; l <= l1; l++) {
+        for (const u of lower[l].up) {
+          if (u.index < k0 || u.index > k1) marked.add(segmentKey(u, lower[l]));
+        }
+      }
+      k0 = k1;
+    }
+  }
+  return marked;
+}
+
+/** One of Brandes–Köpf's four readings of the ranks. */
+interface Alignment {
+  /** The ranks in the order this reading walks them, each rank in its own order. */
+  ranks: Slot[][];
+  /** Which walked rank a slot sits in, and where in it. */
+  depth: Map<Slot, number>;
+  index: Map<Slot, number>;
+  /** The distance to keep between items i and i+1 of `ranks[d]`. */
+  gap: number[][];
+  /** What a slot aligns to: its neighbours in the rank already walked. */
+  behind: (slot: Slot) => Slot[];
+  /** Whether that segment is a marked type-1 conflict. */
+  conflicted: (slot: Slot, neighbour: Slot) => boolean;
+}
+
+/**
+ * One alignment: blocks of slots that want the same coordinate, pressed
+ * as close to the start of the axis as their rank neighbours allow.
+ */
+function alignAndCompact(view: Alignment): Map<Slot, number> {
+  const all: Slot[] = [];
+  const root = new Map<Slot, Slot>();
+  const align = new Map<Slot, Slot>();
+  for (const rank of view.ranks) {
+    for (const v of rank) {
+      all.push(v);
+      root.set(v, v);
+      align.set(v, v);
+    }
+  }
+  for (let d = 1; d < view.ranks.length; d++) {
+    let last = -1;
+    for (const v of view.ranks[d]) {
+      const near = [...view.behind(v)].sort((a, b) => view.index.get(a)! - view.index.get(b)!);
+      if (!near.length) continue;
+      const low = Math.floor((near.length - 1) / 2);
+      const high = Math.ceil((near.length - 1) / 2);
+      for (let m = low; m <= high && align.get(v) === v; m++) {
+        const u = near[m];
+        if (view.conflicted(v, u)) continue;
+        const at = view.index.get(u)!;
+        if (last >= at) continue;
+        align.set(u, v);
+        root.set(v, root.get(u)!);
+        align.set(v, root.get(v)!);
+        last = at;
+      }
+    }
+  }
+  const sink = new Map<Slot, Slot>(all.map((v) => [v, v]));
+  const shift = new Map<Slot, number>(all.map((v) => [v, Number.POSITIVE_INFINITY]));
+  const place = new Map<Slot, number>();
+  const placeBlock = (v: Slot): void => {
+    if (place.has(v)) return;
+    place.set(v, 0);
+    let w = v;
+    do {
+      const d = view.depth.get(w)!;
+      const i = view.index.get(w)!;
+      if (i > 0) {
+        const u = root.get(view.ranks[d][i - 1])!;
+        placeBlock(u);
+        if (sink.get(v) === v) sink.set(v, sink.get(u)!);
+        const gap = view.gap[d][i - 1];
+        if (sink.get(v) !== sink.get(u)) {
+          const su = sink.get(u)!;
+          shift.set(su, Math.min(shift.get(su)!, place.get(v)! - place.get(u)! - gap));
+        } else {
+          place.set(v, Math.max(place.get(v)!, place.get(u)! + gap));
+        }
+      }
+      w = align.get(w)!;
+    } while (w !== v);
+  };
+  for (const v of all) if (root.get(v) === v) placeBlock(v);
+  const out = new Map<Slot, number>();
+  for (const v of all) {
+    const block = root.get(v)!;
+    const moved = shift.get(sink.get(block)!)!;
+    out.set(v, place.get(block)! + (moved < Number.POSITIVE_INFINITY ? moved : 0));
+  }
+  return out;
+}
+
+/**
+ * Brandes–Köpf coordinate assignment: four alignments — reading the ranks
+ * down and up, each biased to the near side and the far side — balanced
+ * by aligning them all to the narrowest and averaging the two middle
+ * answers, so no single bias decides the picture. Returns the centre of
+ * every slot on the cross axis (D74).
+ */
+function brandesKopf(ranks: readonly Slot[][]): Map<Slot, number> {
+  const marked = markConflicts(ranks);
+  const runs: { coords: Map<Slot, number>; nearSide: boolean }[] = [];
+  for (const downward of [true, false]) {
+    for (const nearSide of [true, false]) {
+      const walked = downward ? [...ranks] : [...ranks].reverse();
+      const depth = new Map<Slot, number>();
+      const index = new Map<Slot, number>();
+      const view: Alignment = {
+        ranks: [],
+        depth,
+        index,
+        gap: [],
+        behind: downward ? (slot) => slot.up : (slot) => slot.down,
+        conflicted: downward
+          ? (slot, neighbour) => marked.has(segmentKey(neighbour, slot))
+          : (slot, neighbour) => marked.has(segmentKey(slot, neighbour)),
+      };
+      walked.forEach((rank, d) => {
+        const items = nearSide ? [...rank] : [...rank].reverse();
+        items.forEach((slot, i) => {
+          depth.set(slot, d);
+          index.set(slot, i);
+        });
+        const gaps: number[] = [];
+        for (let i = 0; i + 1 < items.length; i++) {
+          // The room to keep is the room the rank's own order asks for,
+          // whichever way this reading walks it.
+          gaps.push(nearSide ? separation(items[i], items[i + 1]) : separation(items[i + 1], items[i]));
+        }
+        view.ranks.push(items);
+        view.gap.push(gaps);
+      });
+      const coords = alignAndCompact(view);
+      if (!nearSide) for (const [slot, value] of coords) coords.set(slot, -value);
+      runs.push({ coords, nearSide });
+    }
+  }
+  const extents = runs.map(({ coords }) => {
+    const values = [...coords.values()];
+    return { min: Math.min(...values), max: Math.max(...values) };
+  });
+  let narrowest = 0;
+  for (let i = 1; i < extents.length; i++) {
+    if (extents[i].max - extents[i].min < extents[narrowest].max - extents[narrowest].min) narrowest = i;
+  }
+  runs.forEach((run, i) => {
+    const delta = run.nearSide ? extents[narrowest].min - extents[i].min : extents[narrowest].max - extents[i].max;
+    if (delta) for (const [slot, value] of run.coords) run.coords.set(slot, value + delta);
+  });
+  const centre = new Map<Slot, number>();
+  for (const rank of ranks) {
+    for (const slot of rank) {
+      const values = runs.map((run) => run.coords.get(slot)!).sort((a, b) => a - b);
+      centre.set(slot, Math.round((values[1] + values[2]) / 2));
+    }
+  }
+  // Four feasible placements averaged can leave two slots closer than the
+  // room they must keep; one pass down each rank pushes them back apart.
+  for (const rank of ranks) {
+    for (let i = 1; i < rank.length; i++) {
+      const least = centre.get(rank[i - 1])! + separation(rank[i - 1], rank[i]);
+      if (centre.get(rank[i])! < least) centre.set(rank[i], least);
+    }
+  }
+  return centre;
+}
+
+/**
+ * D74's uniform sizes: two components of one kind are drawn one size, and
+ * a rank shares one height, so a column reads as a row of peers. The two
+ * rules pull the same way — sizes only grow — so a few passes settle it.
+ */
+function uniformSizes(
+  nodes: readonly GraphNode[],
+  rank: ReadonlyMap<string, number>,
+  sizes: ReadonlyMap<string, Size>,
+  kindOf: (id: string) => string | null,
+): Map<string, Size> {
+  const out = new Map<string, Size>(nodes.map((n) => [n.id, { ...(sizes.get(n.id) ?? { width: MIN_W, height: MIN_H }) }]));
+  const groups = new Map<string, string[]>();
+  const add = (key: string, id: string) => {
+    const list = groups.get(key);
+    if (list) list.push(id);
+    else groups.set(key, [id]);
+  };
+  for (const n of nodes) {
+    const kind = kindOf(n.id);
+    if (kind) add(`kind:${kind}`, n.id);
+    add(`rank:${rank.get(n.id) ?? 0}`, n.id);
+  }
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false;
+    for (const [key, ids] of groups) {
+      const both = key.startsWith("kind:");
+      const width = Math.max(...ids.map((id) => out.get(id)!.width));
+      const height = Math.max(...ids.map((id) => out.get(id)!.height));
+      for (const id of ids) {
+        const size = out.get(id)!;
+        const next = { width: both ? width : size.width, height };
+        if (next.width !== size.width || next.height !== size.height) {
+          out.set(id, next);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return out;
 }
 
 export function layeredLayout(
@@ -232,9 +660,12 @@ export function layeredLayout(
     return r;
   };
   for (const n of byPos) rankOf(n.id);
+  // Same kind, same size; same rank, same height (D74) — only when the
+  // caller can name a kind, since nothing else knows what a peer is.
+  const drawn = options.kindOf ? uniformSizes(byPos, rank, sizes, options.kindOf) : null;
+  const sizeOf = (id: string): Size => drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
   // An edge that skips ranks gets a dummy in each rank it passes, so the
   // real components there are pushed off its line instead of under it.
-  type Slot = { id: string; dummy: boolean; size: Size; feeders: string[]; order: number };
   const layers = new Map<number, Slot[]>();
   const slotOf = new Map<string, Slot>();
   const push = (r: number, slot: Slot) => {
@@ -243,57 +674,65 @@ export function layeredLayout(
     layers.set(r, list);
     slotOf.set(slot.id, slot);
   };
-  for (const n of nodes) {
-    push(rank.get(n.id) ?? 0, {
-      id: n.id,
-      dummy: false,
-      size: sizes.get(n.id) ?? { width: MIN_W, height: MIN_H },
-      feeders: [],
-      order: order.get(n.id)!,
-    });
+  for (const n of byPos) {
+    const r = rank.get(n.id) ?? 0;
+    push(r, { id: n.id, dummy: false, size: sizeOf(n.id), tie: order.get(n.id)!, up: [], down: [], index: 0 });
   }
   let dummies = 0;
   // The label room each column gap must leave (D70): an edge one rank long
   // puts its label in the gap it spans; a longer one puts it on its dummy.
   const gapAfter = new Map<number, number>();
   const labelOf = (e: GraphEdge): Size => options.labelSize?.(e) ?? { width: 0, height: 0 };
-  for (const e of edges) {
-    if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
-    const rf = rank.get(e.from)!;
-    const rt = rank.get(e.to)!;
+  // Edges are read in one canonical order, so the dummies they leave — and
+  // every tie those dummies break — are the same whatever order they came in.
+  const flows = edges
+    .filter((e) => e.from && e.to && ids.has(e.from) && ids.has(e.to) && e.from !== e.to)
+    .sort(
+      (a, b) =>
+        order.get(a.from!)! - order.get(b.from!)! ||
+        order.get(a.to!)! - order.get(b.to!)! ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+  flows.forEach((e, at) => {
+    const rf = rank.get(e.from!)!;
+    const rt = rank.get(e.to!)!;
+    if (rf === rt) return;
+    // A back edge is ordered and straightened as if it flowed forward —
+    // it is drawn the other way, but it joins the same two ranks.
+    const [low, high] = rt > rf ? [rf, rt] : [rt, rf];
     const label = labelOf(e);
-    if (rt <= rf) {
-      slotOf.get(e.to)?.feeders.push(e.from);
-      if (rt === rf - 1) gapAfter.set(rt, Math.max(gapAfter.get(rt) ?? 0, label.width));
-      continue;
-    }
-    if (rt === rf + 1) gapAfter.set(rf, Math.max(gapAfter.get(rf) ?? 0, label.width));
-    let previous = e.from;
-    for (let r = rf + 1; r < rt; r++) {
-      const id = `__dummy${dummies++}`;
-      push(r, { id, dummy: true, size: { width: 0, height: Math.max(Math.round(MIN_H / 2), label.height) }, feeders: [previous], order: order.get(e.from)! + 0.5 });
-      previous = id;
-    }
-    slotOf.get(e.to)!.feeders.push(previous);
-  }
-  const positionIn = new Map<string, number>();
-  const ranks = [...layers.keys()].sort((a, b) => a - b);
-  // Order every column first: positions within a column come from the
-  // columns before it, whichever band they end up in.
-  const columns = ranks.map((r) => {
-    const layer = layers.get(r)!;
-    layer.sort((a, b) => {
-      const bary = (slot: Slot) => {
-        const placed = slot.feeders.filter((f) => positionIn.has(f));
-        return placed.length ? placed.reduce((sum, f) => sum + positionIn.get(f)!, 0) / placed.length : slot.order + 1000;
+    if (high === low + 1) gapAfter.set(low, Math.max(gapAfter.get(low) ?? 0, label.width));
+    let previous = slotOf.get(rt > rf ? e.from! : e.to!)!;
+    for (let r = low + 1; r < high; r++) {
+      const slot: Slot = {
+        id: `__dummy${dummies++}`,
+        dummy: true,
+        size: { width: 0, height: Math.max(Math.round(MIN_H / 2), label.height) },
+        tie: previous.tie + 0.5 + at * 1e-6,
+        up: [],
+        down: [],
+        index: 0,
       };
-      return bary(a) - bary(b) || a.order - b.order;
-    });
-    layer.forEach((slot, i) => positionIn.set(slot.id, i));
-    const width = Math.max(0, ...layer.map((slot) => slot.size.width));
-    const height = layer.reduce((h, slot, i) => h + slot.size.height + (i ? (slot.dummy ? GAP_Y / 2 : GAP_Y) : 0), 0);
-    return { rank: r, layer, width, height, gap: Math.max(GAP_X, gapAfter.get(r) ?? 0) };
+      push(r, slot);
+      previous.down.push(slot);
+      slot.up.push(previous);
+      previous = slot;
+    }
+    const last = slotOf.get(rt > rf ? e.to! : e.from!)!;
+    previous.down.push(last);
+    last.up.push(previous);
   });
+  const ranks = [...layers.keys()].sort((a, b) => a - b);
+  const ordered = ranks.map((r) => layers.get(r)!);
+  // Fewest crossings first (D74): sweep the order until it stops improving.
+  orderRanks(ordered);
+  const centre = brandesKopf(ordered);
+  const columns = ranks.map((r, i) => ({
+    rank: r,
+    layer: ordered[i],
+    width: Math.max(0, ...ordered[i].map((slot) => slot.size.width)),
+    gap: Math.max(GAP_X, gapAfter.get(r) ?? 0),
+  }));
   // Fold into bands (D71): left to right, then right to left beneath.
   const perBand = columnsPerBand(columns.length);
   const result = new Map<string, Box>();
@@ -303,7 +742,12 @@ export function layeredLayout(
   for (let b = 0; b * perBand < columns.length; b++) {
     const band = columns.slice(b * perBand, (b + 1) * perBand);
     const bandWidth = band.reduce((w, c, i) => w + c.width + (i ? band[i - 1].gap : 0), 0);
-    const bandHeight = Math.max(...band.map((c) => c.height));
+    const slotsHere = band.flatMap((c) => c.layer);
+    const top = Math.min(...slotsHere.map((slot) => centre.get(slot)! - slot.size.height / 2));
+    const bottom = Math.max(...slotsHere.map((slot) => centre.get(slot)! + slot.size.height / 2));
+    // A band moves as one piece, so what Brandes–Köpf lined up inside it
+    // stays lined up; the band is what is centred on the row's axis (D74).
+    const dy = bandTop - top;
     const reversed = b % 2 === 1;
     // A turned band runs right to left from under the column the flow
     // came from, never past the frame's left edge.
@@ -311,10 +755,8 @@ export function layeredLayout(
     for (let i = 0; i < band.length; i++) {
       const column = band[i];
       if (reversed) x -= column.width;
-      let y = bandTop;
       for (const slot of column.layer) {
-        if (!slot.dummy) result.set(slot.id, { x, y, ...slot.size });
-        y += slot.size.height + (slot.dummy ? GAP_Y / 2 : GAP_Y);
+        if (!slot.dummy) result.set(slot.id, { x, y: Math.round(centre.get(slot)! - slot.size.height / 2 + dy), ...slot.size });
       }
       lastColumn = { left: x, right: x + column.width };
       if (reversed) x -= i + 1 < band.length ? column.gap : 0;
@@ -325,7 +767,7 @@ export function layeredLayout(
     const turnLabel = edges
       .filter((e) => e.from && e.to && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
       .reduce((h, e) => Math.max(h, labelOf(e).height), 0);
-    bandTop += bandHeight + Math.max(GAP_Y * 2, turnLabel + 40);
+    bandTop += bottom - top + Math.max(GAP_Y * 2, turnLabel + 40);
   }
   return result;
 }
