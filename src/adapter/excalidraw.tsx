@@ -528,6 +528,8 @@ export interface SceneMenuActions {
   onExportMermaid: () => void;
   onExportSidecar: () => void;
   onArrangeTiers: () => void;
+  /** The formatter (S20, D73) — re-lays out what is in scope, meaning untouched. */
+  onTidy: () => void;
   onToggleDetailMarkers: () => void;
   onConnectAgent: () => void;
   /** Present only where the shell hosts plugins (S17) — the web build never does. */
@@ -2026,6 +2028,9 @@ export function ExcalidrawCanvas({
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
               Arrange detail tiers
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onTidy} shortcut={isMac ? "⌥⇧F" : "Alt+Shift+F"}>
+              Tidy diagram
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onToggleDetailMarkers}>
               {detailMarkersVisible ? "Hide detail markers" : "Show detail markers"}
