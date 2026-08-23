@@ -11,6 +11,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "comprehension": "node scripts/comprehension-eval.mjs",
+    "catalog": "node scripts/catalog-libraries.mjs",
+    "catalog:check": "node scripts/catalog-libraries.mjs --check",
     "mcp": "node server/docent-mcp.mjs",
     "mcp:proxy": "node server/docent-mcp-proxy.mjs",
     "store": "node server/docent-store.mjs",

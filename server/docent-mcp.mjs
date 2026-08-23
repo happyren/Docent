@@ -3,8 +3,10 @@
  * Docent MCP server (S8, B4, D7) — a thin transport over the in-browser
  * Command API. No scene logic lives here: tool calls are relayed to the
  * connected canvas over an HTTP + Server-Sent-Events bridge and results
- * relayed back. Zero runtime dependencies (I7): hand-rolled MCP stdio
- * framing (newline-delimited JSON-RPC 2.0) and Node's built-in http.
+ * relayed back — the one exception being find_symbol, which reads the
+ * checked-in symbol catalog and so needs no canvas (D82). Zero runtime
+ * dependencies (I7): hand-rolled MCP stdio framing (newline-delimited
+ * JSON-RPC 2.0) and Node's built-in http.
  *
  * Two transports, one dispatcher, any MCP client — the protocol is an
  * open standard and nothing here is vendor-specific:
@@ -20,12 +22,39 @@
  * bridge, or ?agent), and point any MCP client at stdio or /mcp.
  */
 import http from "node:http";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { randomUUID } from "node:crypto";
 import { dispatch, handleMcpBody } from "./mcp-core.mjs";
 
 const BRIDGE_PORT = Number(process.env.DOCENT_BRIDGE_PORT ?? "3001");
 const CALL_TIMEOUT_MS = 120_000;
+
+// --------------------------------------------------------------- symbols --
+// find_symbol reads the checked-in catalog (D81), never the canvas, so this
+// server answers it itself and a client can look a symbol up before a page
+// is even open (D82). The catalog module is typed TypeScript, which Node
+// runs by stripping the types (22.18+); on an older Node the lookup falls
+// through to the canvas, which carries the same module in its bundle. Loaded
+// before the bridge listens, so no request can arrive without it.
+let lookUpSymbol = null;
+try {
+  const { answerFindSymbol, loadCatalog } = await import("../src/libraries/catalog.ts");
+  const catalog = loadCatalog(
+    JSON.parse(readFileSync(new URL("../public/libraries/catalog.json", import.meta.url), "utf8")),
+  );
+  lookUpSymbol = (params) => answerFindSymbol(catalog, params);
+} catch (err) {
+  console.error(
+    `docent-mcp: symbol catalog unavailable (${err instanceof Error ? err.message : err}) — find_symbol will go to the canvas`,
+  );
+}
+
+/** One tool call: answered here when it needs no canvas, relayed otherwise. */
+async function callTool(tool, params) {
+  if (tool === "find_symbol" && lookUpSymbol) return lookUpSymbol(params);
+  return callCanvas(tool, params);
+}
 
 // ---------------------------------------------------------------- bridge --
 /** @type {import("node:http").ServerResponse | null} */
@@ -65,7 +94,7 @@ const bridge = http.createServer((req, res) => {
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
         void (async () => {
-          const answer = await handleMcpBody(body, callCanvas);
+          const answer = await handleMcpBody(body, callTool);
           if (answer.initialized) {
             res.setHeader("mcp-session-id", randomUUID());
           }
@@ -142,8 +171,9 @@ function callCanvas(tool, params) {
 }
 
 // Tool table and JSON-RPC handling live in mcp-core.mjs (D34) — the one
-// dispatcher both this server and the desktop page run. This file is pure
-// transport: bridge relay plus the two MCP framings.
+// dispatcher both this server and the desktop page run. This file is
+// transport: the bridge relay, the catalog lookup that needs no canvas, and
+// the two MCP framings.
 
 // -------------------------------------------------- MCP stdio transport --
 // Service deployments run HTTP-only: with no client on stdin (docker gives
@@ -162,7 +192,7 @@ if (!process.env.DOCENT_MCP_HTTP_ONLY) {
     } catch {
       return;
     }
-    void dispatch(message, callCanvas).then((response) => response && write(response));
+    void dispatch(message, callTool).then((response) => response && write(response));
   });
   rl.on("close", () => process.exit(0));
 }
