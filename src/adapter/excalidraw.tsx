@@ -1587,7 +1587,14 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         }
       }
 
-      let elements: ExcalidrawElement[] = [...next, ...created, ...arrowElements];
+      // A shape made in this write learns of the arrows bound to it, as an
+      // existing one did above — it is from the shape's side that Excalidraw
+      // carries an arrow along when the shape is moved.
+      const createdBound = created.map((el) => {
+        const bound = boundTo.get(el.id);
+        return bound ? newElementWith(el, { boundElements: [...(el.boundElements ?? []), ...bound] }) : el;
+      });
+      let elements: ExcalidrawElement[] = [...next, ...createdBound, ...arrowElements];
       if (write.legend) elements = legendWrite(elements, write.legend).elements;
       api.updateScene({
         elements,
