@@ -7,6 +7,7 @@
  */
 import type { SnapshotElement } from "../adapter/snapshot";
 import type { GraphEdge, GraphNode } from "../scene/graph";
+import type { Shape } from "./style";
 
 export interface Box {
   x: number;
@@ -50,19 +51,51 @@ export function wrapLabel(label: string, at = WRAP_AT): string[] {
   return lines;
 }
 
+/** Excalifont at 20px runs about 0.72em per character on average. */
+const CHAR_EM = 0.72;
+/** The room a shape keeps around its text, before the shape's own growth. */
+const PAD_X = 28;
+const PAD_Y = 22;
+/** Ellipses and diamonds need room beyond the text's box. */
+const growFor = (shape: Shape): number => (shape === "rectangle" ? 1 : shape === "ellipse" ? 1.4 : 1.7);
+const widthFor = (chars: number, fontSize: number, shape: Shape): number =>
+  Math.max(MIN_W, Math.ceil((chars * (fontSize * CHAR_EM) + 2 * PAD_X) * growFor(shape) / 10) * 10);
+const heightFor = (lines: number, fontSize: number, shape: Shape): number =>
+  Math.max(MIN_H, Math.ceil((Math.max(1, lines) * fontSize * 1.25 + 2 * PAD_Y) * growFor(shape) / 10) * 10);
+
 /** A shape sized to its label at the given font, within the house minimums. */
-export function sizeForLabel(label: string | null, fontSize: number, shape: "rectangle" | "ellipse" | "diamond"): Size {
+export function sizeForLabel(label: string | null, fontSize: number, shape: Shape): Size {
   const lines = wrapLabel(label ?? "");
   const longest = lines.reduce((n, l) => Math.max(n, l.length), 0);
-  // Excalifont at 20px runs about 0.72em per character on average.
-  const charW = fontSize * 0.72;
-  const textW = longest * charW;
-  const textH = Math.max(1, lines.length) * fontSize * 1.25;
-  // Ellipses and diamonds need room beyond the text's box.
-  const grow = shape === "rectangle" ? 1 : shape === "ellipse" ? 1.4 : 1.7;
-  const width = Math.max(MIN_W, Math.ceil((textW + 2 * 28) * grow / 10) * 10);
-  const height = Math.max(MIN_H, Math.ceil((textH + 2 * 22) * grow / 10) * 10);
-  return { width, height };
+  return { width: widthFor(longest, fontSize, shape), height: heightFor(lines.length, fontSize, shape) };
+}
+
+/**
+ * How many characters fit across a shape of this width — the inverse of
+ * the metric `sizeForLabel` sizes by, so a label handed a width can be
+ * wrapped to it (D80).
+ */
+export function charsAtWidth(width: number, fontSize: number, shape: Shape): number {
+  return Math.max(1, Math.floor((width / growFor(shape) - 2 * PAD_X) / (fontSize * CHAR_EM)));
+}
+
+/**
+ * A shape held to `width`, as tall as its label needs once wrapped to it:
+ * a label longer than its kind's shared width wraps taller rather than
+ * widening every sibling (D80).
+ */
+export function sizeAtWidth(label: string | null, fontSize: number, shape: Shape, width: number): Size {
+  const lines = wrapLabel(label ?? "", charsAtWidth(width, fontSize, shape));
+  return { width, height: heightFor(lines.length, fontSize, shape) };
+}
+
+/**
+ * The width the longest single word of a label needs — the floor a kind's
+ * shared width never goes under, since no wrapping can break a word (D80).
+ */
+export function widestWordWidth(label: string | null, fontSize: number, shape: Shape): number {
+  const words = (label ?? "").split(/\s+/).filter(Boolean);
+  return widthFor(words.reduce((n, w) => Math.max(n, w.length), 0), fontSize, shape);
 }
 
 /** Edge labels wrap a little wider than shape labels: they sit on a line, not in a box. */
@@ -173,16 +206,27 @@ export function placeFrame(existing: readonly Box[], size: Size): Box {
 }
 
 /**
+ * A component's label and the font and shape it is drawn in (D80).
+ */
+export interface LabelDraw {
+  text: string;
+  fontSize: number;
+  shape: Shape;
+}
+
+/**
  * A layered layout of a frame's components by their edges, the Sugiyama
- * pipeline whole (D74): rank by the longest path from a source (left to
- * right); order within each rank by repeated median sweeps — down, then
- * back up, a transpose pass after each — until a full sweep stops taking
- * crossings out; then place along the cross axis by Brandes–Köpf, which
- * straightens an edge between neighbouring ranks wherever it can and sits
- * a component on the median of what it joins. Ties break by position then
- * id, so two runs of one diagram give one picture (I3). The gap between
- * two columns is at least the widest edge label that sits in it (D70), and
- * a flow of more than `TURN_AFTER` ranks folds into bands that alternate
+ * pipeline whole (D74): take the returns out of a cycle first — the edges
+ * that close one when the graph is walked in the order it was authored
+ * (D79) — then rank by the longest path from a source (left to right);
+ * order within each rank by repeated median sweeps — down, then back up, a
+ * transpose pass after each — until a full sweep stops taking crossings
+ * out; then place along the cross axis by Brandes–Köpf, which straightens
+ * an edge between neighbouring ranks wherever it can and sits a component
+ * on the median of what it joins. Ties break by authored order then id, so
+ * two runs of one diagram give one picture (I3). The gap between two
+ * columns is at least the widest edge label that sits in it (D70), and a
+ * flow of more than `TURN_AFTER` ranks folds into bands that alternate
  * direction (D71). Returns new boxes at the frame's origin; the caller
  * grows the frame.
  */
@@ -191,11 +235,77 @@ export interface LayoutOptions {
   labelSize?: (edge: GraphEdge) => Size;
   /**
    * A component's kind, when the caller can say. Given it, components of
-   * one kind are drawn one size and every component in a rank shares one
-   * height (D74) — so the boxes that come back carry sizes, not only
+   * one kind share a width and every component in a rank shares one
+   * height (D74, D80) — so the boxes that come back carry sizes, not only
    * places, and the caller writes both.
    */
   kindOf?: (id: string) => string | null;
+  /**
+   * A component's label, when the caller can say. Given it, the shared
+   * width of a kind is its typical label's and a longer label wraps
+   * taller instead of widening its siblings (D80).
+   */
+  labelOf?: (id: string) => LabelDraw | null;
+  /**
+   * The order the components were authored in — the batch's creation
+   * order for a frame the agent built. It decides which edge of a cycle
+   * is the return (D79) and breaks every tie. Position order (y, then x,
+   * then id) when the caller cannot say.
+   */
+  order?: (id: string) => number;
+}
+
+/**
+ * The order the components were authored in, as dense indices: the
+ * caller's when it can say, position order otherwise (D79).
+ */
+function authoredOrder(nodes: readonly GraphNode[], order?: (id: string) => number): Map<string, number> {
+  const byId = (a: GraphNode, b: GraphNode) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const sorted = [...nodes].sort(
+    order
+      ? (a, b) => order(a.id) - order(b.id) || byId(a, b)
+      : (a, b) => a.bounds.y - b.bounds.y || a.bounds.x - b.bounds.x || byId(a, b),
+  );
+  return new Map(sorted.map((n, i) => [n.id, i]));
+}
+
+/**
+ * The edges that close a cycle (D79): the graph is walked depth-first in
+ * the order the components were authored, out-neighbours in that order
+ * too, and an edge reaching a component still on the stack is the return.
+ * Their ids come back. A return takes no part in ranking or in ordering —
+ * the router draws it over or under the row (D78) — so `a → b → c` with a
+ * `c → a` still reads a, b, c. Self-loops are not a cycle the layout can
+ * draw and are left out.
+ */
+export function backEdges(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  order?: (id: string) => number,
+): Set<string> {
+  const ids = new Set(nodes.map((n) => n.id));
+  const at = authoredOrder(nodes, order);
+  const out = new Map<string, { to: string; edge: string }[]>(nodes.map((n) => [n.id, []]));
+  for (const e of edges) {
+    if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
+    out.get(e.from)!.push({ to: e.to, edge: e.id });
+  }
+  for (const list of out.values()) {
+    list.sort((a, b) => at.get(a.to)! - at.get(b.to)! || (a.edge < b.edge ? -1 : a.edge > b.edge ? 1 : 0));
+  }
+  const back = new Set<string>();
+  const state = new Map<string, "open" | "done">();
+  const walk = (id: string): void => {
+    state.set(id, "open");
+    for (const { to, edge } of out.get(id)!) {
+      const seen = state.get(to);
+      if (seen === "open") back.add(edge);
+      else if (seen === undefined) walk(to);
+    }
+    state.set(id, "done");
+  };
+  for (const n of [...nodes].sort((a, b) => at.get(a.id)! - at.get(b.id)!)) if (!state.has(n.id)) walk(n.id);
+  return back;
 }
 
 /** A flow longer than this many ranks turns (D71). */
@@ -581,45 +691,71 @@ function brandesKopf(ranks: readonly Slot[][]): Map<Slot, number> {
   return centre;
 }
 
+/** The middle of a list — the mean of the two middle ones when it is even. */
+function median(values: readonly number[]): number {
+  const v = [...values].sort((a, b) => a - b);
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 === 1 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
 /**
- * D74's uniform sizes: two components of one kind are drawn one size, and
- * a rank shares one height, so a column reads as a row of peers. The two
- * rules pull the same way — sizes only grow — so a few passes settle it.
+ * Shared sizes (D74, amended by D80): components of one kind are drawn
+ * the width their *typical* label needs — the median of their natural
+ * widths, never under the widest single word among them — and a member
+ * whose label wants more keeps that width and wraps taller, so one long
+ * label costs its own component a line instead of costing every sibling
+ * half a screen. One of a kind keeps the size it came with. A rank still
+ * shares one height, the tallest of its members once wrapped, so a column
+ * reads as a row of peers.
  */
-function uniformSizes(
+function sharedSizes(
   nodes: readonly GraphNode[],
   rank: ReadonlyMap<string, number>,
   sizes: ReadonlyMap<string, Size>,
   kindOf: (id: string) => string | null,
+  labelOf?: (id: string) => LabelDraw | null,
 ): Map<string, Size> {
   const out = new Map<string, Size>(nodes.map((n) => [n.id, { ...(sizes.get(n.id) ?? { width: MIN_W, height: MIN_H }) }]));
-  const groups = new Map<string, string[]>();
-  const add = (key: string, id: string) => {
-    const list = groups.get(key);
-    if (list) list.push(id);
-    else groups.set(key, [id]);
-  };
+  const kinds = new Map<string, string[]>();
   for (const n of nodes) {
     const kind = kindOf(n.id);
-    if (kind) add(`kind:${kind}`, n.id);
-    add(`rank:${rank.get(n.id) ?? 0}`, n.id);
+    if (!kind) continue;
+    const list = kinds.get(kind);
+    if (list) list.push(n.id);
+    else kinds.set(kind, [n.id]);
   }
-  for (let pass = 0; pass < 8; pass++) {
-    let changed = false;
-    for (const [key, ids] of groups) {
-      const both = key.startsWith("kind:");
-      const width = Math.max(...ids.map((id) => out.get(id)!.width));
-      const height = Math.max(...ids.map((id) => out.get(id)!.height));
-      for (const id of ids) {
-        const size = out.get(id)!;
-        const next = { width: both ? width : size.width, height };
-        if (next.width !== size.width || next.height !== size.height) {
-          out.set(id, next);
-          changed = true;
-        }
-      }
+  for (const ids of kinds.values()) {
+    // One of a kind has no peers to share with: it keeps its own size (D80).
+    if (ids.length < 2) continue;
+    const draw = (id: string) => labelOf?.(id) ?? null;
+    // A label the caller cannot name cannot be re-wrapped either, so the
+    // box it came with is both its natural width and its own floor.
+    const natural = (id: string) => {
+      const d = draw(id);
+      return d ? sizeForLabel(d.text, d.fontSize, d.shape).width : out.get(id)!.width;
+    };
+    const floor = (id: string) => {
+      const d = draw(id);
+      return d ? widestWordWidth(d.text, d.fontSize, d.shape) : out.get(id)!.width;
+    };
+    const shared = Math.max(Math.ceil(median(ids.map(natural)) / 10) * 10, ...ids.map(floor));
+    for (const id of ids) {
+      const d = draw(id);
+      const size = out.get(id)!;
+      const height = d ? Math.max(size.height, sizeAtWidth(d.text, d.fontSize, d.shape, shared).height) : size.height;
+      out.set(id, { width: shared, height });
     }
-    if (!changed) break;
+  }
+  const rows = new Map<number, string[]>();
+  for (const n of nodes) {
+    const r = rank.get(n.id) ?? 0;
+    const list = rows.get(r);
+    if (list) list.push(n.id);
+    else rows.set(r, [n.id]);
+  }
+  for (const ids of rows.values()) {
+    const height = Math.max(...ids.map((id) => out.get(id)!.height));
+    for (const id of ids) out.set(id, { ...out.get(id)!, height });
   }
   return out;
 }
@@ -632,16 +768,20 @@ export function layeredLayout(
   options: LayoutOptions = {},
 ): Map<string, Box> {
   const ids = new Set(nodes.map((n) => n.id));
-  const out = new Map<string, string[]>(nodes.map((n) => [n.id, []]));
+  // The order the flow was written in decides which edge of a cycle is the
+  // return (D79); it also breaks every tie below, so one diagram gives one
+  // picture (I3).
+  const order = authoredOrder(nodes, options.order);
+  const byOrder = [...nodes].sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+  const back = backEdges(nodes, edges, options.order);
   const inn = new Map<string, string[]>(nodes.map((n) => [n.id, []]));
   for (const e of edges) {
     if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
-    out.get(e.from)!.push(e.to);
+    // A return takes no part in ranking (D79) — what is left is a DAG.
+    if (back.has(e.id)) continue;
     inn.get(e.to)!.push(e.from);
   }
-  // Longest-path ranks over a DAG; back edges are broken by position order.
-  const byPos = [...nodes].sort((a, b) => a.bounds.y - b.bounds.y || a.bounds.x - b.bounds.x || (a.id < b.id ? -1 : 1));
-  const order = new Map(byPos.map((n, i) => [n.id, i]));
+  // Longest-path ranks over that DAG.
   const rank = new Map<string, number>();
   const visiting = new Set<string>();
   const rankOf = (id: string): number => {
@@ -650,19 +790,15 @@ export function layeredLayout(
     if (visiting.has(id)) return 0;
     visiting.add(id);
     let r = 0;
-    for (const from of inn.get(id) ?? []) {
-      // Only feeders earlier in position order count — the rest are back edges.
-      if ((order.get(from) ?? 0) > (order.get(id) ?? 0) && (inn.get(from) ?? []).includes(id)) continue;
-      r = Math.max(r, rankOf(from) + 1);
-    }
+    for (const from of inn.get(id) ?? []) r = Math.max(r, rankOf(from) + 1);
     visiting.delete(id);
     rank.set(id, r);
     return r;
   };
-  for (const n of byPos) rankOf(n.id);
-  // Same kind, same size; same rank, same height (D74) — only when the
-  // caller can name a kind, since nothing else knows what a peer is.
-  const drawn = options.kindOf ? uniformSizes(byPos, rank, sizes, options.kindOf) : null;
+  for (const n of byOrder) rankOf(n.id);
+  // A kind's shared width, a rank's shared height (D74, D80) — only when
+  // the caller can name a kind, since nothing else knows what a peer is.
+  const drawn = options.kindOf ? sharedSizes(byOrder, rank, sizes, options.kindOf, options.labelOf) : null;
   const sizeOf = (id: string): Size => drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
   // An edge that skips ranks gets a dummy in each rank it passes, so the
   // real components there are pushed off its line instead of under it.
@@ -674,7 +810,7 @@ export function layeredLayout(
     layers.set(r, list);
     slotOf.set(slot.id, slot);
   };
-  for (const n of byPos) {
+  for (const n of byOrder) {
     const r = rank.get(n.id) ?? 0;
     push(r, { id: n.id, dummy: false, size: sizeOf(n.id), tie: order.get(n.id)!, up: [], down: [], index: 0 });
   }
@@ -686,7 +822,7 @@ export function layeredLayout(
   // Edges are read in one canonical order, so the dummies they leave — and
   // every tie those dummies break — are the same whatever order they came in.
   const flows = edges
-    .filter((e) => e.from && e.to && ids.has(e.from) && ids.has(e.to) && e.from !== e.to)
+    .filter((e) => e.from && e.to && ids.has(e.from) && ids.has(e.to) && e.from !== e.to && !back.has(e.id))
     .sort(
       (a, b) =>
         order.get(a.from!)! - order.get(b.from!)! ||
@@ -697,8 +833,7 @@ export function layeredLayout(
     const rf = rank.get(e.from!)!;
     const rt = rank.get(e.to!)!;
     if (rf === rt) return;
-    // A back edge is ordered and straightened as if it flowed forward —
-    // it is drawn the other way, but it joins the same two ranks.
+    // Every flow left runs forward — the returns were taken out (D79).
     const [low, high] = rt > rf ? [rf, rt] : [rt, rf];
     const label = labelOf(e);
     if (high === low + 1) gapAfter.set(low, Math.max(gapAfter.get(low) ?? 0, label.width));
@@ -765,7 +900,7 @@ export function layeredLayout(
     // Room under the band for the turning edge and its label.
     const turning = band[band.length - 1];
     const turnLabel = edges
-      .filter((e) => e.from && e.to && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
+      .filter((e) => e.from && e.to && !back.has(e.id) && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
       .reduce((h, e) => Math.max(h, labelOf(e).height), 0);
     bandTop += bottom - top + Math.max(GAP_Y * 2, turnLabel + 40);
   }

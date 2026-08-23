@@ -162,6 +162,9 @@ export function idSource(seed?: number): () => string {
 
 const clean = (s: string | undefined | null) => (s ?? "").replace(/\s+/g, " ").trim();
 
+/** How a drawn element's type sizes a label: anything else takes a box's room (D80). */
+const drawnShape = (type: string): Shape => (type === "ellipse" || type === "diamond" ? type : "rectangle");
+
 function sourceOf(graph: SceneGraph, id: string): { sourceId: string; kind: "node" | "edge" | "frame" } | null {
   const node = graph.nodes.find((n) => n.id === id || n.sourceId === id);
   if (node) return { sourceId: node.sourceId, kind: "node" };
@@ -669,11 +672,25 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const fb = frameSource ? (grownFrames.get(frameSource) ?? frameBox(frameSource)) : null;
         const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: Math.min(...members.map((m) => m.bounds.x)), y: Math.min(...members.map((m) => m.bounds.y)) };
         // The legend is what says two components are the same thing, so it
-        // is what decides which of them are drawn one size (D74).
+        // is what decides which of them share a width (D74, D80).
         const kinds = new Map(members.map((n) => [n.id, applyLegend(n.style, n.shape, legend).kind]));
+        // What each label needs is what its kind's shared width is the
+        // median of, and what a longer one is re-wrapped to (D80).
+        const memberById = new Map(members.map((n) => [n.id, n]));
+        const fontOf = (sourceId: string): number => {
+          const el = elements.get(sourceId);
+          const text = el?.boundElements.find((b) => b.type === "text");
+          return (text ? elements.get(text.id)?.look.fontSize : null) ?? house.shape.fontSize;
+        };
         const boxes = layeredLayout(members, graph.edges, sizes, origin, {
           labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
           kindOf: (id) => kinds.get(id) ?? null,
+          labelOf: (id) => {
+            const n = memberById.get(id);
+            return n?.label ? { text: n.label, fontSize: fontOf(n.sourceId), shape: drawnShape(n.shape) } : null;
+          },
+          // Components already on the canvas are authored in the order they
+          // read: position order, which is what the layout defaults to (D79).
         });
         for (const n of members) {
           const box = boxes.get(n.id);
@@ -705,6 +722,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const existing = memberBoxes(snapshot.elements.filter((el) => !removed.has(el.id)), c.frameId);
     if (createdFrames.has(c.frameId) || existing.length === 0) framesToLayOut.add(c.frameId);
   }
+  // The batch wrote its components in the order they happen, and that is
+  // the order a cycle in it is ranked by (D79).
+  const createdAt = new Map([...created.keys()].map((id, i) => [id, i] as const));
+  const shapeById = new Map(write.shapes.map((sh) => [sh.id, sh]));
   for (const frameId of framesToLayOut) {
     const members = [...created.entries()].filter(([, c]) => c.frameId === frameId && c.type !== "arrow");
     if (members.length < 2) continue;
@@ -717,8 +738,14 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: 0, y: 0 };
     const boxes = layeredLayout(nodes, edges, sizes, origin, {
       labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
-      // The batch said what each component is, so peers are drawn one size (D74).
+      // The batch said what each component is, so peers share a width (D74, D80).
       kindOf: (id) => created.get(id)?.kind ?? null,
+      // And what each label says, so a long one wraps taller (D80).
+      labelOf: (id) => {
+        const sh = shapeById.get(id);
+        return sh?.label ? { text: sh.label, fontSize: sh.style.fontSize, shape: sh.type } : null;
+      },
+      order: (id) => createdAt.get(id) ?? 0,
     });
     // Start the frame from its own origin again: what grew it is being re-placed.
     let grown: Box = fb ? { x: fb.x, y: fb.y, width: 0, height: 0 } : { x: 0, y: 0, width: 0, height: 0 };
