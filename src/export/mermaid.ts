@@ -41,7 +41,8 @@ export function exportMermaid(graph: SceneGraph): string {
 
   const nodeLine = (nodeId: string): string => {
     const node = graph.nodes.find((n) => n.id === nodeId)!;
-    const facts = applyLegend(node.style, node.shape, graph.legend);
+    // Mermaid draws no icon, but the kind a symbol rule gives still reads (D84).
+    const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
     return nodeSyntax(node.id, node.label ?? node.id, node.shape, facts.kind);
   };
 

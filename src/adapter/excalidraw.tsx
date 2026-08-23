@@ -33,6 +33,7 @@ import "@excalidraw/excalidraw/index.css";
 import type { LegendRule, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
+import { symbolEntry } from "../authoring/symbols";
 
 // Excalidraw's zoom limits (MIN_ZOOM/MAX_ZOOM are not runtime-exported).
 const ZOOM_MIN = 0.1;
@@ -163,6 +164,39 @@ export interface WriteText {
   meaning: WriteMeaning | null;
 }
 
+/**
+ * A library symbol placed as ONE component (S21, D83). The adapter inserts
+ * the item's own elements with fresh ids, drops the caption it shipped
+ * with, and adds two things of Docent's own: the **carrier** — an invisible
+ * rectangle exactly on the icon's bounds, carrying `id`, the meaning, and
+ * the composite declaration — and the **label**, a free text under the icon
+ * in the house label font. All of it shares one group, so the reader drags
+ * a symbol as one thing and the scene graph reads it as one component (D22).
+ */
+export interface WriteSymbol {
+  /** The carrier's id: the component's stable id, what arrows bind to. */
+  id: string;
+  /** Catalog symbol id, e.g. `aws/lambda`. */
+  symbol: string;
+  /** The library file it comes from, and the item's index in it. */
+  library: string;
+  index: number;
+  /** Where the whole library item's top-left lands. */
+  x: number;
+  y: number;
+  /** The icon's absolute bounds — the carrier's box (D83). */
+  icon: { x: number; y: number; width: number; height: number };
+  label: string;
+  /** The label hard-wrapped to the icon's width: the lines to draw (D83). */
+  labelLines: string[];
+  /** Where the label goes — under the icon, at the caption's own offset. */
+  labelBox: { x: number; y: number; width: number; height: number };
+  frameId: string | null;
+  /** The house dresses the label only; the icon keeps its brand drawing. */
+  labelStyle: WriteStyle;
+  meaning: WriteMeaning | null;
+}
+
 export interface WriteArrow {
   id: string;
   from: string;
@@ -213,6 +247,8 @@ export interface WritePatch {
 
 export interface SceneWrite {
   shapes?: WriteShape[];
+  /** Library icons placed as components (D83). */
+  symbols?: WriteSymbol[];
   texts?: WriteText[];
   frames?: WriteFrame[];
   arrows?: WriteArrow[];
@@ -723,9 +759,182 @@ function watchFonts(api: ExcalidrawImperativeAPI): () => void {
   };
 }
 
+/**
+ * The bundled libraries' own elements (S21, D83): a symbol write copies the
+ * item's drawing into the scene, and the drawn legend shows it as a sample.
+ * The same static assets the library sidebar loads (`public/libraries/`),
+ * fetched once per session and kept by library — bundled assets, never a
+ * runtime dependency (I7). A failed fetch is not remembered, so the next
+ * write tries again.
+ */
+type RawLibraryElement = Record<string, unknown>;
+const libraryElementsCache = new Map<string, Promise<RawLibraryElement[][]>>();
+
+function libraryElements(library: string): Promise<RawLibraryElement[][]> {
+  const cached = libraryElementsCache.get(library);
+  if (cached) return cached;
+  const pending = (async () => {
+    const response = await fetch(`/libraries/${library}.excalidrawlib`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const parsed = (await response.json()) as { libraryItems?: unknown; library?: unknown };
+    // v2 files carry `{ id, name, elements }`; v1 files carry bare element arrays.
+    const items = parsed.libraryItems ?? parsed.library;
+    if (!Array.isArray(items)) throw new Error("no library items");
+    return items.map((item) =>
+      (Array.isArray(item) ? item : ((item as { elements?: unknown }).elements ?? [])) as RawLibraryElement[],
+    );
+  })();
+  libraryElementsCache.set(library, pending);
+  pending.catch(() => libraryElementsCache.delete(library));
+  return pending;
+}
+
+/** The elements of one library item, deep-cloned so the cache stays pristine. */
+async function libraryItem(library: string, index: number): Promise<RawLibraryElement[]> {
+  const items = await libraryElements(library);
+  const item = items[index];
+  if (!item?.length) throw new Error(`Unknown library item: ${library}#${index}`);
+  return JSON.parse(JSON.stringify(item)) as RawLibraryElement[];
+}
+
+const num = (v: unknown, fallback = 0): number =>
+  typeof v === "number" && Number.isFinite(v) ? v : fallback;
+
+/**
+ * A caption is a free text that does NOT sit inside one of the glyph's own
+ * shapes — the same rule the scene graph uses to tell an icon's lettering
+ * from its name (D22). The caption is retyped to the agent's label (D83),
+ * so it is dropped; lettering drawn over the artwork stays.
+ */
+function isItemCaption(el: RawLibraryElement, item: readonly RawLibraryElement[]): boolean {
+  if (el.type !== "text" || (el.containerId ?? null) !== null) return false;
+  const pad = 8;
+  return !item.some(
+    (other) =>
+      other !== el &&
+      other.type !== "text" &&
+      num(el.x) >= num(other.x) - pad &&
+      num(el.y) >= num(other.y) - pad &&
+      num(el.x) + num(el.width) <= num(other.x) + num(other.width) + pad &&
+      num(el.y) + num(el.height) <= num(other.y) + num(other.height) + pad,
+  );
+}
+
+/** The glyph alone: what the catalog measured as the icon (D81). */
+function glyphOf(item: readonly RawLibraryElement[]): RawLibraryElement[] {
+  return item.filter((el) => !isItemCaption(el, item));
+}
+
+/** The bounds of some raw library elements. */
+function rawBounds(els: readonly RawLibraryElement[]): { x: number; y: number; width: number; height: number } {
+  const x = Math.min(...els.map((el) => num(el.x)));
+  const y = Math.min(...els.map((el) => num(el.y)));
+  return {
+    x,
+    y,
+    width: Math.max(...els.map((el) => num(el.x) + num(el.width))) - x,
+    height: Math.max(...els.map((el) => num(el.y) + num(el.height))) - y,
+  };
+}
+
+/**
+ * The icon's bounds as the catalog measured them (D81): the item's drawn
+ * shapes, without any text — lettering over the artwork included, since the
+ * catalog left it out too. This is the box the carrier must land on exactly.
+ */
+function iconBounds(item: readonly RawLibraryElement[]): { x: number; y: number; width: number; height: number } {
+  const drawn = item.filter((el) => el.type !== "text");
+  return rawBounds(drawn.length ? drawn : item);
+}
+
+/**
+ * Copy a library item's elements into the scene: fresh ids, its own inner
+ * groups remapped, and `group` added outermost so the icon, the carrier and
+ * the label drag as one; scaled and translated into place; and put through
+ * upstream's own restore so a v1 file's legacy fields migrate.
+ */
+function placeItemElements(
+  els: readonly RawLibraryElement[],
+  options: { group: string; frameId: string | null; scale: number; dx: number; dy: number; sample?: boolean },
+): ExcalidrawElement[] {
+  const ids = new Map<string, string>();
+  const groups = new Map<string, string>();
+  const fresh = () => Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+  for (const el of els) {
+    if (typeof el.id === "string") ids.set(el.id, fresh());
+    for (const g of (el.groupIds as string[] | undefined) ?? []) if (!groups.has(g)) groups.set(g, fresh());
+  }
+  const { group, frameId, scale, dx, dy } = options;
+  const within = (v: unknown) => (typeof v === "string" ? (ids.get(v) ?? null) : null);
+  const mapped = els.map((raw) => {
+    const el: RawLibraryElement = { ...raw };
+    el.id = ids.get(String(raw.id)) ?? fresh();
+    el.groupIds = [...(((raw.groupIds as string[] | undefined) ?? []).map((g) => groups.get(g) ?? g)), group];
+    el.frameId = frameId;
+    el.x = num(raw.x) * scale + dx;
+    el.y = num(raw.y) * scale + dy;
+    el.width = num(raw.width) * scale;
+    el.height = num(raw.height) * scale;
+    if (Array.isArray(raw.points)) {
+      el.points = (raw.points as number[][]).map((pt) => pt.map((v) => num(v) * scale));
+    }
+    if (Array.isArray(raw.lastCommittedPoint)) {
+      el.lastCommittedPoint = (raw.lastCommittedPoint as number[]).map((v) => num(v) * scale);
+    }
+    if (typeof raw.fontSize === "number") el.fontSize = raw.fontSize * scale;
+    // Bindings and bound labels only make sense within the copy.
+    if (raw.containerId !== undefined) el.containerId = within(raw.containerId);
+    if (Array.isArray(raw.boundElements)) {
+      el.boundElements = (raw.boundElements as { id?: unknown; type?: unknown }[])
+        .map((b) => ({ ...b, id: within(b.id) }))
+        .filter((b) => b.id !== null);
+    }
+    // A v1 file's legacy list of the same thing; restore migrates it.
+    if (Array.isArray(raw.boundElementIds)) {
+      el.boundElementIds = (raw.boundElementIds as unknown[]).map(within).filter((id) => id !== null);
+    }
+    for (const side of ["startBinding", "endBinding"] as const) {
+      const binding = raw[side] as { elementId?: unknown } | null | undefined;
+      el[side] = binding && within(binding.elementId) ? { ...binding, elementId: within(binding.elementId) } : null;
+    }
+    // Fractional indices and versions are the scene's to assign.
+    delete el.index;
+    delete el.version;
+    delete el.versionNonce;
+    delete el.updated;
+    if (options.sample) {
+      el.locked = true;
+      el.customData = { ...((raw.customData as object) ?? {}), docent: { legendSample: true } };
+    }
+    return el;
+  });
+  const restored = restoreElements(mapped as never, null);
+  for (const el of restored) (el as { index?: unknown }).index = undefined;
+  return restored as unknown as ExcalidrawElement[];
+}
+
+/** The icon elements each `symbol` legend rule draws its sample from (D84). */
+async function symbolSamples(
+  rules: readonly LegendRule[],
+): Promise<Map<string, RawLibraryElement[]>> {
+  const out = new Map<string, RawLibraryElement[]>();
+  for (const rule of rules) {
+    if (rule.attr !== "symbol" || out.has(rule.value)) continue;
+    const at = symbolEntry(rule.value);
+    if (!at) continue;
+    try {
+      out.set(rule.value, glyphOf(await libraryItem(at.library, at.index)));
+    } catch (err) {
+      console.warn(`Failed to load the symbol ${rule.value}`, err);
+    }
+  }
+  return out;
+}
+
 function legendWrite(
   all: readonly ExcalidrawElement[],
   rules: LegendRule[],
+  samples: ReadonlyMap<string, RawLibraryElement[]> = new Map(),
 ): { elements: ExcalidrawElement[]; carrier: ExcalidrawElement } {
   const isLegendPart = (el: ExcalidrawElement) =>
     parseLegendRules(docentDataOf(el).legend) !== null ||
@@ -760,6 +969,9 @@ function legendWrite(
 
   const groupId = `legend-${Math.random().toString(36).slice(2, 10)}`;
   const sample = { legendSample: true };
+  // A rule about a symbol is shown as the icon itself, scaled to the sample
+  // row (D84): the legend says what its pictures mean by drawing them.
+  const drawnSamples: ExcalidrawElement[] = [];
   const skeletons: Parameters<typeof convertToExcalidrawElements>[0] = [
     {
       type: "text",
@@ -784,10 +996,14 @@ function legendWrite(
       roughness: 1,
     };
     let shape: string | null = null;
+    let symbol: string | null = null;
     let strokeOnly = true;
     for (const c of conditions) {
       if (c.attr === "shape") {
         shape = c.value;
+        strokeOnly = false;
+      } else if (c.attr === "symbol") {
+        symbol = c.value;
         strokeOnly = false;
       } else if (c.attr === "strokeWidth") {
         style.strokeWidth = Number(c.value) || 2;
@@ -796,7 +1012,35 @@ function legendWrite(
         if (c.attr === "backgroundColor" || c.attr === "fillStyle") strokeOnly = false;
       }
     }
-    if (strokeOnly) {
+    const glyph = symbol ? samples.get(symbol) : undefined;
+    if (glyph?.length) {
+      // The icon, scaled uniformly to the row and centred in the column.
+      const box = iconBounds(glyph);
+      const scale = Math.min(SAMPLE_H / (box.height || 1), SAMPLE_W / (box.width || 1));
+      drawnSamples.push(
+        ...placeItemElements(glyph, {
+          group: groupId,
+          frameId: null,
+          scale,
+          dx: x + (SAMPLE_W - box.width * scale) / 2 - box.x * scale,
+          dy: rowY + (SAMPLE_H - box.height * scale) / 2 - box.y * scale,
+          sample: true,
+        }),
+      );
+    } else if (symbol) {
+      // The library could not be read: the row still says what it means.
+      skeletons.push({
+        type: "text",
+        text: symbol,
+        x: x + 4,
+        y: rowY + 6,
+        fontSize: 14,
+        fontFamily: FONT_FAMILY.Excalifont,
+        locked: true,
+        groupIds: [groupId],
+        customData: { docent: sample },
+      } as never);
+    } else if (strokeOnly) {
       // A stroke rule is what an arrow is made of: draw the arrow.
       skeletons.push({
         type: "arrow",
@@ -852,6 +1096,7 @@ function legendWrite(
       ...all.map((el) => (previous.includes(el) ? newElementWith(el, { isDeleted: true }) : el)),
       nextCarrier,
       ...rest,
+      ...drawnSamples,
     ],
     carrier: nextCarrier,
   };
@@ -1228,12 +1473,22 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         ...(write.texts ?? []).map((t) => ({ fontFamily: t.style.fontFamily, text: t.text })),
         ...(write.arrows ?? []).filter((a) => a.label).map((a) => ({ fontFamily: a.style.fontFamily, text: a.label! })),
         ...(write.patches ?? []).filter((p) => typeof p.label === "string").map((p) => ({ fontFamily: FONT_FAMILY.Excalifont, text: p.label as string })),
+        ...(write.symbols ?? []).map((sym) => ({ fontFamily: sym.labelStyle.fontFamily, text: sym.label })),
         ...(write.legend ?? []).map((r) => ({ fontFamily: FONT_FAMILY.Excalifont, text: `${r.key}: ${r.meaning}` })),
       ]);
+      // The drawings a symbol write copies in, and the legend's icon samples
+      // (D83, D84) — fetched before anything is built, so a library that
+      // cannot be read fails the write whole rather than half-drawing it.
+      const symbolDrawings = new Map<string, RawLibraryElement[]>();
+      for (const sym of write.symbols ?? []) {
+        symbolDrawings.set(sym.id, glyphOf(await libraryItem(sym.library, sym.index)));
+      }
+      const legendSamples = write.legend ? await symbolSamples(write.legend) : new Map();
       const all = api.getSceneElementsIncludingDeleted();
       const live = new Map(all.filter((el) => !el.isDeleted).map((el) => [el.id, el]));
       const known = new Set<string>(live.keys());
       for (const shape of write.shapes ?? []) known.add(shape.id);
+      for (const sym of write.symbols ?? []) known.add(sym.id);
       for (const text of write.texts ?? []) known.add(text.id);
       for (const frame of write.frames ?? []) known.add(frame.id);
       const need = (id: string, what: string) => {
@@ -1309,6 +1564,57 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
             : {}),
         } as never);
       }
+      // A symbol is the library's own drawing plus two things of Docent's
+      // (D83): the CARRIER — invisible, exactly on the icon's bounds, holding
+      // the component's id and meaning and declaring the group composite
+      // (D22) — and the LABEL, a free text under the icon in the house font.
+      // The icon's own elements come from the library file further down; the
+      // skeleton converter only makes these two.
+      const symbolGroups = new Map<string, string>();
+      for (const symbol of write.symbols ?? []) {
+        const group = `symbol-${symbol.id}`;
+        symbolGroups.set(symbol.id, group);
+        skeletons.push({
+          type: "rectangle",
+          id: symbol.id,
+          x: symbol.icon.x,
+          y: symbol.icon.y,
+          width: symbol.icon.width,
+          height: symbol.icon.height,
+          frameId: symbol.frameId,
+          groupIds: [group],
+          strokeColor: "transparent",
+          backgroundColor: "transparent",
+          fillStyle: "solid",
+          strokeWidth: 1,
+          strokeStyle: "solid",
+          roughness: 0,
+          roundness: null,
+          opacity: 100,
+          customData: {
+            docent: {
+              ...storedMeaning(symbol.meaning),
+              symbol: symbol.symbol,
+              composite: { [group]: true },
+            },
+          },
+        } as never);
+        skeletons.push({
+          type: "text",
+          id: `${symbol.id}-label`,
+          x: symbol.labelBox.x,
+          y: symbol.labelBox.y,
+          text: symbol.labelLines.join("\n"),
+          fontSize: symbol.labelStyle.fontSize,
+          fontFamily: symbol.labelStyle.fontFamily,
+          strokeColor: symbol.labelStyle.strokeColor,
+          opacity: symbol.labelStyle.opacity,
+          textAlign: "center",
+          verticalAlign: "top",
+          frameId: symbol.frameId,
+          groupIds: [group],
+        } as never);
+      }
       for (const text of write.texts ?? []) {
         skeletons.push({
           type: "text",
@@ -1329,6 +1635,7 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         // list unconditionally; the bounds are overridden below either way.
         const children = [
           ...(write.shapes ?? []).filter((sh) => sh.frameId === frame.id).map((sh) => sh.id),
+          ...(write.symbols ?? []).filter((sy) => sy.frameId === frame.id).flatMap((sy) => [sy.id, `${sy.id}-label`]),
           ...(write.texts ?? []).filter((t) => t.frameId === frame.id).map((t) => t.id),
         ];
         skeletons.push({
@@ -1354,6 +1661,28 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       // Converter-assigned fractional indices would collide with the scene's.
       for (const el of created) {
         (el as { index?: unknown }).index = undefined;
+      }
+      // The converter measures the label; centre what it measured under the
+      // icon, where the library put the caption it replaces (D83). The
+      // library's own drawing is copied in at the icon's bounds — `x`/`y`
+      // say where the whole item lands, `icon` is what the carrier holds.
+      const symbolElements: ExcalidrawElement[] = [];
+      for (const symbol of write.symbols ?? []) {
+        const label = created.find((el) => el.id === `${symbol.id}-label`);
+        if (label) {
+          Object.assign(label, { x: symbol.icon.x + symbol.icon.width / 2 - label.width / 2 });
+        }
+        const glyph = symbolDrawings.get(symbol.id)!;
+        const box = iconBounds(glyph);
+        symbolElements.push(
+          ...placeItemElements(glyph, {
+            group: symbolGroups.get(symbol.id)!,
+            frameId: symbol.frameId,
+            scale: 1,
+            dx: symbol.icon.x - box.x,
+            dy: symbol.icon.y - box.y,
+          }),
+        );
       }
       // Bound labels inherit their container's frame.
       const createdById = new Map(created.map((el) => [el.id, el]));
@@ -1486,6 +1815,17 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         if (!dx && !dy) continue;
         for (const b of el.boundElements ?? []) if (b.type === "text") shifted.set(b.id, { dx, dy });
       }
+      // A symbol component moves as one (D83): a patch on its carrier — the
+      // invisible rectangle on the icon's bounds — carries the icon's own
+      // elements and the label with it, by the same delta.
+      const groupShift = new Map<string, { dx: number; dy: number }>();
+      for (const p of write.patches ?? []) {
+        if (p.x === undefined && p.y === undefined) continue;
+        const el = live.get(p.id);
+        if (!el || !(docentDataOf(el) as { symbol?: unknown }).symbol) continue;
+        const group = el.groupIds[el.groupIds.length - 1];
+        if (group) groupShift.set(group, { dx: (p.x ?? el.x) - el.x, dy: (p.y ?? el.y) - el.y });
+      }
       // Removals take bound labels along; patches touch what they name.
       const removing = new Set(write.remove ?? []);
       for (const el of all) {
@@ -1525,6 +1865,10 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         }
         const shift = shifted.get(el.id);
         if (shift) out = newElementWith(out, { x: out.x + shift.dx, y: out.y + shift.dy });
+        // The rest of a moved symbol's group; the carrier itself is patched.
+        const group = el.groupIds[el.groupIds.length - 1];
+        const carried = group && !patches.has(el.id) ? groupShift.get(group) : undefined;
+        if (carried) out = newElementWith(out, { x: out.x + carried.dx, y: out.y + carried.dy });
         const patch = patches.get(el.id);
         if (patch) {
           const fields: Record<string, unknown> = {};
@@ -1608,8 +1952,8 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         const bound = boundTo.get(el.id);
         return bound ? newElementWith(el, { boundElements: [...(el.boundElements ?? []), ...bound] }) : el;
       });
-      let elements: ExcalidrawElement[] = [...next, ...createdBound, ...arrowElements];
-      if (write.legend) elements = legendWrite(elements, write.legend).elements;
+      let elements: ExcalidrawElement[] = [...next, ...createdBound, ...symbolElements, ...arrowElements];
+      if (write.legend) elements = legendWrite(elements, write.legend, legendSamples).elements;
       api.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
@@ -1729,7 +2073,7 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
     setLegend: async (rules) => {
       await loadFontsFor(rules.map((r) => ({ fontFamily: FONT_FAMILY.Excalifont, text: `${r.key}: ${r.meaning}` })));
       const all = api.getSceneElementsIncludingDeleted();
-      const { elements } = legendWrite(all, rules);
+      const { elements } = legendWrite(all, rules, await symbolSamples(rules));
       api.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,

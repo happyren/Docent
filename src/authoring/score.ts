@@ -242,7 +242,9 @@ export function deltaE76(a: string, b: string): number | null {
 function kindFills(legend: readonly LegendRule[]): { kind: string; fill: string }[] {
   const byKind = new Map<string, string>();
   for (const rule of legend) {
-    if (rule.key !== "kind") continue;
+    // A kind that means a library icon is not Docent's colour to judge:
+    // the brand chose it (D84).
+    if (rule.key !== "kind" || rule.attr === "symbol") continue;
     for (const c of [{ attr: rule.attr, value: rule.value }, ...(rule.also ?? [])]) {
       if (c.attr === "backgroundColor" && c.value !== "transparent" && !byKind.has(rule.meaning)) byKind.set(rule.meaning, c.value);
     }

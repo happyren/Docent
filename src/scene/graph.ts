@@ -38,6 +38,12 @@ export interface GraphNode {
    * signature (the group draws with primitives, not just shapes).
    */
   composite: { members: number; provenance: "declared" | "inferred" } | null;
+  /**
+   * The library symbol this component is drawn as (D83), read off its
+   * carrier — the invisible rectangle on the icon's bounds. Null for a
+   * component drawn as a shape.
+   */
+  symbol: string | null;
   bounds: { x: number; y: number; width: number; height: number };
   style: {
     strokeColor: string;
@@ -340,13 +346,16 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     if (groupId) compositeOf.set(el.id, groupId);
   }
   /** Representative = smallest source id, preferring real shapes; stable
-   *  under resizes and restyles, so composite ids survive edits (I6). */
+   *  under resizes and restyles, so composite ids survive edits (I6). A
+   *  placed symbol names its own: the carrier IS the component (D83), so
+   *  its id is the one arrows bind to and every reader addresses. */
   const representativeOf = new Map<string, SnapshotElement>();
   for (const [groupId, { members }] of compositeGroups) {
     const owned = members.filter((m) => compositeOf.get(m.id) === groupId);
     if (!owned.length) continue;
+    const carrier = owned.find((m) => m.docent.symbol !== null);
     const shapes = owned.filter((m) => NODE_TYPES.has(m.type));
-    representativeOf.set(groupId, (shapes[0] ?? owned[0]));
+    representativeOf.set(groupId, carrier ?? shapes[0] ?? owned[0]);
   }
 
   const plainNodeElements = snapshot.elements.filter(
@@ -407,6 +416,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       const intents = parts.flatMap((p) => p.docent.intents);
       const note = intents[0] ?? null;
       const logic = parts.map((p) => p.docent.logic).find((l) => l !== null) ?? null;
+      const symbol = parts.map((p) => p.docent.symbol).find((sym) => sym != null) ?? null;
       return {
         id: graphId.get(el.id)!,
         sourceId: el.id,
@@ -424,6 +434,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         composite: composite
           ? { members: parts.length, provenance: composite.provenance }
           : null,
+        symbol,
         bounds: composite ? unionBounds(parts) : boundsOf(el),
         style: styleOf(el),
       };

@@ -82,7 +82,7 @@ export function diffScenes(beforeSnapshot: SceneSnapshot, afterSnapshot: SceneSn
 
 export function diffGraphs(before: SceneGraph, after: SceneGraph): SceneDiff {
   const kindOf = (graph: SceneGraph, node: GraphNode) =>
-    applyLegend(node.style, node.shape, graph.legend).kind;
+    applyLegend(node.style, node.shape, graph.legend, node.symbol).kind;
 
   const beforeNodes = new Map(before.nodes.map((n) => [n.id, n]));
   const afterNodes = new Map(after.nodes.map((n) => [n.id, n]));

@@ -29,6 +29,9 @@ const DEFAULT_KEYS: Record<LegendRule["attr"], string> = {
   fillStyle: "texture",
   strokeWidth: "weight",
   shape: "kind",
+  // A symbol rule is written by define_kind, not by hand (D84) — it is not
+  // among ATTRS above — but the key it would take is the kind's.
+  symbol: "kind",
 };
 
 interface StyleChip {

@@ -16,8 +16,10 @@ export interface LegendRule {
     | "backgroundColor"
     | "fillStyle"
     | "strokeWidth"
-    | "shape";
-  /** Exact attribute value, e.g. "dashed", "#a5d8ff", "ellipse", "4". */
+    | "shape"
+    /** The library symbol a component is drawn as (D84). */
+    | "symbol";
+  /** Exact attribute value, e.g. "dashed", "#a5d8ff", "ellipse", "aws/lambda". */
   value: string;
   /**
    * Additional conditions for composite rules — the rule matches only when
@@ -68,6 +70,12 @@ export interface DocentElementData {
    * while each icon inside stays whole.
    */
   composite: Record<string, boolean>;
+  /**
+   * The library symbol this element is the carrier of (D83): an invisible
+   * rectangle on a placed icon's bounds IS the component — arrows bind to
+   * it, its meaning is the component's, and its id is the stable one.
+   */
+  symbol: string | null;
 }
 
 export interface SnapshotElement {
@@ -127,6 +135,7 @@ const LEGEND_ATTRS = new Set([
   "fillStyle",
   "strokeWidth",
   "shape",
+  "symbol",
 ]);
 
 function asString(v: unknown): string | null {
@@ -190,6 +199,7 @@ function parseDocent(customData: unknown): DocentElementData {
     legendSample: false,
     refine: null,
     composite: {},
+    symbol: null,
   };
   if (typeof customData !== "object" || customData === null) return empty;
   const docent = (customData as Record<string, unknown>).docent;
@@ -220,6 +230,7 @@ function parseDocent(customData: unknown): DocentElementData {
     detailFrameId: detail ? asString(detail.frameId) : null,
     refine: refine && (refine.to || refine.from) ? refine : null,
     composite: parseCompositeFlags(d.composite),
+    symbol: asString(d.symbol),
     tags,
     note: intents[0] ?? null,
     intents,

@@ -52,7 +52,7 @@ export function wrapLabel(label: string, at = WRAP_AT): string[] {
 }
 
 /** Excalifont at 20px runs about 0.72em per character on average. */
-const CHAR_EM = 0.72;
+export const CHAR_EM = 0.72;
 /** The room a shape keeps around its text, before the shape's own growth. */
 const PAD_X = 28;
 const PAD_Y = 22;

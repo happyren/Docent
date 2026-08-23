@@ -86,10 +86,31 @@ export interface HouseStyle {
   defaultShape: Shape;
 }
 
+/**
+ * The groups a placed symbol owns (D83): the icon's brand drawing, the
+ * invisible carrier on its bounds, and the label Docent wrote. None of it is
+ * the author's hand — the icon keeps its own colours by decision and the
+ * rest was dressed by the house already — so none of it votes on what the
+ * house style is.
+ */
+function symbolGroups(elements: readonly SnapshotElement[]): Set<string> {
+  const groups = new Set<string>();
+  for (const el of elements) {
+    if (el.docent.symbol !== null) for (const g of el.groupIds) groups.add(g);
+  }
+  return groups;
+}
+
 export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseStyle {
   // The legend's own drawing is styled by its rules, not by the author's
-  // hand: it must not vote.
-  const live = snapshot.elements.filter((el) => el.docent.legend === null && !el.docent.legendSample);
+  // hand: it must not vote. Nor may a placed symbol's parts (D83).
+  const drawn = symbolGroups(snapshot.elements);
+  const live = snapshot.elements.filter(
+    (el) =>
+      el.docent.legend === null &&
+      !el.docent.legendSample &&
+      !el.groupIds.some((g) => drawn.has(g)),
+  );
   const shapes = live.filter((el) => SHAPES.has(el.type));
   const boundTexts = live.filter((el) => el.type === "text" && el.containerId);
   const freeTexts = live.filter((el) => el.type === "text" && !el.containerId);
@@ -128,7 +149,7 @@ export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseSty
   const byKind = new Map<string, SnapshotElement[]>();
   const bySource = new Map(live.map((el) => [el.id, el]));
   for (const node of graph.nodes) {
-    const kind = applyLegend(node.style, node.shape, graph.legend).kind;
+    const kind = applyLegend(node.style, node.shape, graph.legend, node.symbol).kind;
     const el = bySource.get(node.sourceId);
     if (!kind || !el || !SHAPES.has(el.type)) continue;
     const list = byKind.get(kind) ?? [];
@@ -151,10 +172,13 @@ export function houseStyle(snapshot: SceneSnapshot, graph: SceneGraph): HouseSty
 }
 
 /** What the legend says a kind looks like: every rule mapping `kind: K`, applied. */
-export function styleForKind(kind: string, legend: readonly LegendRule[], base: WriteStyle, baseShape: Shape): { shape: Shape; style: WriteStyle; declared: boolean } {
+export function styleForKind(kind: string, legend: readonly LegendRule[], base: WriteStyle, baseShape: Shape): { shape: Shape; style: WriteStyle; declared: boolean; symbol: string | null } {
   let style = { ...base };
   let shape = baseShape;
   let declared = false;
+  // A kind may mean a library icon rather than a fill (D84): then the look
+  // IS the symbol, and the house dresses only its label.
+  let symbol: string | null = null;
   for (const rule of legend) {
     if (rule.key !== "kind" || rule.meaning !== kind) continue;
     declared = true;
@@ -162,6 +186,8 @@ export function styleForKind(kind: string, legend: readonly LegendRule[], base: 
     for (const c of conditions) {
       if (c.attr === "shape") {
         if (SHAPES.has(c.value)) shape = c.value as Shape;
+      } else if (c.attr === "symbol") {
+        symbol = c.value;
       } else if (c.attr === "strokeWidth") {
         style.strokeWidth = Number(c.value) || style.strokeWidth;
       } else {
@@ -169,7 +195,7 @@ export function styleForKind(kind: string, legend: readonly LegendRule[], base: 
       }
     }
   }
-  return { shape, style, declared };
+  return { shape, style, declared, symbol };
 }
 
 /**
@@ -180,10 +206,13 @@ export function resolveLook(
   kind: string | null,
   house: HouseStyle,
   legend: readonly LegendRule[],
-): { shape: Shape; style: WriteStyle; source: "legend" | "house-kind" | "house" } {
+): { shape: Shape; style: WriteStyle; source: "legend" | "house-kind" | "house"; symbol?: string } {
   if (kind) {
     const fromLegend = styleForKind(kind, legend, house.kinds.get(kind)?.style ?? house.shape, house.kinds.get(kind)?.shape ?? house.defaultShape);
-    if (fromLegend.declared) return { shape: fromLegend.shape, style: fromLegend.style, source: "legend" };
+    // A kind the legend maps to a symbol is drawn as that icon (D84).
+    if (fromLegend.declared) {
+      return { shape: fromLegend.shape, style: fromLegend.style, source: "legend", ...(fromLegend.symbol ? { symbol: fromLegend.symbol } : {}) };
+    }
     const seen = house.kinds.get(kind);
     if (seen) return { shape: seen.shape, style: seen.style, source: "house-kind" };
   }
