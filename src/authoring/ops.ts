@@ -15,6 +15,7 @@ import { computeTiers } from "../scene/tiers";
 import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
 import { absolutePoints, assignPorts, dropCollinear, nudgeRoutes, passesThrough, polylineThroughBox, ROUTE_PAD, routeEdge, softenCorners, type Point } from "./route";
 import { pickKindLook, toneLook, toneOfTag, type Role, type Tone } from "./palette";
+import { craftScore, type CraftScore } from "./score";
 import { DEFAULT_STYLE, houseStyle, kindOf, resolveLook, type Shape } from "./style";
 
 // ---------------------------------------------------------------------------
@@ -1045,8 +1046,15 @@ export interface LintFinding {
 
 export const MAX_FRAME_COMPONENTS = 12;
 
-/** What a reviewer would say about the diagram's craft (D62, D63). */
-export function lint(snapshot: SceneSnapshot): { findings: LintFinding[]; summary: string } {
+/** What the lint answers: what a reviewer would say, and the number (D76). */
+export interface LintReport {
+  findings: LintFinding[];
+  summary: string;
+  score: CraftScore;
+}
+
+/** What a reviewer would say about the diagram's craft (D62, D63, D76). */
+export function lint(snapshot: SceneSnapshot): LintReport {
   const graph = buildSceneGraph(snapshot);
   const findings: LintFinding[] = [];
   const tiers = computeTiers(snapshot);
@@ -1099,9 +1107,15 @@ export function lint(snapshot: SceneSnapshot): { findings: LintFinding[]; summar
   const loose = graph.nodes.filter((n) => n.frameId === null);
   const looseCrossings = countCrossings(loose, graph.edges);
   if (looseCrossings) findings.push({ level: "warn", about: null, message: `Layer 1 has ${looseCrossings} arrow crossing${looseCrossings === 1 ? "" : "s"} among unframed components` });
+  // The number, and one line of it among the findings, so a reader who only
+  // sees the list still sees the score (D76).
+  const score = craftScore(snapshot, graph);
+  const worst = [...score.parts].sort((a, b) => b.penalty - a.penalty)[0];
+  const said = worst && worst.penalty > 0 ? `worst: ${worst.key} — ${worst.detail}` : "nothing measured costs it anything";
+  findings.push({ level: "info", about: null, message: `craft score ${score.score} of 100 — ${said}${score.advice.length ? `. ${score.advice[0]}` : ""}` });
   const warns = findings.filter((f) => f.level === "warn").length;
   const summary = findings.length ? `${warns} warning${warns === 1 ? "" : "s"}, ${findings.length - warns} note${findings.length - warns === 1 ? "" : "s"}` : "clean — every component has a kind and an intent, every frame a narrative";
-  return { findings, summary };
+  return { findings, summary, score };
 }
 
 export type { GraphFrame, GraphNode };

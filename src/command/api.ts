@@ -21,7 +21,7 @@ import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
 import type { HighlightStyle, OverlayStore } from "../overlay/state";
 import type { SceneWrite } from "../adapter/excalidraw";
-import { idSource, lint, plan, PlanError, simulate, type LintFinding, type Op } from "../authoring/ops";
+import { idSource, lint, plan, PlanError, simulate, type LintReport, type Op } from "../authoring/ops";
 import { describeChange } from "../scene/diff";
 
 /** The read-only slice of the canvas surface commands may touch. */
@@ -61,7 +61,8 @@ export interface EditResult {
   notes: string[];
   /** Graph ids of what was created or changed. */
   touched: string[];
-  lint: { findings: LintFinding[]; summary: string };
+  /** The findings and the craft score the result would lint to (D76). */
+  lint: LintReport;
 }
 
 /** Scene-units per second at speed 1.0. */
@@ -284,8 +285,8 @@ export class CommandAPI {
     return true;
   }
 
-  /** The craft check (D62). */
-  validate(): { findings: LintFinding[]; summary: string } {
+  /** The craft check (D62) with its score (D76). */
+  validate(): LintReport {
     return lint(this.reader.getSceneSnapshot());
   }
 
