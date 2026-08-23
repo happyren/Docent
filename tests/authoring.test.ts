@@ -7,7 +7,7 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
-import { columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, layeredLayout, placeInFrame, sizeForLabel } from "../src/authoring/layout";
+import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel } from "../src/authoring/layout";
 import { absolutePoints, polylineThroughBox, routeEdge } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
 
@@ -354,7 +354,7 @@ describe("the layered pipeline, whole (D74)", () => {
     expect(new Set([...boxes.values()].map(middle)).size).toBe(1);
   });
 
-  it("draws one size for a kind and one height for a rank", () => {
+  it("draws one width for a kind and one height for a rank", () => {
     const rows = [["svcA", 0], ["storeX", 200], ["svcB", 0], ["storeY", 200]] as const;
     const nodes = nodesAt(rows);
     const sizes = new Map([
@@ -367,13 +367,18 @@ describe("the layered pipeline, whole (D74)", () => {
       kindOf: (id) => (id.startsWith("svc") ? "service" : "datastore"),
     });
     const box = (id: string) => boxes.get(id)!;
-    // One kind, one size — the widest and the tallest of it.
+    // One kind, one width. With no label to re-wrap, the median can go no
+    // narrower than the widest member — nothing else would still fit (D80).
     expect(box("svcA").width).toBe(160);
     expect(box("svcB").width).toBe(160);
     expect(box("storeX").width).toBe(200);
     expect(box("storeY").width).toBe(200);
-    // One rank, one height — and here that is the tallest of everything.
-    for (const [id] of rows) expect(box(id).height).toBe(100);
+    // One rank, one height — the tallest of that rank. Height is the rank's
+    // business alone now: a long label wraps taller than its kind (D80).
+    expect(box("svcA").height).toBe(80);
+    expect(box("storeX").height).toBe(80);
+    expect(box("svcB").height).toBe(100);
+    expect(box("storeY").height).toBe(100);
   });
 
   it("gives one picture, whatever order the components arrive in", () => {
@@ -385,6 +390,141 @@ describe("the layered pipeline, whole (D74)", () => {
     const once = run(nodes);
     expect(run(nodes)).toEqual(once);
     expect(run([...nodes].reverse())).toEqual(once);
+  });
+});
+
+describe("cycles and sizes (D79, D80)", () => {
+  const SIZE = { width: 160, height: 80 };
+  const inARow = (ids: readonly string[]) =>
+    ids.map((id, i) => ({ id, bounds: { x: i * 300, y: 0, ...SIZE } })) as never[];
+  const link = (from: string, to: string) => ({ id: `${from}-${to}`, from, to, label: null }) as never;
+  const sizesFor = (ids: readonly string[]) => new Map(ids.map((id) => [id, SIZE]));
+  // a → b → c → d, written in that order, with two returns.
+  const chain = ["a", "b", "c", "d"];
+  const withReturns = [link("a", "b"), link("b", "c"), link("c", "d"), link("c", "a"), link("d", "b")];
+
+  it("names the edges that close a cycle and ranks the rest by the authored order", () => {
+    const nodes = inARow(chain);
+    // The walk starts at a and finds both returns on the stack (D79).
+    expect([...backEdges(nodes, withReturns)].sort()).toEqual(["c-a", "d-b"]);
+    const boxes = layeredLayout(nodes, withReturns, sizesFor(chain), { x: 0, y: 0 });
+    const x = (id: string) => boxes.get(id)!.x;
+    expect(x("a")).toBeLessThan(x("b"));
+    expect(x("b")).toBeLessThan(x("c"));
+    expect(x("c")).toBeLessThan(x("d"));
+    // Four ranks, four columns — the returns bought nobody a place.
+    expect(new Set([...boxes.values()].map((b) => b.x)).size).toBe(4);
+    // And the picture is the same however the components arrive.
+    const again = layeredLayout([...nodes].reverse(), withReturns, sizesFor(chain), { x: 0, y: 0 });
+    expect(Object.fromEntries(again)).toEqual(Object.fromEntries(boxes));
+  });
+
+  it("keeps a two-cycle in the order it was written", () => {
+    const nodes = inARow(["a", "b"]);
+    const boxes = layeredLayout(nodes, [link("a", "b"), link("b", "a")], sizesFor(["a", "b"]), { x: 0, y: 0 });
+    expect(backEdges(nodes, [link("a", "b"), link("b", "a")])).toEqual(new Set(["b-a"]));
+    expect(boxes.get("a")!.x).toBeLessThan(boxes.get("b")!.x);
+  });
+
+  it("ranks a frame the agent built by the order the ops were written", () => {
+    const result = plan(
+      [
+        { op: "add_frame", ref: "$f", name: "Publishing loop" },
+        { op: "add_node", ref: "$a", label: "Draft", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$b", label: "Review", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$c", label: "Publish", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$d", label: "Archive", frame: "$f", intents: ["x"] },
+        { op: "add_edge", from: "$a", to: "$b" },
+        { op: "add_edge", from: "$b", to: "$c" },
+        { op: "add_edge", from: "$c", to: "$d" },
+        { op: "add_edge", from: "$c", to: "$a", label: "rework" },
+        { op: "add_edge", from: "$d", to: "$b", label: "re-review" },
+      ],
+      snapshot,
+      idSource(23),
+    );
+    const x = (label: string) => result.write.shapes!.find((s) => s.label === label)!.x;
+    expect(x("Draft")).toBeLessThan(x("Review"));
+    expect(x("Review")).toBeLessThan(x("Publish"));
+    expect(x("Publish")).toBeLessThan(x("Archive"));
+  });
+
+  it("ranks hand-placed components a `layout` op re-flows by the order they read in", () => {
+    const cyclic = snapshotFromRawElements([
+      { ...base, id: "F", type: "frame", name: "Publishing loop", x: 0, y: 0, width: 1400, height: 400 },
+      ...box("a", 40, 100, "Draft"),
+      ...box("b", 340, 100, "Review"),
+      ...box("c", 640, 100, "Publish"),
+      ...box("d", 940, 100, "Archive"),
+      arrow("e1", "a", "b"),
+      arrow("e2", "b", "c"),
+      arrow("e3", "c", "d"),
+      arrow("e4", "c", "a"),
+      arrow("e5", "d", "b"),
+    ] as never);
+    const result = plan([{ op: "layout", frame: "F" }], cyclic, idSource(29));
+    const was = new Map([["a", 40], ["b", 340], ["c", 640], ["d", 940]]);
+    const x = (id: string) => result.write.patches!.find((p) => p.id === id)?.x ?? was.get(id)!;
+    expect(x("a")).toBeLessThan(x("b"));
+    expect(x("b")).toBeLessThan(x("c"));
+    expect(x("c")).toBeLessThan(x("d"));
+  });
+
+  it("gives a kind the width of its typical label, and wraps the long one taller", () => {
+    const long = "MORNING GLANCE reconcile fills update lifecycle recompute stops";
+    const short = ["EVENING SITTING", "US FUNNEL PASS", "ASX FUNNEL PASS", "OPEN THE BOOKS"];
+    const labels = [short[0], short[1], long, short[2], short[3]];
+    const result = plan(
+      [
+        { op: "add_frame", ref: "$f", name: "The ritual" },
+        ...labels.map((label, i) => ({ op: "add_node" as const, ref: `$r${i}`, label, kind: "ritual", shape: "ellipse" as const, frame: "$f", intents: ["x"] })),
+        ...labels.slice(1).map((_, i) => ({ op: "add_edge" as const, from: `$r${i}`, to: `$r${i + 1}` })),
+      ],
+      snapshot,
+      idSource(31),
+    );
+    const shapes = result.write.shapes!;
+    const of = (label: string) => shapes.find((s) => s.label === label)!;
+    const font = of(long).style.fontSize;
+    // One long label does not widen its siblings: the shared width is the
+    // median of what the five labels need, not the widest of them (D80).
+    expect(sizeForLabel(long, font, "ellipse").width).toBeGreaterThan(500);
+    for (const label of labels) expect(of(label).width).toBeLessThan(500);
+    expect(new Set(labels.map((label) => of(label).width)).size).toBe(1);
+    expect(of(long).width).toBe(sizeForLabel(short[0], font, "ellipse").width);
+    // It costs its own component lines instead.
+    expect(of(long).height).toBeGreaterThan(of(short[0]).height);
+    expect(of(long).height).toBe(sizeAtWidth(long, font, "ellipse", of(long).width).height);
+  });
+
+  it("leaves one of a kind its own size, and still gives a rank one height", () => {
+    const ids = ["only", "twinA", "twinB", "tall"];
+    const nodes = [
+      { id: "only", bounds: { x: 0, y: 0, ...SIZE } },
+      { id: "twinA", bounds: { x: 0, y: 200, ...SIZE } },
+      { id: "twinB", bounds: { x: 300, y: 0, ...SIZE } },
+      { id: "tall", bounds: { x: 300, y: 200, ...SIZE } },
+    ] as never[];
+    const sizes = new Map([
+      ["only", { width: 420, height: 90 }],
+      ["twinA", { width: 200, height: 80 }],
+      ["twinB", { width: 300, height: 80 }],
+      ["tall", { width: 160, height: 130 }],
+    ]);
+    const boxes = layeredLayout(nodes, [link("only", "twinB"), link("twinA", "tall")], sizes, { x: 0, y: 0 }, {
+      kindOf: (id) => (id.startsWith("twin") ? "twin" : id),
+    });
+    // The only one of its kind keeps the width it came with.
+    expect(boxes.get("only")!.width).toBe(420);
+    expect(boxes.get("tall")!.width).toBe(160);
+    // The pair share one: unlabelled, that is the widest that still fits.
+    expect(boxes.get("twinA")!.width).toBe(300);
+    expect(boxes.get("twinB")!.width).toBe(300);
+    // A rank is one height throughout.
+    expect(boxes.get("only")!.height).toBe(boxes.get("twinA")!.height);
+    expect(boxes.get("twinB")!.height).toBe(boxes.get("tall")!.height);
+    expect(boxes.get("twinB")!.height).toBe(130);
+    expect(ids.every((id) => boxes.has(id))).toBe(true);
   });
 });
 
