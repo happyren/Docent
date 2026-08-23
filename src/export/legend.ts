@@ -19,15 +19,26 @@ export interface LegendFacts {
 const matchesCondition = (
   style: GraphNode["style"],
   shape: string,
+  symbol: string | null,
   attr: LegendRule["attr"],
   value: string,
 ): boolean =>
-  (attr === "shape" ? shape : String(style[attr] ?? "")) === value;
+  (attr === "shape"
+    ? shape
+    : attr === "symbol"
+      ? (symbol ?? "")
+      : String(style[attr] ?? "")) === value;
 
+/**
+ * `symbol` is the library icon a component is drawn as (D83); a rule with
+ * `attr: "symbol"` matches on it, so a kind can mean an icon rather than a
+ * fill (D84). Callers with no symbol to offer read exactly as before.
+ */
 export function applyLegend(
   style: GraphNode["style"],
   shape: string,
   legend: readonly LegendRule[],
+  symbol: string | null = null,
 ): LegendFacts {
   const facts: LegendFacts = { kind: null, tags: [], props: {} };
   // Composite rules (primary + `also` conditions) match only when every
@@ -39,8 +50,8 @@ export function applyLegend(
     .map((rule, index) => ({ rule, index, arity: 1 + (rule.also?.length ?? 0) }))
     .sort((a, b) => a.arity - b.arity || a.index - b.index);
   for (const { rule } of ordered) {
-    if (!matchesCondition(style, shape, rule.attr, rule.value)) continue;
-    if (rule.also?.some((c) => !matchesCondition(style, shape, c.attr, c.value)))
+    if (!matchesCondition(style, shape, symbol, rule.attr, rule.value)) continue;
+    if (rule.also?.some((c) => !matchesCondition(style, shape, symbol, c.attr, c.value)))
       continue;
     if (rule.key === "kind") {
       facts.kind = rule.meaning;
@@ -61,6 +72,7 @@ const ATTR_PREFIX: Record<LegendRule["attr"], string> = {
   fillStyle: "fillStyle",
   strokeWidth: "strokeWidth",
   shape: "shape",
+  symbol: "symbol",
 };
 
 export function legendToRecord(

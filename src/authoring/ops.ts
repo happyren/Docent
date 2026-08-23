@@ -8,7 +8,7 @@
  * Pure and deterministic given the id source (I3).
  */
 import type { LegendRule, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
-import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle } from "../adapter/excalidraw";
+import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle, WriteSymbol } from "../adapter/excalidraw";
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
@@ -32,6 +32,7 @@ import {
 import { pickKindLook, toneLook, toneOfTag, type Role, type Tone } from "./palette";
 import { craftScore, type CraftScore } from "./score";
 import { DEFAULT_STYLE, houseStyle, kindOf, resolveLook, type Shape } from "./style";
+import { placeSymbol, symbolEntry } from "./symbols";
 
 // ---------------------------------------------------------------------------
 // the operations
@@ -43,6 +44,12 @@ export interface AddNode {
   ref?: string;
   label: string;
   kind?: string;
+  /**
+   * A library symbol id from the catalog, e.g. `aws/lambda` (S21, D83):
+   * the component is drawn as that icon with the label under it, instead
+   * of as a shape. `find_symbol` is how one is looked up.
+   */
+  symbol?: string;
   /** A frame id (or ref); absent = Layer 1, unframed. */
   frame?: string | null;
   shape?: Shape;
@@ -111,6 +118,12 @@ export interface DefineKind {
   op: "define_kind";
   kind: string;
   shape?: Shape;
+  /**
+   * The kind IS a library symbol (D84): the legend rule matches on the
+   * symbol, the drawn legend shows the icon, and no colour is picked —
+   * the brand's colour is not Docent's to choose.
+   */
+  symbol?: string;
   /** What the kind means to a reader — picks the conventional hue (D77). */
   tone?: Tone;
   /** What family of thing it is, when no tone applies (D77). */
@@ -205,15 +218,22 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   let legend: LegendRule[] = [...graph.legend];
   let legendChanged = false;
 
-  const write: Required<Pick<SceneWrite, "shapes" | "arrows" | "frames" | "patches" | "remove">> = {
+  const write: Required<Pick<SceneWrite, "shapes" | "symbols" | "arrows" | "frames" | "patches" | "remove">> = {
     shapes: [],
+    symbols: [],
     arrows: [],
     frames: [],
     patches: [],
     remove: [],
   };
   // What the batch itself created, by source id — for placement and bounds.
-  const created = new Map<string, Box & { type: string; frameId: string | null; label: string | null; kind: string | null }>();
+  // A symbol component carries two boxes (D83): the whole thing (icon ∪
+  // label) is what placement and routing avoid, while `port` — the icon's
+  // own bounds, which is the carrier — is where its edges meet it.
+  const created = new Map<
+    string,
+    Box & { type: string; frameId: string | null; label: string | null; kind: string | null; symbol?: string; port?: Box }
+  >();
   const createdFrames = new Map<string, WriteFrame & { members: string[] }>();
   const removed = new Set<string>();
   // What a `layout` re-laid, moved or not: tidy re-routes every bound edge
@@ -256,9 +276,15 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     const el = elements.get(sourceId);
     return el ? { x: el.x, y: el.y, width: el.width, height: el.height } : null;
   };
+  /** A component that was placed as a library symbol (D83), or null. */
+  const symbolNode = (sourceId: string) => graph.nodes.find((n) => n.sourceId === sourceId && n.symbol) ?? null;
   const boxOf = (sourceId: string): Box | null => {
     const made = created.get(sourceId);
     if (made) return { x: made.x, y: made.y, width: made.width, height: made.height };
+    // A symbol's box is the whole component — icon and label (D83) — not the
+    // carrier rectangle the element table holds.
+    const symbol = symbolNode(sourceId);
+    if (symbol) return { ...symbol.bounds };
     const el = elements.get(sourceId);
     return el ? { x: el.x, y: el.y, width: el.width, height: el.height } : null;
   };
@@ -334,6 +360,21 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         }
         if (legend.some((r) => r.key === "kind" && r.meaning === kind)) {
           notes.push(`${kind} is already in the legend — kept as is`);
+          break;
+        }
+        // A kind may BE a library symbol (D84): the rule matches on the
+        // symbol, the drawn legend shows the icon beside the meaning, and
+        // no colour is picked — the brand chose that already.
+        if (op.symbol) {
+          const wanted = clean(op.symbol).toLowerCase();
+          const entry = symbolEntry(wanted);
+          if (!entry) {
+            problems.push(`${at}: unknown symbol ${op.symbol} — find_symbol first`);
+            break;
+          }
+          legend = [...legend, { attr: "symbol", value: entry.symbol, key: "kind", meaning: kind }];
+          legendChanged = true;
+          notes.push(`legend: ${kind} → symbol ${entry.symbol} (${entry.name})`);
           break;
         }
         // Colour means something (D77): a tone or a role picks the hue the
@@ -461,7 +502,17 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         // A raw stroke is the author's own; otherwise a conventional tag may
         // colour it (D77).
         if (tags.length && !op.style?.strokeColor) style = tagTones(tags, shape, style, label);
-        const size = sizeForLabel(label, style.fontSize, shape);
+        // A symbol is a component (D83): the agent names one, or the kind's
+        // legend rule already does (D84). Its box is the catalog's native
+        // size grown to the label — icon ∪ label, for placement and routing.
+        const wantedSymbol = op.symbol ? clean(op.symbol).toLowerCase() : (look.symbol ?? null);
+        const entry = wantedSymbol ? symbolEntry(wantedSymbol) : null;
+        if (wantedSymbol && !entry) {
+          problems.push(`${at}: unknown symbol ${op.symbol ?? wantedSymbol} — find_symbol first`);
+          break;
+        }
+        const placement = entry ? placeSymbol(entry, label, style.fontSize) : null;
+        const size = placement ? placement.size : sizeForLabel(label, style.fontSize, shape);
         let anchor: Box | null = null;
         // The gap from the anchor is at least the words on the edge between them (D70).
         const edgesHere = op.ref
@@ -500,17 +551,44 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         if (tags.length) meaning.tags = tags;
         if (op.intents?.length) meaning.intents = op.intents.map(clean).filter(Boolean);
         if (op.logic) meaning.logic = op.logic;
-        const node: WriteShape = {
-          id,
-          type: shape,
-          ...box,
-          label,
-          frameId,
-          style,
-          meaning: Object.keys(meaning).length ? meaning : null,
-        };
-        write.shapes.push(node);
-        created.set(id, { ...box, type: shape, frameId, label, kind });
+        if (placement) {
+          // The carrier's box is the icon's; arrows meet the drawing, not
+          // the caption's room (D83). The label rides where the library put
+          // the caption it replaces, wrapped to the icon's width.
+          const icon = { x: box.x + placement.icon.x, y: box.y + placement.icon.y, width: placement.icon.width, height: placement.icon.height };
+          const symbol: WriteSymbol = {
+            id,
+            symbol: placement.entry.symbol,
+            library: placement.entry.library,
+            index: placement.entry.index,
+            x: box.x + placement.item.x,
+            y: box.y + placement.item.y,
+            icon,
+            label,
+            labelLines: placement.label.lines,
+            labelBox: { x: box.x + placement.label.x, y: box.y + placement.label.y, width: placement.label.width, height: placement.label.height },
+            frameId,
+            labelStyle: style,
+            meaning: Object.keys(meaning).length ? meaning : null,
+          };
+          write.symbols.push(symbol);
+          // Same symbol, same size (D85): the layout groups by the symbol,
+          // never by the kind, so an icon is never stretched to a peer's box.
+          created.set(id, { ...box, type: "rectangle", frameId, label, kind: `symbol:${placement.entry.symbol}`, symbol: placement.entry.symbol, port: icon });
+          notes.push(`${label}: drawn as ${placement.entry.name} (${placement.entry.symbol})`);
+        } else {
+          const node: WriteShape = {
+            id,
+            type: shape,
+            ...box,
+            label,
+            frameId,
+            style,
+            meaning: Object.keys(meaning).length ? meaning : null,
+          };
+          write.shapes.push(node);
+          created.set(id, { ...box, type: shape, frameId, label, kind });
+        }
         if (frameId && createdFrames.has(frameId)) createdFrames.get(frameId)!.members.push(id);
         if (op.ref) ids[op.ref] = id;
         ids[id] = id;
@@ -581,11 +659,15 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           else meaning.narrative = op.narrative;
         }
         if (op.order !== undefined) meaning.order = op.order;
+        // A placed symbol wears the library's drawing, not a style (D83):
+        // nothing a kind or a tag would paint has anywhere to go on it.
+        const symbolTarget = symbolNode(target);
         if (op.kind !== undefined) {
           if (kindOfTarget !== "node") problems.push(`${at}: only a component has a kind`);
           else {
             const look = resolveLook(clean(op.kind), house, legend);
             if (look.source === "house") problems.push(`${at}: kind "${op.kind}" has no look yet — define_kind first`);
+            else if (symbolTarget) notes.push(`${op.id}: kept the ${symbolTarget.symbol} drawing — a kind's colour does not dress an icon`);
             else patch.style = look.style;
           }
         }
@@ -600,8 +682,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
               const box = boxOf(target);
               if (box) {
                 const placed = placeInFrame(grownFrames.get(f) ?? frameBox(f), occupiedIn(f), { width: box.width, height: box.height }, null);
-                patch.x = placed.x;
-                patch.y = placed.y;
+                // A symbol's patch names its carrier, so the move is a delta
+                // on the icon; the whole group goes with it (D83).
+                const carrier = symbolTarget ? elements.get(target) : null;
+                patch.x = carrier ? carrier.x + (placed.x - box.x) : placed.x;
+                patch.y = carrier ? carrier.y + (placed.y - box.y) : placed.y;
                 noteGrow(f, placed);
               }
             }
@@ -609,7 +694,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         }
         // Tags gained here colour themselves the same way they do on a new
         // component (D77) — on the shape this batch just made, or as a patch.
-        if (meaning.tags?.length && kindOfTarget === "node") {
+        if (meaning.tags?.length && kindOfTarget === "node" && !symbolTarget) {
           const made = write.shapes.find((s) => s.id === target);
           const node = graph.nodes.find((n) => n.sourceId === target);
           const tagShape = (made?.type ?? node?.shape ?? house.defaultShape) as Shape;
@@ -659,6 +744,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           // Removing a frame removes what it holds.
           for (const el of snapshot.elements) if (el.frameId === target) toRemove.add(el.id);
         }
+        // A symbol is one component (D83): its carrier, the icon's own
+        // elements, and its label go together.
+        const carrierEl = elements.get(target);
+        if (carrierEl?.docent.symbol) {
+          const group = carrierEl.groupIds[carrierEl.groupIds.length - 1];
+          if (group) for (const el of snapshot.elements) if (el.groupIds.includes(group)) toRemove.add(el.id);
+        }
         // Edges bound to a removed node go with it.
         for (const e of graph.edges) {
           const f = e.from ? graph.nodes.find((n) => n.id === e.from)?.sourceId : null;
@@ -690,8 +782,12 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const fb = frameSource ? (grownFrames.get(frameSource) ?? frameBox(frameSource)) : null;
         const origin = fb ? { x: fb.x + FRAME_PAD, y: fb.y + FRAME_HEAD + FRAME_PAD } : { x: Math.min(...members.map((m) => m.bounds.x)), y: Math.min(...members.map((m) => m.bounds.y)) };
         // The legend is what says two components are the same thing, so it
-        // is what decides which of them share a width (D74, D80).
-        const kinds = new Map(members.map((n) => [n.id, applyLegend(n.style, n.shape, legend).kind]));
+        // is what decides which of them share a width (D74, D80) — except a
+        // symbol, whose peers are the components drawn as the same icon, and
+        // whose size is the catalog's, never a sibling's (D85).
+        const kinds = new Map(
+          members.map((n) => [n.id, n.symbol ? `symbol:${n.symbol}` : applyLegend(n.style, n.shape, legend, n.symbol).kind]),
+        );
         // What each label needs is what its kind's shared width is the
         // median of, and what a longer one is re-wrapped to (D80).
         const memberById = new Map(members.map((n) => [n.id, n]));
@@ -705,7 +801,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           kindOf: (id) => kinds.get(id) ?? null,
           labelOf: (id) => {
             const n = memberById.get(id);
-            return n?.label ? { text: n.label, fontSize: fontOf(n.sourceId), shape: drawnShape(n.shape) } : null;
+            // A symbol's label is already wrapped to its icon; it is not a
+            // box that can be re-wrapped wider or narrower (D85).
+            if (!n || n.symbol) return null;
+            return n.label ? { text: n.label, fontSize: fontOf(n.sourceId), shape: drawnShape(n.shape) } : null;
           },
           // Components already on the canvas are authored in the order they
           // read: position order, which is what the layout defaults to (D79).
@@ -714,6 +813,21 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           relaid.add(n.sourceId);
           const box = boxes.get(n.id);
           if (!box) continue;
+          if (n.symbol) {
+            // A symbol keeps the size the library drew it at (D85): it takes
+            // the place the layout gives it, centred in a row that may be
+            // taller. The patch names its carrier, and the whole group —
+            // the icon's elements and the label — goes with it (D83).
+            const carrier = elements.get(n.sourceId);
+            const dx = box.x + Math.round((box.width - n.bounds.width) / 2) - n.bounds.x;
+            const dy = box.y + Math.round((box.height - n.bounds.height) / 2) - n.bounds.y;
+            if (carrier && (dx !== 0 || dy !== 0)) {
+              write.patches.push({ id: n.sourceId, x: carrier.x + dx, y: carrier.y + dy });
+              touched.push(n.sourceId);
+            }
+            noteGrow(frameSource, { x: n.bounds.x + dx, y: n.bounds.y + dy, width: n.bounds.width, height: n.bounds.height });
+            continue;
+          }
           const sized = box.width !== n.bounds.width || box.height !== n.bounds.height;
           if (box.x !== n.bounds.x || box.y !== n.bounds.y || sized) {
             const patch: WritePatch = { id: n.sourceId, x: box.x, y: box.y };
@@ -771,6 +885,24 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     for (const [id, c] of members) {
       const box = boxes.get(id);
       if (!box) continue;
+      if (c.symbol) {
+        // A symbol keeps its native size (D85): it moves, centred in a row
+        // the layout may have made taller, and the whole item moves with it.
+        const dx = box.x + Math.round((box.width - c.width) / 2) - c.x;
+        const dy = box.y + Math.round((box.height - c.height) / 2) - c.y;
+        c.x += dx;
+        c.y += dy;
+        if (c.port) c.port = { ...c.port, x: c.port.x + dx, y: c.port.y + dy };
+        const symbol = write.symbols.find((sym) => sym.id === id);
+        if (symbol) {
+          symbol.x += dx;
+          symbol.y += dy;
+          symbol.icon = { ...symbol.icon, x: symbol.icon.x + dx, y: symbol.icon.y + dy };
+          symbol.labelBox = { ...symbol.labelBox, x: symbol.labelBox.x + dx, y: symbol.labelBox.y + dy };
+        }
+        grown = growFrame(grown, [{ x: c.x, y: c.y, width: c.width, height: c.height }]);
+        continue;
+      }
       c.x = box.x;
       c.y = box.y;
       c.width = box.width;
@@ -825,10 +957,31 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   const moved = new Set(
     write.patches.filter((p) => p.x !== undefined || p.y !== undefined || p.width !== undefined || p.height !== undefined).map((p) => p.id),
   );
-  const finalBoxes = new Map<string, Box & { id: string; shape?: string }>();
+  // Two boxes per component where they differ (D83): the whole thing is what
+  // an edge routes around, while `port` — a symbol's icon, without its
+  // caption's room — is where the edge leaves and enters. Everything else
+  // has one box and it is both.
+  const finalBoxes = new Map<string, Box & { id: string; shape?: string; port?: Box }>();
   for (const n of graph.nodes) {
     if (removed.has(n.sourceId)) continue;
     const patch = write.patches.find((p) => p.id === n.sourceId);
+    if (n.symbol) {
+      // A symbol's patch names its carrier, so what moved is a delta on the
+      // icon; the component's own box follows it.
+      const carrier = elements.get(n.sourceId);
+      const dx = carrier ? (patch?.x ?? carrier.x) - carrier.x : 0;
+      const dy = carrier ? (patch?.y ?? carrier.y) - carrier.y : 0;
+      finalBoxes.set(n.sourceId, {
+        id: n.sourceId,
+        x: n.bounds.x + dx,
+        y: n.bounds.y + dy,
+        width: n.bounds.width,
+        height: n.bounds.height,
+        shape: n.shape,
+        ...(carrier ? { port: { x: carrier.x + dx, y: carrier.y + dy, width: carrier.width, height: carrier.height } } : {}),
+      });
+      continue;
+    }
     finalBoxes.set(n.sourceId, {
       id: n.sourceId,
       x: patch?.x ?? n.bounds.x,
@@ -838,10 +991,17 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       shape: n.shape,
     });
   }
-  for (const [id, c] of created) if (c.type !== "arrow") finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height, shape: c.type });
+  for (const [id, c] of created) {
+    if (c.type === "arrow") continue;
+    finalBoxes.set(id, { id, x: c.x, y: c.y, width: c.width, height: c.height, shape: c.type, ...(c.port ? { port: c.port } : {}) });
+  }
   if (legendArea) finalBoxes.set("__legend", { id: "__legend", ...legendArea });
   const obstacles = [...finalBoxes.values()];
   const around = (from: string, to: string) => obstacles.filter((o) => o.id !== from && o.id !== to);
+  // Where an edge meets each end: the port box when there is one.
+  const endBoxes = new Map(
+    [...finalBoxes].map(([id, box]) => [id, box.port ? { ...box.port, id, shape: box.shape } : box] as const),
+  );
   // The edges this write is responsible for: the ones it draws, the existing
   // ones whose ends it moves, and — since a tidy re-routes every bound edge
   // in its scope (D73, amended by A19) — every edge of a frame it re-laid,
@@ -867,20 +1027,21 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // return over one row goes under it rather than across the first.
   const taken: Point[][] = [];
   for (const job of jobs) {
-    const choice = chooseSidesWithLine(finalBoxes.get(job.from)!, finalBoxes.get(job.to)!, around(job.from, job.to), ROUTE_PAD, taken);
+    const choice = chooseSidesWithLine(endBoxes.get(job.from)!, endBoxes.get(job.to)!, around(job.from, job.to), ROUTE_PAD, taken);
     if (choice) {
       chosen.set(job.id, choice.pair);
       taken.push(choice.line);
     }
   }
-  const ports = assignPorts(jobs, finalBoxes, ROUTE_PAD, chosen);
+  const ports = assignPorts(jobs, endBoxes, ROUTE_PAD, chosen);
   // The whole drawn polyline of each routed edge — port, turns, port.
   const lines = new Map<string, Point[]>();
   const endsOf = new Map<string, { start: Point; end: Point }>();
   const aligned = (p: Point, q: Point) => Math.abs(p[0] - q[0]) < 1e-6 || Math.abs(p[1] - q[1]) < 1e-6;
   for (const job of jobs) {
-    const a = finalBoxes.get(job.from)!;
-    const b = finalBoxes.get(job.to)!;
+    // The ends the edge leaves and enters: a symbol's icon, not its caption.
+    const a = endBoxes.get(job.from)!;
+    const b = endBoxes.get(job.to)!;
     const port = ports.get(job.id);
     const turns = routeEdge(a, b, around(job.from, job.to), ROUTE_PAD, port, chosen.has(job.id) ? { leaveBySide: true } : undefined);
     // An edge whose route could not leave from its port — the router fell
@@ -937,6 +1098,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   if (problems.length) throw new PlanError(problems);
   const result: SceneWrite = {};
   if (write.shapes.length) result.shapes = write.shapes;
+  if (write.symbols.length) result.symbols = write.symbols;
   if (write.arrows.length) result.arrows = write.arrows;
   if (write.frames.length) result.frames = write.frames;
   if (write.patches.length) result.patches = write.patches;
@@ -952,7 +1114,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
-  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, legendSample: false, refine: null, composite: {} };
+  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, legendSample: false, refine: null, composite: {}, symbol: null };
 }
 
 function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
@@ -1005,10 +1167,24 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     if (el.containerId && removing.has(el.containerId)) removing.add(el.id);
   }
   const patches = new Map((write.patches ?? []).map((p) => [p.id, p]));
+  // A symbol component moves as one (D83): a patch on its carrier carries
+  // the icon's elements and the label by the same delta, as the adapter does.
+  const groupShift = new Map<string, { dx: number; dy: number }>();
+  for (const el of snapshot.elements) {
+    if (el.docent.symbol === null || !el.groupIds.length) continue;
+    const patch = patches.get(el.id);
+    if (!patch || (patch.x === undefined && patch.y === undefined)) continue;
+    groupShift.set(el.groupIds[el.groupIds.length - 1], { dx: (patch.x ?? el.x) - el.x, dy: (patch.y ?? el.y) - el.y });
+  }
   const out: SnapshotElement[] = [];
   for (const el of snapshot.elements) {
     if (removing.has(el.id)) continue;
     let next = { ...el, boundElements: el.boundElements.filter((b) => !removing.has(b.id)), docent: { ...el.docent } };
+    const carried = el.groupIds.length && !patches.has(el.id) ? groupShift.get(el.groupIds[el.groupIds.length - 1]) : undefined;
+    if (carried) {
+      next.x += carried.dx;
+      next.y += carried.dy;
+    }
     if (next.startBindingId && removing.has(next.startBindingId)) next.startBindingId = null;
     if (next.endBindingId && removing.has(next.endBindingId)) next.endBindingId = null;
     const patch = patches.get(el.id);
@@ -1048,6 +1224,26 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
       out.push(text);
     }
     out.push(el);
+  }
+  // A symbol stands for its whole group here (D83): the carrier on the
+  // icon's bounds and the label under it, declared composite so the graph
+  // reads them as ONE component (D22). The icon's own strokes add nothing
+  // the graph, the diff or the lint would look at, so they are not drawn.
+  for (const symbol of write.symbols ?? []) {
+    const groupId = `symbol-${symbol.id}`;
+    const carrier = blank(
+      symbol.id,
+      "rectangle",
+      symbol.icon,
+      { ...symbol.labelStyle, strokeColor: "transparent", backgroundColor: "transparent", roughness: 0, roundness: null },
+      symbol.frameId,
+    );
+    carrier.groupIds = [groupId];
+    carrier.docent = { ...docentFromMeaning(symbol.meaning, carrier.docent), symbol: symbol.symbol, composite: { [groupId]: true } };
+    const text = blank(`${symbol.id}-label`, "text", symbol.labelBox, symbol.labelStyle, symbol.frameId);
+    text.text = symbol.label;
+    text.groupIds = [groupId];
+    out.push(carrier, text);
   }
   for (const text of write.texts ?? []) {
     const el = blank(text.id, "text", { x: text.x, y: text.y, width: 100, height: 24 }, text.style, text.frameId);
@@ -1142,7 +1338,7 @@ export function lint(snapshot: SceneSnapshot): LintReport {
   for (const node of graph.nodes) {
     const name = clean(node.label) || node.id;
     if (!clean(node.label)) findings.push({ level: "warn", about: node.id, message: `component ${node.id} has no label` });
-    const facts = applyLegend(node.style, node.shape, graph.legend);
+    const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
     if (!facts.kind) findings.push({ level: "warn", about: node.id, message: `${name} has no kind — its style matches no legend rule` });
     if (!node.intents.length) findings.push({ level: "warn", about: node.id, message: `${name} has no intent` });
   }

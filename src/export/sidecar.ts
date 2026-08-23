@@ -36,7 +36,7 @@ export function exportSidecar(graph: SceneGraph): string {
   const legendRecord = legendToRecord(graph.legend);
 
   const nodes: Json[] = graph.nodes.map((node) => {
-    const facts = applyLegend(node.style, node.shape, graph.legend);
+    const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
     const tags = [...node.tags, ...facts.tags];
     const provenance: { [k: string]: Json } = {};
     const entity: { [k: string]: Json } = {
@@ -48,6 +48,12 @@ export function exportSidecar(graph: SceneGraph): string {
       provenance.kind = "declared";
     } else {
       entity.shape = node.shape;
+    }
+    // A component drawn as a library icon says which one (D84): the author
+    // named the symbol, so the fact is declared.
+    if (node.symbol !== null) {
+      entity.symbol = node.symbol;
+      provenance.symbol = "declared";
     }
     if (node.label !== null) entity.label = node.label;
     if (node.frameId !== null) entity.frame = node.frameId;

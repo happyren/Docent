@@ -141,7 +141,7 @@ export function findInDiagram(commands: CommandAPI, graph: SceneGraph, query: st
     matched: string[];
   }[] = [];
   for (const node of graph.nodes) {
-    const facts = applyLegend(node.style, node.shape, graph.legend);
+    const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
     const { total, matched } = score({
       label: [node.label ?? ""],
       id: [node.id],

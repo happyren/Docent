@@ -420,12 +420,13 @@ export const TOOLS = [
   {
     name: "add_node",
     description:
-      "Add a component: a label, a `kind` (from the legend — get_scene_graph().legend; define_kind adds one), the frame it lives in, intents (declared statements of what it does), logic (rules). Docent chooses the shape, the style (the diagram's own), and the place — `after` puts it right of a component. Lands as one undo step; the answer is the semantic changelog and the new id.\nExample: add_node({label:'Retry queue', kind:'queue', frame:'f_core', intents:['retries failed charges'], after:'n_orders'})",
+      "Add a component: a label, a `kind` (from the legend — get_scene_graph().legend; define_kind adds one), the frame it lives in, intents (declared statements of what it does), logic (rules). Docent chooses the shape, the style (the diagram's own), and the place — `after` puts it right of a component. With `symbol` the component is drawn as that library icon, labelled under it, and arrows meet the icon's own border. Lands as one undo step; the answer is the semantic changelog and the new id.\nExample: add_node({label:'Retry queue', kind:'queue', frame:'f_core', intents:['retries failed charges'], after:'n_orders'})",
     inputSchema: {
       type: "object",
       properties: {
         label: { type: "string" },
         kind: { type: "string" },
+        symbol: { type: "string", description: "A library symbol id from find_symbol, e.g. 'aws/lambda' — placed as the icon with the label under it" },
         frame: { type: ["string", "null"], description: "Frame id; null or absent = Layer 1, unframed" },
         shape: { type: "string", enum: ["rectangle", "ellipse", "diamond"], description: "Only to override the legend's shape" },
         tags: { type: "array", items: { type: "string" } },
@@ -514,12 +515,13 @@ export const TOOLS = [
   {
     name: "define_kind",
     description:
-      "Add a kind to the legend — the meaning a style carries. Colour is chosen for meaning and distinctness — say the tone (danger, caution, positive, inactive) or the role (storage, compute, messaging, external, people, boundary) and Docent picks a conventional, distinct look; with neither, the fill furthest from every kind already in the legend, and past six kinds a second channel (stroke style, then shape). With a shape, that shape. Reuse existing kinds before defining new ones.\nExample: define_kind({kind:'queue', role:'messaging', shape:'diamond'})",
+      "Add a kind to the legend — the meaning a style carries. Colour is chosen for meaning and distinctness — say the tone (danger, caution, positive, inactive) or the role (storage, compute, messaging, external, people, boundary) and Docent picks a conventional, distinct look; with neither, the fill furthest from every kind already in the legend, and past six kinds a second channel (stroke style, then shape). With a shape, that shape. With a `symbol`, the kind IS that library icon — the legend shows the icon beside the meaning and no colour is chosen. Reuse existing kinds before defining new ones.\nExample: define_kind({kind:'queue', role:'messaging', shape:'diamond'})",
     inputSchema: {
       type: "object",
       properties: {
         kind: { type: "string" },
         shape: { type: "string", enum: ["rectangle", "ellipse", "diamond"] },
+        symbol: { type: "string", description: "A library symbol id from find_symbol, e.g. 'aws/lambda' — the kind IS that icon; no colour is picked" },
         tone: { type: "string", enum: ["positive", "neutral", "caution", "danger", "inactive"], description: "What the kind means to a reader; picks the conventional hue" },
         role: { type: "string", enum: ["storage", "compute", "messaging", "external", "people", "boundary"], description: "What family of thing it is; picks a hue from that family" },
         style: {

@@ -84,13 +84,13 @@ export function flowOrder(nodes: readonly GraphNode[], edges: readonly GraphEdge
 function nameOf(node: GraphNode, graph?: SceneGraph): string {
   const label = clean(node.label);
   if (label) return label;
-  const kind = graph ? applyLegend(node.style, node.shape, graph.legend).kind : null;
+  const kind = graph ? applyLegend(node.style, node.shape, graph.legend, node.symbol).kind : null;
   return kind ? `an unnamed ${kind}` : "an unnamed component";
 }
 
 /** A sentence from the graph and legend when the author declared nothing. */
 function inferredLine(node: GraphNode, graph: SceneGraph, inFrame: ReadonlySet<string>): string {
-  const facts = applyLegend(node.style, node.shape, graph.legend);
+  const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
   const names = (ids: string[]) =>
     ids
       .map((id) => graph.nodes.find((n) => n.id === id))
