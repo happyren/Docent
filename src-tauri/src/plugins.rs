@@ -486,6 +486,7 @@ impl Host {
         let mut command = provider_command(&run.command, &args);
         command
             .current_dir(&dir)
+            .env("PATH", provider_path())
             .env("DOCENT_PLUGIN_PORT", port.to_string())
             .env("DOCENT_HOST_PID", std::process::id().to_string())
             .stdin(Stdio::null())
@@ -558,8 +559,11 @@ impl Host {
                     if owned.is_some() {
                         match plugin.child.as_mut().map(|c| c.try_wait()) {
                             Some(Ok(Some(exit))) => {
+                                let said = last_words(&plugin.dir)
+                                    .map(|w| format!(" — {w}"))
+                                    .unwrap_or_else(|| " — see its log".to_string());
                                 plugin.status = Status::Failed(format!(
-                                    "process exited ({exit}) after {}s — see its log",
+                                    "process exited ({exit}) after {}s{said}",
                                     started.elapsed().as_secs()
                                 ));
                                 plugin.child = None;
@@ -647,6 +651,114 @@ fn log_file(dir: &Path) -> PathBuf {
 fn free_port() -> std::io::Result<u16> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     Ok(listener.local_addr()?.port())
+}
+
+/// The PATH a provider's command is looked up on. A desktop app started
+/// from the Dock or relaunched by the updater inherits the bare system
+/// PATH, not the person's — `uvx` lives in `~/.local/bin`, Homebrew in
+/// `/opt/homebrew/bin`, neither on it — so the login shell's PATH is read
+/// once and joined in, with the well-known install folders as a fallback
+/// for a shell that could not be asked. Order: the process's own PATH
+/// first, then the shell's, then the fallbacks, without repeats.
+fn provider_path() -> String {
+    static PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PATH.get_or_init(|| {
+        let own = std::env::var("PATH").unwrap_or_default();
+        let shell = login_shell_path().unwrap_or_default();
+        let home = std::env::var("HOME").unwrap_or_default();
+        let fallback = [
+            format!("{home}/.local/bin"),
+            format!("{home}/.cargo/bin"),
+            "/opt/homebrew/bin".to_string(),
+            "/usr/local/bin".to_string(),
+            "/opt/local/bin".to_string(),
+        ];
+        merge_paths(&own, &shell, &fallback)
+    })
+    .clone()
+}
+
+fn merge_paths(own: &str, shell: &str, fallback: &[String]) -> String {
+    let mut seen = Vec::<String>::new();
+    let mut push = |entry: &str| {
+        if !entry.is_empty() && !seen.iter().any(|s| s == entry) {
+            seen.push(entry.to_string());
+        }
+    };
+    for entry in own.split(PATH_SEPARATOR) {
+        push(entry);
+    }
+    for entry in shell.split(PATH_SEPARATOR) {
+        push(entry);
+    }
+    for entry in fallback {
+        push(entry);
+    }
+    seen.join(PATH_SEPARATOR)
+}
+
+#[cfg(unix)]
+const PATH_SEPARATOR: &str = ":";
+#[cfg(not(unix))]
+const PATH_SEPARATOR: &str = ";";
+
+/// What the person's login shell puts on PATH — asked as an interactive
+/// login shell, since `~/.zshrc` is where most PATH lines live, with a
+/// marker so a banner or a prompt cannot be mistaken for the answer.
+/// None when there is no shell, it does not answer within a few seconds,
+/// or it prints no marker.
+#[cfg(unix)]
+fn login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").ok().filter(|s| !s.is_empty())?;
+    let mut child = Command::new(&shell)
+        .args(["-ilc", "printf '\\n__DOCENT_PATH__%s\\n' \"$PATH\""])
+        .env("TERM", "dumb")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = thread::spawn(move || {
+        let mut out = String::new();
+        let _ = stdout.read_to_string(&mut out);
+        out
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < Duration::from_secs(5) => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break;
+            }
+        }
+    }
+    let out = reader.join().ok()?;
+    out.lines()
+        .rev()
+        .find_map(|line| line.strip_prefix("__DOCENT_PATH__"))
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+}
+
+#[cfg(not(unix))]
+fn login_shell_path() -> Option<String> {
+    None
+}
+
+/// The last thing a provider said before it died — for the panel, so
+/// "exited (127)" reads "uvx: command not found".
+fn last_words(dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(log_file(dir)).ok()?;
+    text.lines()
+        .map(str::trim)
+        .rfind(|l| !l.is_empty() && !l.starts_with("[1]"))
+        .map(|l| l.chars().take(160).collect())
 }
 
 /// On Unix the provider runs under a watcher: a `sh` that starts the
@@ -1049,5 +1161,52 @@ mod tests {
         assert_eq!(refusal(&local, "demo"), None);
         let both = manifest(ok.run.clone(), Some("http://127.0.0.1:8000"));
         assert!(refusal(&both, "demo").unwrap().contains("not both"));
+    }
+
+    #[test]
+    fn provider_path_is_own_then_shell_then_fallback_without_repeats() {
+        let fallback = ["/home/k/.local/bin".to_string(), "/usr/bin".to_string()];
+        let merged = merge_paths("/usr/bin:/bin", "/opt/homebrew/bin:/usr/bin:", &fallback);
+        let parts: Vec<&str> = merged.split(PATH_SEPARATOR).collect();
+        assert_eq!(
+            parts,
+            [
+                "/usr/bin",
+                "/bin",
+                "/opt/homebrew/bin",
+                "/home/k/.local/bin"
+            ]
+        );
+        // No shell answer: the fallbacks still make it.
+        assert!(merge_paths("/usr/bin", "", &fallback).ends_with("/home/k/.local/bin"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_login_shell_answers_with_a_single_line_path() {
+        // Whatever the shell on this machine is, the answer is one clean
+        // PATH line or nothing — never a banner or a prompt.
+        if let Some(path) = login_shell_path() {
+            assert!(!path.contains('\n'));
+            assert!(path.split(':').any(|p| p == "/usr/bin" || p == "/bin"));
+        }
+    }
+
+    #[test]
+    fn a_failed_providers_last_words_are_read_from_its_log() {
+        let dir = std::env::temp_dir().join(format!("docent-last-words-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            log_file(&dir),
+            "starting\nuvx: line 1: uvx: command not found\n[1]+  Done(127)   \"$0\" \"$@\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            last_words(&dir).as_deref(),
+            Some("uvx: line 1: uvx: command not found")
+        );
+        fs::write(log_file(&dir), "").unwrap();
+        assert_eq!(last_words(&dir), None);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
