@@ -290,8 +290,20 @@ describe("a tagged component (D77)", () => {
     const result = plan([{ op: "define_kind", kind: "outage", tone: "danger" }], snapshot, idSource(1));
     const rule = result.write.legend!.find((r) => r.meaning === "outage")!;
     expect(rule.value).toBe("#ffc9c9");
-    expect(rule.also).toContainEqual({ attr: "strokeColor", value: "#e03131" });
+    // The stroke is the tags' channel: the kind's rule does not require it,
+    // but the kind's components are drawn with the tone's stroke.
+    expect(rule.also ?? []).not.toContainEqual(expect.objectContaining({ attr: "strokeColor" }));
     expect(result.notes.some((n) => n.includes("danger tone → red"))).toBe(true);
+    const drawn = plan(
+      [
+        { op: "define_kind", kind: "outage", tone: "danger" },
+        { op: "add_node", label: "Region down", kind: "outage", frame: "F", intents: ["x"] },
+      ],
+      snapshot,
+      idSource(2),
+    );
+    expect(drawn.write.shapes![0].style.strokeColor).toBe("#e03131");
+    expect(drawn.write.shapes![0].style.backgroundColor).toBe("#ffc9c9");
     // A raw style is still the author's own.
     const raw2 = plan([{ op: "define_kind", kind: "odd", style: { backgroundColor: "#123456" } }], snapshot, idSource(1));
     expect(raw2.write.legend!.find((r) => r.meaning === "odd")!.value).toBe("#123456");

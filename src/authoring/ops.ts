@@ -298,6 +298,9 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     return next;
   };
 
+  // Strokes the palette paired with kinds defined in this batch (D77): drawn
+  // on the kind's first components, and carried on by the house style after.
+  const kindStrokes = new Map<string, string>();
   for (const [i, op] of ops.entries()) {
     const at = `op ${i + 1} (${op.op})`;
     switch (op.op) {
@@ -325,7 +328,11 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const rule: LegendRule = { attr: "backgroundColor", value: fill, key: "kind", meaning: kind };
         const also: { attr: LegendRule["attr"]; value: string }[] = [];
         if (shape) also.push({ attr: "shape", value: shape });
-        if (strokeColor) also.push({ attr: "strokeColor", value: strokeColor });
+        // A kind is its fill and shape; the stroke is the tags' channel (D77).
+        // The palette's matching stroke is drawn, not required — only a stroke
+        // the caller named becomes a condition of the match.
+        if (op.style?.strokeColor) also.push({ attr: "strokeColor", value: op.style.strokeColor });
+        else if (strokeColor) kindStrokes.set(kind, strokeColor);
         if (strokeStyle) also.push({ attr: "strokeStyle", value: strokeStyle });
         if (fillStyle) also.push({ attr: "fillStyle", value: fillStyle });
         if (op.style?.strokeWidth) also.push({ attr: "strokeWidth", value: String(op.style.strokeWidth) });
@@ -428,6 +435,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const shape: Shape = op.shape ?? look.shape;
         const tags = op.tags?.length ? op.tags.map(clean).filter(Boolean) : [];
         let style: WriteStyle = { ...look.style, ...(op.style ?? {}) };
+        if (kind && look.source === "legend" && !op.style?.strokeColor && kindStrokes.has(kind)) style.strokeColor = kindStrokes.get(kind)!;
         // A raw stroke is the author's own; otherwise a conventional tag may
         // colour it (D77).
         if (tags.length && !op.style?.strokeColor) style = tagTones(tags, shape, style, label);
