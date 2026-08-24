@@ -443,6 +443,11 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
 
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const edges: GraphEdge[] = edgeElements
+    // An arrow inside a composite group is part of the icon's drawing —
+    // the arrow in an EventBridge rule, the loop in a cycle glyph — never
+    // a connection: it takes no part in the graph, is never re-routed, and
+    // infers no endpoints (D22, D83).
+    .filter((el) => !el.groupIds.some((groupId) => compositeGroups.has(groupId)))
     .map((el) => {
       const resolve = (
         boundId: string | null,

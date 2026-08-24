@@ -498,6 +498,16 @@ export function routeCost(points: readonly Point[], bendCost = BEND_COST): numbe
 /** What crossing a line already drawn costs a candidate (D78): a turn and a half. */
 const CROSS_COST = 450;
 
+/** Whether two segments properly cross — touching at an endpoint does not count. */
+export function segmentsCrossProperly(a: Point, b: Point, c: Point, d: Point): boolean {
+  const o = (p: Point, q: Point, r: Point) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const d1 = o(c, d, a);
+  const d2 = o(c, d, b);
+  const d3 = o(a, b, c);
+  const d4 = o(a, b, d);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
 /** Whether two segments meet at all — crossing, touching, or running along each other. */
 function segmentsMeet(a: Point, b: Point, c: Point, d: Point): boolean {
   const o = (p: Point, q: Point, r: Point) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
@@ -570,6 +580,10 @@ export function chooseSidesWithLine(
       // A route the router had to take from a side's middle instead is not
       // this pair's route, and says nothing about what this pair costs.
       if (found && !(aligned(ports.start.at, found[0]) && aligned(ports.end.at, found[found.length - 1]))) continue;
+      // A straight line stands only between the facing sides: from any other
+      // pair it is a diagonal squeezed between the obstacles — cheapest by
+      // length, worst to read, and the first thing to cross a fan.
+      if (!found && !(start === facing.start && end === facing.end)) continue;
       const line: Point[] = found ? [ports.start.at, ...found, ports.end.at] : [ports.start.at, ports.end.at];
       // Cheapest whole line — turns priced by BEND_COST, crossings of lines
       // already chosen by CROSS_COST — then the facing sides and a fixed

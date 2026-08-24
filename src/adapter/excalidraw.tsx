@@ -281,6 +281,13 @@ export interface DocentCanvasHandle {
   getFrames(): FrameInfo[];
   getFrameInfo(frameId: string): FrameInfo | null;
   getElementInfo(elementId: string): ElementInfo | null;
+  /**
+   * The one element a whole-group selection stands for (D83): when every
+   * selected element shares an outermost group and one of them carries the
+   * composite's meaning — a symbol's carrier, or a declared composite
+   * member — that member. Null when the selection is not one composite.
+   */
+  compositeRepresentative(elementIds: readonly string[]): string | null;
   /** Bounding box of all live elements, or null for an empty scene. */
   getSceneBounds(): SceneBounds | null;
   getSelectedIds(): string[];
@@ -1292,6 +1299,22 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         (el) => el.id === frameId && el.type === "frame",
       );
       return frame ? toFrameInfo(frame) : null;
+    },
+
+    compositeRepresentative: (elementIds) => {
+      if (elementIds.length < 2) return null;
+      const els = elementIds.map((id) => liveElements(api).find((e) => e.id === id));
+      if (els.some((e) => !e)) return null;
+      const outer = (e: ExcalidrawElement) => e.groupIds[e.groupIds.length - 1];
+      const group = outer(els[0]!);
+      if (!group || els.some((e) => outer(e!) !== group)) return null;
+      const carrier =
+        els.find((e) => (docentDataOf(e!) as { symbol?: unknown }).symbol) ??
+        els.find((e) => {
+          const composite = (docentDataOf(e!) as { composite?: Record<string, unknown> }).composite;
+          return composite?.[group] === true;
+        });
+      return carrier?.id ?? null;
     },
 
     getElementInfo: (elementId) => {

@@ -25,6 +25,7 @@ import {
   polylineThroughBox,
   ROUTE_PAD,
   routeEdge,
+  segmentsCrossProperly,
   simplifyRoute,
   type Point,
   type SidePair,
@@ -1056,6 +1057,107 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
   }
   const jobOf = new Map(jobs.map((j) => [j.id, j]));
+  // Fan legs must not cross each other (D75): the ports of a side are
+  // ordered by where the other ends stand, but a routed line among straight
+  // ones — or a two-way pair whose halves took different ways — can still
+  // knot. Any two edges sharing a node's side whose lines cross swap their
+  // ports on that side and are re-derived; the swap stays when it unknots
+  // them.
+  {
+    const effLine = (id: string): Point[] => {
+      const line = lines.get(id);
+      if (line) return line;
+      const e = endsOf.get(id);
+      if (e) return [e.start, e.end];
+      const j = jobOf.get(id)!;
+      const A = endBoxes.get(j.from)!;
+      const B = endBoxes.get(j.to)!;
+      return [
+        [A.x + A.width / 2, A.y + A.height / 2],
+        [B.x + B.width / 2, B.y + B.height / 2],
+      ];
+    };
+    const derive = (id: string) => {
+      const job = jobOf.get(id)!;
+      const a = endBoxes.get(job.from)!;
+      const b = endBoxes.get(job.to)!;
+      const port = ports.get(id);
+      const turns = routeEdge(a, b, around(job.from, job.to), ROUTE_PAD, port, chosen.has(id) ? { leaveBySide: true } : undefined);
+      const ported = !!port && (!turns || (aligned(port.start.at, turns[0]) && aligned(port.end.at, turns[turns.length - 1])));
+      if (ported) endsOf.set(id, { start: port!.start.at, end: port!.end.at });
+      else endsOf.delete(id);
+      if (turns) {
+        const head: Point = ported ? port!.start.at : [a.x + a.width / 2, a.y + a.height / 2];
+        const tail: Point = ported ? port!.end.at : [b.x + b.width / 2, b.y + b.height / 2];
+        lines.set(id, [head, ...turns, tail]);
+      } else {
+        lines.delete(id);
+      }
+    };
+    const crossings = (u: Point[], v: Point[]): number => {
+      let n = 0;
+      for (let i = 0; i + 1 < u.length; i++) {
+        for (let j = 0; j + 1 < v.length; j++) {
+          if (segmentsCrossProperly(u[i], u[i + 1], v[j], v[j + 1])) n += 1;
+        }
+      }
+      return n;
+    };
+    // A swap is judged against every line, not the pair alone: freeing the
+    // pair while knotting a third is no gain.
+    const allIds = jobs.map((j) => j.id);
+    const cost = (id: string): number => {
+      let n = 0;
+      const mine = effLine(id);
+      for (const other of allIds) if (other !== id) n += crossings(mine, effLine(other));
+      return n;
+    };
+    type SideEnd = { id: string; which: "start" | "end" };
+    const bySide = new Map<string, SideEnd[]>();
+    for (const job of jobs) {
+      const port = ports.get(job.id);
+      if (!port) continue;
+      for (const [which, node] of [["start", job.from], ["end", job.to]] as const) {
+        // Keyed by the node alone: two legs of one fan can leave different
+        // sides — right and bottom — and cross at the corner; swapping
+        // their ports across sides is what untangles those.
+        const list = bySide.get(node) ?? [];
+        list.push({ id: job.id, which });
+        bySide.set(node, list);
+      }
+    }
+    for (let sweep = 0; sweep < 2; sweep++) {
+      let swapped = false;
+      for (const key of [...bySide.keys()].sort()) {
+        const ends = bySide.get(key)!;
+        for (let i = 0; i < ends.length; i++) {
+          for (let j = i + 1; j < ends.length; j++) {
+            const a = ends[i];
+            const b = ends[j];
+            if (a.id === b.id) continue;
+            if (!crossings(effLine(a.id), effLine(b.id))) continue;
+            const before = cost(a.id) + cost(b.id);
+            const pa = ports.get(a.id)!;
+            const pb = ports.get(b.id)!;
+            const held = pa[a.which];
+            pa[a.which] = pb[b.which];
+            pb[b.which] = held;
+            derive(a.id);
+            derive(b.id);
+            if (cost(a.id) + cost(b.id) >= before) {
+              pb[b.which] = pa[a.which];
+              pa[a.which] = held;
+              derive(a.id);
+              derive(b.id);
+            } else {
+              swapped = true;
+            }
+          }
+        }
+      }
+      if (!swapped) break;
+    }
+  }
   // Simplified before it is drawn (D78): a jog collapsed, a hairpin taken
   // out, no leg left shorter than a corner — each step refused when it would
   // put the edge through a component.

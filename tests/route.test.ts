@@ -6,8 +6,9 @@
  * over D72's guarantee that an edge never cuts through a component.
  */
 import { describe, expect, it } from "vitest";
+import { buildSceneGraph } from "../src/scene/graph";
 import { snapshotFromRawElements } from "../src/adapter/snapshot";
-import {
+import { absolutePoints, segmentsCrossProperly,
   arcCorners,
   assignPorts,
   bindingFocus,
@@ -548,4 +549,39 @@ describe("tidy re-routes every bound edge in its scope (D73, amended by A19)", (
   it("reads the same twice", () => {
     expect(plan([{ op: "layout", frame: "F" }], zigzagged, idSource(22))).toEqual(plan([{ op: "layout", frame: "F" }], zigzagged, idSource(22)));
   });
+});
+
+describe("the fan stays untangled (D75)", () => {
+it("a hub's fan never crosses itself (D75)", () => {
+  const snap = snapshotFromRawElements([] as never);
+  const ops: any[] = [
+    { op: "define_kind", kind: "svc", shape: "rectangle" },
+    { op: "add_frame", ref: "$f", name: "Hub" },
+    { op: "add_node", ref: "$hub", label: "Hub", kind: "svc", frame: "$f", intents: ["x"] },
+  ];
+  for (let i = 0; i < 6; i++) {
+    ops.push({ op: "add_node", ref: `$t${i}`, label: `Target ${i}`, kind: "svc", frame: "$f", intents: ["x"] });
+    ops.push({ op: "add_edge", from: "$hub", to: `$t${i}`, label: `call ${i}` });
+  }
+  for (let i = 0; i < 2; i++) {
+    ops.push({ op: "add_node", ref: `$u${i}`, label: `Deep ${i}`, kind: "svc", frame: "$f", intents: ["x"] });
+    ops.push({ op: "add_edge", from: `$t${i}`, to: `$u${i}`, label: `next ${i}` });
+  }
+  ops.push({ op: "add_edge", from: "$t5", to: "$hub", label: "report back" });
+  const r = plan(ops, snap, idSource(3));
+    const after = simulate(snap, r.write);
+  const g = buildSceneGraph(after);
+  const els = new Map(after.elements.map((e) => [e.id, e]));
+  const lines: any[] = [];
+  for (const e of g.edges) {
+    const el = els.get(e.sourceId)!;
+    if (el.points) lines.push({ id: e.id, pts: absolutePoints(el.x, el.y, el.points), from: e.from, to: e.to });
+  }
+  let total = 0;
+  for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) {
+    for (let s = 0; s + 1 < lines[i].pts.length; s++) for (let t = 0; t + 1 < lines[j].pts.length; t++)
+      if (segmentsCrossProperly(lines[i].pts[s], lines[i].pts[s+1], lines[j].pts[t], lines[j].pts[t+1])) total++;
+  }
+  expect(total).toBe(0);
+});
 });

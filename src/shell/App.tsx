@@ -1092,10 +1092,14 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canvas, viewportRev, docVersion, viewportCenter]);
 
-  const singleSelected =
-    !presentation.active && selectedIds.length === 1 && canvas
-      ? canvas.getElementInfo(selectedIds[0])
-      : null;
+  // One element, or one composite selected whole — a symbol's group opens
+  // the panel on its carrier, where the meaning lives (D83).
+  const singleSelected = (() => {
+    if (presentation.active || !canvas || !selectedIds.length) return null;
+    if (selectedIds.length === 1) return canvas.getElementInfo(selectedIds[0]);
+    const carrier = canvas.compositeRepresentative(selectedIds);
+    return carrier ? canvas.getElementInfo(carrier) : null;
+  })();
 
   const currentWaypoint =
     presentation.index === OVERVIEW

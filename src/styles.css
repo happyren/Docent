@@ -372,6 +372,14 @@ body {
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  /* Only the buttons take the pointer: the bar's padding and gaps let
+     clicks through to the canvas, so an arrow's anchors stay reachable
+     under it. */
+  pointer-events: none;
+}
+
+.docent-selection-toolbar > * {
+  pointer-events: auto;
 }
 
 .docent-tool {

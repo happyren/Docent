@@ -260,11 +260,19 @@ export class CommandAPI {
     const ids = this.graphIds(planned.ids, graph);
     const touched = planned.touched.map((id) => this.graphIds({ $x: id }, graph).$x ?? id);
     // Show the work: fly to what changed, outline it (I2 — overlay only).
+    // A frame frames the camera but is never outlined — a purple box the
+    // size of a frame reads as a stray drawing, and an empty frame reads
+    // as a ghost. The outline is a glance, so it lets go by itself.
     const present = planned.touched.filter((id) => this.reader.getElementInfo(id) || this.reader.getFrameInfo(id));
+    const outlined = present.filter((id) => {
+      const info = this.reader.getElementInfo(id);
+      return info !== null && info.type !== "frame";
+    });
     if (present.length) {
       try {
         await this.frameTargets(present, 0.25);
-        this.overlay.setHighlight(this.resolveEffectTargets(graph, present), "outline");
+        this.overlay.setHighlight(this.resolveEffectTargets(graph, outlined), "outline");
+        this.fadeHighlight();
       } catch {
         // Showing is a courtesy; the edit already landed.
       }
@@ -636,6 +644,15 @@ export class CommandAPI {
    * node/edge/frame or raw element is a target of one. Same leniency and
    * the same loudness as `resolveEffectIds` (I5).
    */
+  /** The post-edit outline lets go on its own; an explicit highlight stays. */
+  private fadeToken = 0;
+  private fadeHighlight(after = 6000): void {
+    const token = ++this.fadeToken;
+    setTimeout(() => {
+      if (token === this.fadeToken) this.overlay.setHighlight([], "outline");
+    }, after);
+  }
+
   private resolveEffectTargets(graph: SceneGraph, ids: string[]): string[][] {
     const targets: string[][] = [];
     for (const id of ids) {

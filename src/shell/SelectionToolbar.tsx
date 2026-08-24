@@ -130,8 +130,15 @@ export function SelectionToolbar({
       }
       const width = bar.offsetWidth || 220;
       const x = Math.max(8, Math.min(size.width - width - 8, (left + right) / 2 - width / 2));
-      let y = topY - BAR_OFFSET;
-      if (y < TOP_SAFE) y = bottomY + 16; // flip below the selection
+      // An arrow's anchors sit on its line and its ends: keep the bar well
+      // clear of the selection so they stay reachable.
+      const arrowOnly = selectedIds.length > 0 && selectedIds.every((id) => {
+        const info = canvas.getElementInfo(id);
+        return info !== null && (info.type === "arrow" || info.type === "line");
+      });
+      const clear = arrowOnly ? 24 : 16;
+      let y = topY - BAR_OFFSET - (arrowOnly ? 12 : 0);
+      if (y < TOP_SAFE) y = bottomY + clear; // flip below the selection
       y = Math.max(TOP_SAFE, Math.min(size.height - BOTTOM_SAFE, y));
       bar.style.display = "flex";
       bar.style.left = `${x}px`;
