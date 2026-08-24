@@ -975,3 +975,93 @@ export function countCrossings(nodes: readonly GraphNode[], edges: readonly Grap
   return count;
 }
 
+/** What `separateFrames` is told about one frame. */
+export interface FramePlacement {
+  id: string;
+  box: Box;
+  /** Its tier: frames are kept apart within a tier, never across bands. */
+  tier: number;
+  /** Declared order index — the later frame is the one that moves. */
+  order: number;
+}
+
+/** The gap two frames always keep (D86). */
+export const FRAME_GAP = 60;
+
+/**
+ * Frames keep their distance (D86): within each tier, any two frames that
+ * overlap — or sit closer than the gap — are parted by moving the one
+ * later in the declared order, along the axis their centres already
+ * differ on most, in the direction they already differ, so what is left
+ * of what and what is above what stays true; the legend is immovable and
+ * pushes frames the same way. Returns the moves, empty when nothing
+ * overlaps. Deterministic (I3).
+ */
+export function separateFrames(
+  frames: readonly FramePlacement[],
+  legend: Box | null = null,
+  gap = FRAME_GAP,
+): Map<string, { dx: number; dy: number }> {
+  const moved = new Map<string, { dx: number; dy: number }>();
+  const boxes = new Map(frames.map((f) => [f.id, { ...f.box }]));
+  const byTier = new Map<number, FramePlacement[]>();
+  for (const f of frames) {
+    const list = byTier.get(f.tier) ?? [];
+    list.push(f);
+    byTier.set(f.tier, list);
+  }
+  const centre = (b: Box): [number, number] => [b.x + b.width / 2, b.y + b.height / 2];
+  // Only a true overlap is parted — a person's tighter-than-the-gap spacing
+  // is theirs to keep — but what is parted is parted to the full gap.
+  const TOUCH = 2;
+  const apart = (a: Box, b: Box) =>
+    a.x + a.width - TOUCH <= b.x || b.x + b.width - TOUCH <= a.x || a.y + a.height - TOUCH <= b.y || b.y + b.height - TOUCH <= a.y;
+  const push = (fixed: Box, moving: Box): { dx: number; dy: number } => {
+    const [cx, cy] = centre(fixed);
+    const [mx, my] = centre(moving);
+    const dxc = mx - cx;
+    const dyc = my - cy;
+    // The axis their centres differ on most, scaled by the pair's extent,
+    // in the direction they already differ — below stays below, right of
+    // stays right of.
+    const horizontal = Math.abs(dxc) * (fixed.height + moving.height) >= Math.abs(dyc) * (fixed.width + moving.width);
+    if (horizontal) {
+      const dir = dxc >= 0 ? 1 : -1;
+      return { dx: dir >= 0 ? fixed.x + fixed.width + gap - moving.x : fixed.x - gap - (moving.x + moving.width), dy: 0 };
+    }
+    const dir = dyc >= 0 ? 1 : -1;
+    return { dx: 0, dy: dir >= 0 ? fixed.y + fixed.height + gap - moving.y : fixed.y - gap - (moving.y + moving.height) };
+  };
+  for (const tier of [...byTier.keys()].sort((a, b) => a - b)) {
+    const list = [...byTier.get(tier)!].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
+    // Bounded sweeps: each pass parts every overlapping pair once; a scene
+    // of frames settles in a few.
+    for (let sweep = 0; sweep < 12; sweep++) {
+      let any = false;
+      for (let j = 0; j < list.length; j++) {
+        const b = boxes.get(list[j].id)!;
+        if (tier === 1 && legend && !apart(legend, b)) {
+          const d = push(legend, b);
+          b.x += d.dx;
+          b.y += d.dy;
+          const total = moved.get(list[j].id) ?? { dx: 0, dy: 0 };
+          moved.set(list[j].id, { dx: total.dx + d.dx, dy: total.dy + d.dy });
+          any = true;
+        }
+        for (let i = 0; i < j; i++) {
+          const a = boxes.get(list[i].id)!;
+          if (apart(a, b)) continue;
+          const d = push(a, b);
+          b.x += d.dx;
+          b.y += d.dy;
+          const total = moved.get(list[j].id) ?? { dx: 0, dy: 0 };
+          moved.set(list[j].id, { dx: total.dx + d.dx, dy: total.dy + d.dy });
+          any = true;
+        }
+      }
+      if (!any) break;
+    }
+  }
+  return moved;
+}
+

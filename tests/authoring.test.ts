@@ -581,6 +581,65 @@ describe("an edge never cuts through a component (D72)", () => {
   });
 });
 
+describe("frames keep their distance (D86)", () => {
+  const twoFrames = [
+    ...raw,
+    { ...base, id: "F2", type: "frame", name: "03 Below", x: 0, y: 430, width: 900, height: 300, frameId: null },
+    ...box("solo", 40, 500, "Solo").map((el) => ({ ...el, frameId: "F2" })),
+  ];
+
+  it("parts a frame that grew into its neighbour, carrying the members", () => {
+    const snap = snapshotFromRawElements(twoFrames as never);
+    // Enough new components that frame F must grow past y=430 into F2.
+    const ops = Array.from({ length: 6 }, (_, i) => ({
+      op: "add_node" as const,
+      label: `Extra ${i}`,
+      kind: "service",
+      frame: "F",
+      intents: ["x"],
+    }));
+    const result = plan(ops, snap, idSource(9));
+    const after = simulate(snap, result.write);
+    const frames = after.elements.filter((el) => el.type === "frame");
+    const gapless = (a: typeof frames[number], b: typeof frames[number]) =>
+      a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+    for (let i = 0; i < frames.length; i++) {
+      for (let j = i + 1; j < frames.length; j++) {
+        expect(gapless(frames[i], frames[j])).toBe(true);
+      }
+    }
+    // The neighbour's member moved with it.
+    const f2 = frames.find((f) => f.id === "F2")!;
+    const solo = after.elements.find((el) => el.id === "solo")!;
+    expect(solo.y).toBeGreaterThanOrEqual(f2.y);
+    expect(solo.y + solo.height).toBeLessThanOrEqual(f2.y + f2.height);
+    expect(result.notes.some((n) => n.includes("moved clear"))).toBe(true);
+  });
+
+  it("keeps every frame off the legend and reads the same twice", () => {
+    const snap = snapshotFromRawElements(twoFrames as never);
+    const ops = Array.from({ length: 6 }, (_, i) => ({
+      op: "add_node" as const,
+      label: `Extra ${i}`,
+      kind: "service",
+      frame: "F",
+      intents: ["x"],
+    }));
+    const one = plan(ops, snap, idSource(9));
+    const two = plan(ops, snap, idSource(9));
+    expect(one).toEqual(two);
+    const after = simulate(snap, one.write);
+    const legendParts = after.elements.filter((el) => el.docent.legend !== null || el.docent.legendSample);
+    const frames = after.elements.filter((el) => el.type === "frame");
+    for (const f of frames) {
+      for (const part of legendParts) {
+        const clear = part.x + part.width <= f.x || f.x + f.width <= part.x || part.y + part.height <= f.y || f.y + f.height <= part.y;
+        expect(clear).toBe(true);
+      }
+    }
+  });
+});
+
 describe("the drawn legend (D69)", () => {
   const legendParts = [
     { ...base, id: "lg_t", type: "text", x: 0, y: -200, width: 80, height: 24, text: "Legend", locked: true, customData: { docent: { legend } } },

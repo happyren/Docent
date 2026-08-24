@@ -12,7 +12,7 @@ import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, Writ
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, sizeForLabel, type Box } from "./layout";
+import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement } from "./layout";
 import {
   absolutePoints,
   arcCorners,
@@ -235,7 +235,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     string,
     Box & { type: string; frameId: string | null; label: string | null; kind: string | null; symbol?: string; port?: Box }
   >();
-  const createdFrames = new Map<string, WriteFrame & { members: string[] }>();
+  const createdFrames = new Map<string, WriteFrame & { members: string[]; tier?: number }>();
   const removed = new Set<string>();
   // What a `layout` re-laid, moved or not: tidy re-routes every bound edge
   // in its scope, so the whole frame is redrawn as one stroke each (D73, D78).
@@ -417,12 +417,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const tier1 = snapshot.elements.filter((el) => el.type === "frame" && (computeTiers(snapshot).frameTier.get(el.id) ?? 1) === 1).map((el) => ({ x: el.x, y: el.y, width: el.width, height: el.height }));
         const size = { width: 760, height: 460 };
         const box = placeFrame([...(legendArea ? [legendArea] : []), ...tier1, ...[...createdFrames.values()].map((f) => ({ x: f.x, y: f.y, width: f.width, height: f.height }))], size);
-        const frame: WriteFrame & { members: string[] } = {
+        const frame: WriteFrame & { members: string[]; tier?: number } = {
           id,
           name,
           ...box,
           meaning: op.narrative || op.order !== undefined ? { narrative: op.narrative ?? null, order: op.order ?? null } : null,
           members: [],
+          tier: 1,
         };
         createdFrames.set(id, frame);
         if (op.ref) ids[op.ref] = id;
@@ -454,12 +455,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         })();
         const band = 20000 * parentTier;
         if (box.y < band) box.y = band + 1200;
-        const frame: WriteFrame & { members: string[] } = {
+        const frame: WriteFrame & { members: string[]; tier?: number } = {
           id,
           name: op.name ? clean(op.name) : `${label} — detail`,
           ...box,
           meaning: op.narrative ? { narrative: op.narrative } : null,
           members: [],
+          tier: parentTier + 1,
         };
         createdFrames.set(id, frame);
         // The link lives on the node.
@@ -944,6 +946,93 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       Object.assign(frame, growFrame(base, memberBoxList));
     }
     write.frames.push({ id: frame.id, name: frame.name, x: frame.x, y: frame.y, width: frame.width, height: frame.height, meaning: frame.meaning });
+  }
+
+  // Frames keep their distance (D86): no write leaves two frames
+  // overlapping, or a frame over the legend. Overlaps are parted in the
+  // declared order, members carried along, and the edges that touch them
+  // are re-routed by the pass below.
+  {
+    const tierOfFrame = computeTiers(snapshot).frameTier;
+    const declared = [...graph.frames].sort((a, b) => {
+      const ao = a.order ?? Number.POSITIVE_INFINITY;
+      const bo = b.order ?? Number.POSITIVE_INFINITY;
+      if (ao !== bo) return ao - bo;
+      const byName = a.name.localeCompare(b.name);
+      if (byName !== 0) return byName;
+      return a.id < b.id ? -1 : 1;
+    });
+    const placements: FramePlacement[] = [];
+    declared.forEach((f, i) => {
+      if (removed.has(f.sourceId)) return;
+      const el = elements.get(f.sourceId);
+      if (!el) return;
+      const patch = write.patches.find((pp) => pp.id === f.sourceId);
+      placements.push({
+        id: f.sourceId,
+        box: { x: patch?.x ?? el.x, y: patch?.y ?? el.y, width: patch?.width ?? el.width, height: patch?.height ?? el.height },
+        tier: tierOfFrame.get(f.sourceId) ?? 1,
+        order: i,
+      });
+    });
+    let next = declared.length;
+    for (const frame of createdFrames.values()) {
+      placements.push({ id: frame.id, box: { x: frame.x, y: frame.y, width: frame.width, height: frame.height }, tier: frame.tier ?? 1, order: next++ });
+    }
+    const parted = separateFrames(placements, legendArea);
+    for (const [frameId, d] of parted) {
+      const made = createdFrames.get(frameId);
+      if (made) {
+        made.x += d.dx;
+        made.y += d.dy;
+        const pushed = write.frames.find((f) => f.id === frameId);
+        if (pushed) {
+          pushed.x += d.dx;
+          pushed.y += d.dy;
+        }
+        for (const memberId of made.members) {
+          const c = created.get(memberId);
+          if (c) {
+            c.x += d.dx;
+            c.y += d.dy;
+          }
+          const sh = write.shapes.find((x) => x.id === memberId);
+          if (sh) {
+            sh.x += d.dx;
+            sh.y += d.dy;
+          }
+          const sy = (write.symbols ?? []).find((x) => x.id === memberId);
+          if (sy) {
+            sy.x += d.dx;
+            sy.y += d.dy;
+            sy.icon = { ...sy.icon, x: sy.icon.x + d.dx, y: sy.icon.y + d.dy };
+          }
+        }
+        continue;
+      }
+      const framePatch = write.patches.find((pp) => pp.id === frameId);
+      const el = elements.get(frameId)!;
+      if (framePatch) {
+        framePatch.x = (framePatch.x ?? el.x) + d.dx;
+        framePatch.y = (framePatch.y ?? el.y) + d.dy;
+      } else {
+        write.patches.push({ id: frameId, x: el.x + d.dx, y: el.y + d.dy });
+      }
+      if (!touched.includes(frameId)) touched.push(frameId);
+      for (const member of snapshot.elements) {
+        // Bound labels follow their containers in the adapter; everything
+        // else in the frame moves by the frame's own delta.
+        if (member.frameId !== frameId || removed.has(member.id) || member.containerId) continue;
+        const memberPatch = write.patches.find((pp) => pp.id === member.id);
+        if (memberPatch) {
+          memberPatch.x = (memberPatch.x ?? member.x) + d.dx;
+          memberPatch.y = (memberPatch.y ?? member.y) + d.dy;
+        } else {
+          write.patches.push({ id: member.id, x: member.x + d.dx, y: member.y + d.dy });
+        }
+      }
+      notes.push(`${graph.frames.find((f) => f.sourceId === frameId)?.name ?? frameId}: moved clear of its neighbour (D86)`);
+    }
   }
 
   // Every edge the batch draws or moves leaves and enters at a port spread
