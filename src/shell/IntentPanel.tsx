@@ -1,8 +1,8 @@
 /**
  * Intent capture UI (S10): element annotations — tags, intents (one per
- * line, D41), logic (D42) — and frame narratives/order. Renders for a
- * single-element selection; writes go through the adapter into
- * `customData.docent.*`.
+ * line, D41), logic (D42), the scene link (D95, D97) — and frame
+ * narratives/order. Renders for a single-element selection; writes go
+ * through the adapter into `customData.docent.*`.
  *
  * Saving is never invisible (D40): fields commit on blur as before, on the
  * Save button (⌘↩), and when the panel goes away — a new selection remounts
@@ -12,7 +12,18 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DocentCanvasHandle, ElementInfo } from "../adapter";
+import type { SceneLink } from "../adapter/snapshot";
 import { buildSceneGraph } from "../scene/graph";
+import { listScenes, type SceneInfo } from "../portfolio/client";
+import {
+  displayPath,
+  folderOf,
+  isScenePath,
+  leafOf,
+  normalizeScenePath,
+  SCENE_PATH_ERROR,
+  segmentsOf,
+} from "../portfolio/tree";
 
 /**
  * Refinement targets for one side of a selected edge (D21): the members
@@ -32,12 +43,24 @@ export function parseIntents(text: string): string[] {
     .filter(Boolean);
 }
 
+/** A link as the panel says it: `project / path # at`. */
+function linkLabel(link: SceneLink, here: string | null): string {
+  const project = link.project ?? here;
+  return `${project ? `${project} / ` : ""}${displayPath(link.scene)}${link.at ? ` # ${link.at}` : ""}`;
+}
+
 export function IntentPanel({
   canvas,
   selection,
+  project,
+  onFollow,
 }: {
   canvas: DocentCanvasHandle;
   selection: ElementInfo;
+  /** The open scene's project (D95): what a link that names none means. */
+  project: string | null;
+  /** Follow this element's link — the shell owns the jump (D96). */
+  onFollow?: (elementId: string, link: SceneLink) => void;
 }) {
   const isFrame = selection.type === "frame";
   const isEdge = selection.type === "arrow" || selection.type === "line";
@@ -92,6 +115,62 @@ export function IntentPanel({
   const [narrative, setNarrative] = useState(saved.narrative);
   const [order, setOrder] = useState(saved.order);
   const [justSaved, setJustSaved] = useState(false);
+
+  // The scene link (D95, D97). It writes on its own the moment a target is
+  // named — like the edge refinement beside it, and unlike the text fields,
+  // it is a choice, not a sentence being typed.
+  const link = selection.link ?? null;
+  const [at, setAt] = useState(link?.at ?? "");
+  const [typed, setTyped] = useState("");
+  const [linkProblem, setLinkProblem] = useState<string | null>(null);
+  const [scenes, setScenes] = useState<SceneInfo[]>([]);
+  useEffect(() => {
+    if (!project) return;
+    let live = true;
+    // No store, no picker: the typed form still names a scene (I5).
+    void listScenes(project)
+      .then((list) => live && setScenes(list))
+      .catch(() => live && setScenes([]));
+    return () => {
+      live = false;
+    };
+  }, [project]);
+  /** The project's scenes grouped by the folder they sit in (D92, D93). */
+  const byFolder = useMemo(() => {
+    const groups = new Map<string, SceneInfo[]>();
+    for (const info of scenes) {
+      const folder = folderOf(info.name);
+      groups.set(folder, [...(groups.get(folder) ?? []), info]);
+    }
+    return [...groups.entries()];
+  }, [scenes]);
+
+  const writeLink = (next: SceneLink | null) => {
+    setLinkProblem(null);
+    canvas.setElementLink(selection.id, next);
+  };
+  /** Retarget the link, keeping the arrival point the author typed. */
+  const linkTo = (scene: string, toProject?: string) => {
+    const point = at.trim();
+    writeLink({
+      scene,
+      ...(toProject ? { project: toProject } : {}),
+      ...(point ? { at: point } : {}),
+    });
+  };
+  /** The typed cross-project form: `project/path`, the project one segment. */
+  const commitTyped = () => {
+    const path = normalizeScenePath(typed);
+    if (!path) return;
+    const [toProject, ...rest] = segmentsOf(path);
+    const scene = rest.join("/");
+    if (!scene || !isScenePath(scene) || !isScenePath(toProject)) {
+      setLinkProblem(`project / path — ${SCENE_PATH_ERROR}`);
+      return;
+    }
+    setTyped("");
+    linkTo(scene, toProject);
+  };
 
   useEffect(() => {
     setTags(saved.tags);
@@ -281,6 +360,67 @@ export function IntentPanel({
           )}
         </>
       )}
+      {/* Dive when it is this diagram going deeper; link when it is another
+          diagram's story (D95). The target is picked, never typed twice. */}
+      <div className="docent-field docent-link">
+        <span>Links to — another diagram's story</span>
+        {link ? (
+          <div className="docent-link-current">
+            <span className="docent-link-target" title={linkLabel(link, project)}>
+              {linkLabel(link, project)}
+            </span>
+            <button type="button" onClick={() => onFollow?.(selection.id, link)}>
+              Follow ↗
+            </button>
+            <button type="button" onClick={() => writeLink(null)}>
+              Clear
+            </button>
+          </div>
+        ) : null}
+        <select
+          value={link && !link.project ? link.scene : ""}
+          onChange={(e) => e.target.value && linkTo(e.target.value)}
+        >
+          <option value="">
+            {project ? `${project} — pick a scene…` : "(a loose file — type a project / path)"}
+          </option>
+          {byFolder.map(([folder, list]) =>
+            folder ? (
+              <optgroup key={folder} label={displayPath(folder)}>
+                {list.map((info) => (
+                  <option key={info.name} value={info.name}>
+                    {leafOf(info.name)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : (
+              list.map((info) => (
+                <option key={info.name} value={info.name}>
+                  {info.name}
+                </option>
+              ))
+            ),
+          )}
+        </select>
+        <input
+          value={typed}
+          placeholder="another project — project / path"
+          onChange={(e) => setTyped(e.target.value)}
+          onBlur={commitTyped}
+        />
+        <input
+          value={at}
+          placeholder="arrive at (component id) — optional"
+          onChange={(e) => setAt(e.target.value)}
+          onBlur={() => {
+            if (!link) return;
+            const point = at.trim();
+            if ((link.at ?? "") === point) return;
+            writeLink({ ...link, at: point || undefined });
+          }}
+        />
+        {linkProblem && <span className="docent-link-problem">{linkProblem}</span>}
+      </div>
       <div className="docent-intent-actions">
         <span className={dirty ? "docent-intent-status docent-intent-unsaved" : "docent-intent-status"}>
           {status}

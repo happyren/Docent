@@ -6,24 +6,33 @@
  * narration, presentation, drill, and scene opening are navigation.
  */
 import type { CommandAPI } from "../command/api";
-import type { Scenario } from "../adapter/snapshot";
+import type { Scenario, SceneLink } from "../adapter/snapshot";
+import { snapshotFromSceneJSON } from "../adapter/snapshot";
 import type { HighlightStyle } from "../overlay/state";
 import type { TourStep } from "../command/api";
 import { detailBadges } from "../scene/detailBadges";
 import { computeTiers } from "../scene/tiers";
 import { scriptTour } from "./script";
 import { GENRE_IDS, genreOf, type GenreProfile } from "../authoring/genre";
-import type { Op } from "../authoring/ops";
+import type { LintFinding, Op } from "../authoring/ops";
 import type { TidyScope } from "../authoring/tidy";
-import type { SceneGraph } from "../scene/graph";
+import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
-import { exportFrameSidecar, exportScene, exportSidecar } from "../export";
-import { listProjects, listScenes } from "../portfolio/client";
+import { exportFrameSidecar, exportScene, exportSidecar, type ExportContext } from "../export";
+import { listProjects, listScenes, loadScene } from "../portfolio/client";
 import catalogJson from "../../public/libraries/catalog.json";
 import { answerFindSymbol, loadCatalog, type SymbolCatalog } from "../libraries/catalog";
 
 /** Above this many components, get_scene_graph answers with the outline (D45). */
 export const WALL_THRESHOLD = 150;
+
+/**
+ * The guard `open_scene` keeps, and the one a followed link keeps with it
+ * (D96): leaving a scene is never how unsaved work gets decided. Shared so
+ * the shell's jump refuses in the same words the tool does.
+ */
+export const UNSAVED_CHANGES =
+  "The canvas has unsaved changes — save or discard them first.";
 
 /**
  * The bundled symbol catalog (D81), parsed once: `find_symbol` reads static
@@ -351,6 +360,108 @@ function sayOnArrival(commands: CommandAPI, params: Record<string, unknown>): vo
   if (typeof text === "string" && text.trim()) void commands.narrate({ text });
 }
 
+/**
+ * What an export knows about where it is made from (D95): the open scene's
+ * project, so a link that names none is written against its own. A loose
+ * file has none, and the export says nothing rather than the wrong thing.
+ */
+const exportContext = (shell: AgentShellHooks): ExportContext => {
+  const project = shell.currentScene()?.project;
+  return project ? { project } : {};
+};
+
+/** Every declared scene link in the diagram, with what to call it by (D95). */
+function linksOf(graph: SceneGraph): { about: string; label: string; link: SceneLink }[] {
+  const out: { about: string; label: string; link: SceneLink }[] = [];
+  const take = (about: string, label: string | null, link: SceneLink | null) => {
+    if (link) out.push({ about, label: label?.trim() || about, link });
+  };
+  for (const node of graph.nodes) take(node.id, node.label, node.link);
+  for (const edge of graph.edges) take(edge.id, edge.label, edge.link);
+  for (const frame of graph.frames) take(frame.id, frame.name, frame.link);
+  return out;
+}
+
+/**
+ * The links this diagram makes, checked against what the store actually
+ * holds (D97): a target no scene answers to is a warning naming the path,
+ * so a move that strands inbound links is caught the next time anyone
+ * validates — one listing, and no write fanning out across files. An `at`
+ * the target no longer carries is a note: the scene still reads, only the
+ * arrival is gone (I5). Where there is no store to ask — a loose file, a
+ * shell with no authoring surface — the question is not asked at all.
+ */
+async function staleLinkFindings(
+  graph: SceneGraph,
+  shell: AgentShellHooks,
+): Promise<LintFinding[]> {
+  if (!shell.authoring) return [];
+  const links = linksOf(graph);
+  if (!links.length) return [];
+  const here = shell.currentScene()?.project ?? null;
+  // One listing per project, one read per target whose `at` must be checked.
+  const listings = new Map<string, Promise<string[] | null>>();
+  const listing = (project: string) => {
+    if (!listings.has(project)) {
+      listings.set(
+        project,
+        // A listing that cannot be had says nothing either way: the lint
+        // must not call a link stale because the store was unreachable.
+        listScenes(project).then(
+          (scenes) => scenes.map((s) => s.name),
+          () => null,
+        ),
+      );
+    }
+    return listings.get(project)!;
+  };
+  const holds = new Map<string, Promise<Set<string> | null>>();
+  const componentIds = (project: string, scene: string) => {
+    const key = `${project}/${scene}`;
+    if (!holds.has(key)) {
+      holds.set(
+        key,
+        loadScene(project, scene).then(
+          (text) => {
+            const target = buildSceneGraph(snapshotFromSceneJSON(text));
+            const ids = new Set<string>();
+            for (const entity of [...target.nodes, ...target.edges, ...target.frames]) {
+              ids.add(entity.id);
+              ids.add(entity.sourceId);
+            }
+            return ids;
+          },
+          () => null,
+        ),
+      );
+    }
+    return holds.get(key)!;
+  };
+
+  const findings: LintFinding[] = [];
+  for (const { about, label, link } of links) {
+    const project = link.project ?? here;
+    if (!project) continue;
+    const scenes = await listing(project);
+    if (scenes === null) continue;
+    const path = `${project}/${link.scene}`;
+    if (!scenes.includes(link.scene)) {
+      findings.push({ level: "warn", about, message: `"${label}": links to ${path} — no such scene` });
+      continue;
+    }
+    if (!link.at) continue;
+    const ids = await componentIds(project, link.scene);
+    if (ids && !ids.has(link.at)) {
+      findings.push({
+        level: "info",
+        about,
+        message: `"${label}": links to ${path} at a component it no longer holds`,
+      });
+    }
+  }
+  return findings;
+}
+
 export async function execute(
   commands: CommandAPI,
   shell: AgentShellHooks,
@@ -368,7 +479,7 @@ export async function execute(
           outline: buildOutline(commands, graph),
         };
       }
-      return JSON.parse(exportSidecar(graph));
+      return JSON.parse(exportSidecar(graph, exportContext(shell)));
     }
     case "get_outline":
       return buildOutline(commands, commands.getSceneGraph());
@@ -377,7 +488,7 @@ export async function execute(
     case "find_symbol":
       return answerFindSymbol(symbolCatalog(), params);
     case "get_mermaid":
-      return exportScene(commands.getSceneSnapshot()).mermaid;
+      return exportScene(commands.getSceneSnapshot(), exportContext(shell)).mermaid;
     case "read_frame": {
       const id = params.id as string;
       const graph = commands.getSceneGraph();
@@ -398,9 +509,7 @@ export async function execute(
     }
     case "open_scene": {
       if (shell.isDirty()) {
-        throw new Error(
-          "The canvas has unsaved changes — ask the user to save or discard them first; an agent never decides that.",
-        );
+        throw new Error(`${UNSAVED_CHANGES} An agent never decides that.`);
       }
       const { project, scene } = params as { project: string; scene: string };
       await commands.awaitSpeech(params.interrupt === true);
@@ -657,8 +766,24 @@ export async function execute(
       if (!Array.isArray(ops) || !ops.length) throw new Error("propose needs a non-empty ops list");
       return { ...commands.propose(ops), next: "edit({ops}) with the same ops to apply, or revise" };
     }
-    case "validate":
-      return { ...commands.validate(), next: "fix what is listed with update / add_detail_layer, then validate again" };
+    case "validate": {
+      const next = "fix what is listed with update / add_detail_layer, then validate again";
+      const report = commands.validate();
+      // The pure lint has said all it can from the file (B5). What the
+      // store holds is a second question, asked only where there is a
+      // store to ask (D97).
+      const stale = await staleLinkFindings(commands.getSceneGraph(), shell);
+      if (!stale.length) return { ...report, next };
+      const findings = [...report.findings, ...stale];
+      const warns = findings.filter((f) => f.level === "warn").length;
+      const notes = findings.length - warns;
+      return {
+        ...report,
+        findings,
+        summary: `${warns} warning${warns === 1 ? "" : "s"}, ${notes} note${notes === 1 ? "" : "s"}`,
+        next,
+      };
+    }
     case "undo_edit":
       return { undone: commands.undoAgentEdit() };
     case "save_scene": {

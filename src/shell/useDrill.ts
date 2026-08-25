@@ -10,6 +10,17 @@ interface DrillTier {
   returnViewport: Viewport;
 }
 
+/**
+ * Where one jump left (D96): the scene the reader was in and the element
+ * they activated. A jump without a trail is being lost in someone else's
+ * diagram, so the crossing is recorded before the target opens.
+ */
+export interface SceneJump {
+  project: string;
+  scene: string;
+  elementId: string;
+}
+
 export interface Drill {
   /** Session dive stack (exact viewport restore), outermost tier first. */
   stack: DrillTier[];
@@ -23,6 +34,18 @@ export interface Drill {
    */
   up(): void;
   reset(): void;
+  /**
+   * The cross-scene trail (D96), outermost jump first — in memory, for this
+   * session only. The tier stack above is one diagram's depth; this is the
+   * way back out of another diagram's.
+   */
+  jumps: SceneJump[];
+  /** Record where a jump left, before the target scene opens. */
+  pushJump(jump: SceneJump): void;
+  /** Drop the last jump — what going back has just spent. */
+  popJump(): void;
+  /** The reader changed context themselves: the trail was to somewhere else. */
+  clearJumps(): void;
 }
 
 export function useDrill(
@@ -119,5 +142,24 @@ export function useDrill(
 
   const reset = useCallback(() => commitStack([]), [commitStack]);
 
-  return { stack, dive, createAndDive, up, reset };
+  // The cross-scene trail (D96). Nothing here touches the canvas: the shell
+  // owns the opening, this owns only the memory of where it came from — so
+  // the trail survives the document being replaced under it.
+  const [jumps, setJumps] = useState<SceneJump[]>([]);
+  const jumpsRef = useRef<SceneJump[]>(jumps);
+  const commitJumps = useCallback((next: SceneJump[]) => {
+    jumpsRef.current = next;
+    setJumps(next);
+  }, []);
+  const pushJump = useCallback(
+    (jump: SceneJump) => commitJumps([...jumpsRef.current, jump]),
+    [commitJumps],
+  );
+  const popJump = useCallback(
+    () => commitJumps(jumpsRef.current.slice(0, -1)),
+    [commitJumps],
+  );
+  const clearJumps = useCallback(() => commitJumps([]), [commitJumps]);
+
+  return { stack, dive, createAndDive, up, reset, jumps, pushJump, popJump, clearJumps };
 }

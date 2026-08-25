@@ -30,8 +30,8 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement, ExcalidrawTextElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
-import type { LegendRule, Scenario, SceneSnapshot } from "./snapshot";
-import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
+import type { LegendRule, Scenario, SceneLink, SceneSnapshot } from "./snapshot";
+import { parseLegendRules, parseSceneLink, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
 import { symbolEntry } from "../authoring/symbols";
 
@@ -87,6 +87,11 @@ export interface ElementInfo {
   groupIds: string[];
   /** Declared detail diagram (customData.docent.detail.frameId), if any. */
   detailFrameId: string | null;
+  /**
+   * Declared scene link (D95): where this element goes, not what it holds.
+   * The adapter always states it; optional so a stand-in reader may not.
+   */
+  link?: SceneLink | null;
   tags: string[];
   note: string | null;
   /** Every declared intent in order (D41); `note` is the first. */
@@ -138,6 +143,11 @@ export interface WriteMeaning {
   narrative?: string | null;
   order?: number | null;
   detailFrameId?: string | null;
+  /**
+   * The scene this element points at (D95): meaning like the rest, so it
+   * travels the one writer. Named sets, null clears, absent keeps.
+   */
+  link?: SceneLink | null;
 }
 
 export interface WriteShape {
@@ -372,6 +382,12 @@ export interface DocentCanvasHandle {
     edgeId: string,
     patch: { to?: string | null; from?: string | null },
   ): void;
+  /**
+   * Point an element at another scene (D95, D97): the panel's own writer,
+   * beside the ones intents and refinement use. Null clears the link; one
+   * undoable intent-capture step, and nothing else on the element moves.
+   */
+  setElementLink(elementId: string, link: SceneLink | null): void;
   /** Author a frame's narrative/order (S10). Null clears a field. */
   setFrameIntent(
     frameId: string,
@@ -631,6 +647,8 @@ export interface ExcalidrawCanvasProps {
 
 type DocentData = {
   detail?: { frameId?: unknown };
+  /** The declared scene link (D95) — parsed, never trusted as written. */
+  link?: unknown;
   order?: unknown;
   tags?: unknown;
   note?: unknown;
@@ -1206,6 +1224,7 @@ function toElementInfo(
     frameId: element.frameId ?? null,
     groupIds: [...(element.groupIds ?? [])],
     detailFrameId: detailFrameIdOf(element, elements),
+    link: parseSceneLink(docent.link),
     tags: tagsOf(element),
     note: stringField(docent.note),
     intents: intentsOf(docent),
@@ -1575,6 +1594,9 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         if (meaning.detailFrameId !== undefined) {
           set("detail", meaning.detailFrameId ? { frameId: meaning.detailFrameId } : null);
         }
+        // The scene link (D95), stored whole: a patch that names it sets or
+        // clears it, and one that says nothing about it leaves it alone.
+        if (meaning.link !== undefined) set("link", meaning.link);
         return next;
       };
       const docentData = (meaning: WriteMeaning | null) => {
@@ -2104,6 +2126,21 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
                 refine: Object.keys(next).length ? next : null,
               })
             : el,
+        ),
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    setElementLink: (elementId, link) => {
+      const all = api.getSceneElementsIncludingDeleted();
+      if (!all.some((el) => el.id === elementId && !el.isDeleted)) {
+        throw new Error(`Unknown element: ${elementId}`);
+      }
+      // Parsed on the way in, so a half-target never lands in the file (I5).
+      const stored = link === null ? null : parseSceneLink(link);
+      api.updateScene({
+        elements: all.map((el) =>
+          el.id === elementId ? withDocentPatch(el, { link: stored }) : el,
         ),
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });

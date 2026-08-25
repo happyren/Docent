@@ -176,36 +176,13 @@ export interface DefineScenario {
 export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout | UseGenre | DefineScenario;
 
 /**
- * The meaning a write carries, plus the scene link (D95): the link travels
- * the same path intents, logic and the detail pointer take, so one writer
- * still stores all of it. Named fields are set, null clears, absent keeps.
- */
-export interface LinkMeaning extends WriteMeaning {
-  link?: SceneLink | null;
-}
-
-export interface LinkShape extends Omit<WriteShape, "meaning"> {
-  meaning: LinkMeaning | null;
-}
-
-export interface LinkSymbol extends Omit<WriteSymbol, "meaning"> {
-  meaning: LinkMeaning | null;
-}
-
-export interface LinkPatch extends Omit<WritePatch, "meaning"> {
-  meaning?: LinkMeaning;
-}
-
-/**
  * A write, and what rides beside the legend on its carrier (D87, D89):
  * the scene's genre and its scenarios. Optional additions, so a
- * `MeaningWrite` is a `SceneWrite` everywhere one is asked for — and the
- * elements it makes or patches may carry a scene link (D95).
+ * `MeaningWrite` is a `SceneWrite` everywhere one is asked for. The scene
+ * link (D95) needs no addition at all — it is meaning, so it travels on
+ * `WriteMeaning` with the intents and the detail pointer.
  */
 export interface MeaningWrite extends SceneWrite {
-  shapes?: LinkShape[];
-  symbols?: LinkSymbol[];
-  patches?: LinkPatch[];
   /** The genre this write records; absent leaves what the scene has. */
   genre?: string;
   /** The scenarios this write records, whole, in authored order. */
@@ -755,7 +732,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         );
         noteGrow(frameId, box);
         const id = nextId();
-        const meaning: LinkMeaning = {};
+        const meaning: WriteMeaning = {};
         if (tags.length) meaning.tags = tags;
         if (op.intents?.length) meaning.intents = op.intents.map(clean).filter(Boolean);
         if (op.logic) meaning.logic = op.logic;
@@ -771,7 +748,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           // the caption's room (D83). The label rides where the library put
           // the caption it replaces, wrapped to the icon's width.
           const icon = { x: box.x + placement.icon.x, y: box.y + placement.icon.y, width: placement.icon.width, height: placement.icon.height };
-          const symbol: LinkSymbol = {
+          const symbol: WriteSymbol = {
             id,
             symbol: placement.entry.symbol,
             library: placement.entry.library,
@@ -792,7 +769,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           created.set(id, { ...box, type: "rectangle", frameId, label, kind: `symbol:${placement.entry.symbol}`, symbol: placement.entry.symbol, port: icon });
           notes.push(`${label}: drawn as ${placement.entry.name} (${placement.entry.symbol})`);
         } else {
-          const node: LinkShape = {
+          const node: WriteShape = {
             id,
             type: shape,
             ...box,
@@ -847,8 +824,8 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const target = resolve(op.id, at, ["node", "edge", "frame"]);
         if (!target) break;
         const kindOfTarget = createdFrames.has(target) ? "frame" : created.get(target)?.type === "arrow" ? "edge" : sourceOf(graph, op.id)?.kind ?? "node";
-        const patch: LinkPatch = { id: target };
-        const meaning: LinkMeaning = {};
+        const patch: WritePatch = { id: target };
+        const meaning: WriteMeaning = {};
         if (op.label !== undefined) {
           if (kindOfTarget === "frame") problems.push(`${at}: a frame has a name, not a label`);
           else patch.label = clean(op.label);
@@ -1639,7 +1616,7 @@ function emptyDocent(): SnapshotElement["docent"] {
   return { detailFrameId: null, link: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], legendSample: false, refine: null, composite: {}, symbol: null };
 }
 
-function docentFromMeaning(meaning: LinkMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
+function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
   const next = { ...base };
   if (!meaning) return next;
   if (meaning.tags !== undefined) next.tags = meaning.tags;

@@ -3,10 +3,10 @@ import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
 import { connectAgentBridge, type AgentBridge } from "../agent/bridge";
 import { connectDesktopAgentBridge } from "../agent/desktopBridge";
-import type { AgentShellHooks } from "../agent/execute";
+import { UNSAVED_CHANGES, type AgentShellHooks } from "../agent/execute";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
-import { exportFrameSidecar, exportScene } from "../export";
+import { exportFrameSidecar, exportScene, type ExportContext } from "../export";
 import { OverlayLayer } from "../overlay/OverlayLayer";
 import { OverlayStore } from "../overlay/state";
 import {
@@ -21,7 +21,8 @@ import { alertDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { tidyOps, type TidyScope } from "../authoring/tidy";
-import { detailBadges, logicMarks } from "../scene/detailBadges";
+import { detailBadges, linkBadges, logicMarks } from "../scene/detailBadges";
+import type { SceneLink } from "../adapter/snapshot";
 import {
   createBranch as createPortfolioBranch,
   getBinding as getPortfolioBinding,
@@ -483,19 +484,33 @@ export function App() {
   // wants the leaf of that, and nothing that looks like a path.
   const exportLeafName = exportBaseName.replace(/^.*\//, "");
 
+  /**
+   * What the export knows about where it is being made from (D95): a link
+   * that names no project means this scene's own, and only the shell knows
+   * which that is. A loose file has none, and the export says so.
+   */
+  const exportContext = useCallback(
+    (): ExportContext => ({
+      ...(portfolioSourceRef.current
+        ? { project: portfolioSourceRef.current.project }
+        : {}),
+    }),
+    [],
+  );
+
   const exportMermaidFile = useCallback(() => {
     const canvasHandle = canvasRef.current;
     if (!canvasHandle) return;
-    const { mermaid } = exportScene(canvasHandle.getSceneSnapshot());
+    const { mermaid } = exportScene(canvasHandle.getSceneSnapshot(), exportContext());
     downloadSceneFile(`${exportBaseName}.mmd`, mermaid);
-  }, [exportBaseName]);
+  }, [exportBaseName, exportContext]);
 
   const exportSidecarFile = useCallback(() => {
     const canvasHandle = canvasRef.current;
     if (!canvasHandle) return;
-    const { sidecar } = exportScene(canvasHandle.getSceneSnapshot());
+    const { sidecar } = exportScene(canvasHandle.getSceneSnapshot(), exportContext());
     downloadSceneFile(`${exportBaseName}.docent.json`, sidecar);
-  }, [exportBaseName]);
+  }, [exportBaseName, exportContext]);
 
   const handleReady = useCallback((handle: DocentCanvasHandle) => {
     canvasRef.current = handle;
@@ -521,7 +536,7 @@ export function App() {
         loadSceneJSON: (json: string) =>
           canvas.loadSceneBlob(new Blob([json], { type: "application/json" })),
         getSceneFingerprint: () => canvas.getSceneFingerprint(),
-        exportScene: () => exportScene(canvas.getSceneSnapshot()),
+        exportScene: () => exportScene(canvas.getSceneSnapshot(), exportContext()),
         prepareSceneForSave,
         canvas,
         camera,
@@ -529,15 +544,20 @@ export function App() {
       });
     }
     (window as unknown as Record<string, unknown>).__docent = hook;
-  }, [canvas, camera, commands, prepareSceneForSave]);
+  }, [canvas, camera, commands, prepareSceneForSave, exportContext]);
 
   // Portfolio flows (S12). Opening tracks the source so Save writes back.
   const openPortfolio = useCallback((intent: PortfolioIntent) => {
     setPortfolioIntent(intent);
     setPortfolioOpen(true);
   }, []);
+  /**
+   * The one scene loader (S12). Every way in but a followed link (D96) is
+   * the reader changing context themselves, so the cross-scene trail goes
+   * with the context: only `keepTrail` — the jump — keeps it.
+   */
   const openPortfolioScene = useCallback(
-    async (project: string, scene: string) => {
+    async (project: string, scene: string, options?: { keepTrail?: boolean }) => {
       const handle = canvasRef.current;
       if (!handle) throw new Error("Canvas not ready");
       const text = await loadPortfolioScene(project, scene);
@@ -546,10 +566,87 @@ export function App() {
       portfolioSourceRef.current = { project, scene };
       syncSceneUrl({ project, scene });
       markClean(`${project}/${scene}`);
+      if (!options?.keepTrail) drill.clearJumps();
       fitLayerOne();
     },
-    [markClean, fitLayerOne, syncSceneUrl],
+    [markClean, fitLayerOne, syncSceneUrl, drill.clearJumps],
   );
+  /** A passing line in the narration strip — said, then gone. */
+  const flashNote = useCallback((note: string) => {
+    setNarration(note);
+    window.setTimeout(
+      () => setNarration((current) => (current === note ? null : current)),
+      3000,
+    );
+  }, []);
+
+  /**
+   * Follow a scene link (D96): the jump, under the guard `open_scene` keeps,
+   * with the way back recorded before the target opens. `at` is where to
+   * arrive when the target still holds it — gone or absent, the overview
+   * with a note, which is an answer, not a refusal (I5).
+   */
+  const followLink = useCallback(
+    async (elementId: string, link: SceneLink) => {
+      const from = portfolioSourceRef.current;
+      if (dirty) {
+        await alertDialog(UNSAVED_CHANGES);
+        return;
+      }
+      const project = link.project ?? from?.project ?? null;
+      if (!project) {
+        await alertDialog(
+          `“${link.scene}” names no project, and this scene is a loose file — open it from the portfolio first.`,
+        );
+        return;
+      }
+      try {
+        await openPortfolioScene(project, link.scene, { keepTrail: true });
+      } catch (err) {
+        console.error(err);
+        await alertDialog(
+          `Could not follow the link to ${project}/${link.scene}: ${err instanceof Error ? err.message : err}`,
+        );
+        return;
+      }
+      // Recorded after the arrival, so a link that could not be followed
+      // leaves no way back to a scene nobody left.
+      if (from) drill.pushJump({ ...from, elementId });
+      if (!link.at) return;
+      try {
+        await commandsRef.current?.focus({ id: link.at });
+      } catch {
+        flashNote(`${project} / ${link.scene} no longer holds “${link.at}” — here is the whole diagram`);
+      }
+    },
+    [dirty, openPortfolioScene, drill.pushJump, flashNote],
+  );
+
+  /** The way back (D96): reopen where the last jump left, on what jumped. */
+  const followBack = useCallback(async () => {
+    const back = drill.jumps[drill.jumps.length - 1];
+    if (!back) return;
+    if (dirty) {
+      await alertDialog(UNSAVED_CHANGES);
+      return;
+    }
+    try {
+      await openPortfolioScene(back.project, back.scene, { keepTrail: true });
+    } catch (err) {
+      console.error(err);
+      await alertDialog(
+        `Could not reopen ${back.project}/${back.scene}: ${err instanceof Error ? err.message : err}`,
+      );
+      return;
+    }
+    drill.popJump();
+    try {
+      await commandsRef.current?.focus({ id: back.elementId });
+    } catch {
+      // The element that jumped is gone; the scene is still the way back.
+    }
+  }, [dirty, openPortfolioScene, drill.jumps, drill.popJump]);
+
   /**
    * Show a review change in place (D48): the scene comes up if it is not the
    * one on screen, the camera flies to the crop, and what was removed is
@@ -901,13 +998,13 @@ export function App() {
     "export-mermaid": () => {
       const handle = canvasRef.current;
       if (!handle) return;
-      const { mermaid } = exportScene(handle.getSceneSnapshot());
+      const { mermaid } = exportScene(handle.getSceneSnapshot(), exportContext());
       void exportToFile(`${exportLeafName}.mmd`, mermaid);
     },
     "export-sidecar": () => {
       const handle = canvasRef.current;
       if (!handle) return;
-      const { sidecar } = exportScene(handle.getSceneSnapshot());
+      const { sidecar } = exportScene(handle.getSceneSnapshot(), exportContext());
       void exportToFile(`${exportLeafName}.docent.json`, sidecar);
     },
   };
@@ -923,6 +1020,11 @@ export function App() {
   // Presentation keyboard controls (S2) + drill back (S11).
   const drillRef = useRef(drill);
   drillRef.current = drill;
+  // The jump, read through a ref for the same reason the drill is: the
+  // pointer listeners below are installed once and must not close over a
+  // stale dirty flag or a stale scene (D96).
+  const followRef = useRef(followLink);
+  followRef.current = followLink;
   useEffect(() => {
     if (!presentation.active) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -987,9 +1089,11 @@ export function App() {
       // it here too would dive twice.
       if ((event.target as Element | null)?.closest?.(".docent-detail-badge")) return;
       const info = canvas.elementAtClient(event.clientX, event.clientY);
-      if (info?.detailFrameId) {
-        drillRef.current.dive(info.id);
-      }
+      // Dive when it is this diagram going deeper, link when it is another
+      // diagram's story (D96) — and when a component is both, this
+      // diagram's own depth comes first. The panel offers the link either way.
+      if (info?.detailFrameId) drillRef.current.dive(info.id);
+      else if (info?.link) void followRef.current(info.id, info.link);
     };
     host.addEventListener("pointerdown", onPointerDown, { capture: true });
     host.addEventListener("pointerup", onPointerUp, { capture: true });
@@ -1019,9 +1123,25 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canvas, detailMarkers, docVersion],
   );
+  // Link markers (D96) ride the same toggle: "goes elsewhere" is shown the
+  // way "goes deeper" is, or neither is.
+  const links = useMemo(
+    () => (canvas && detailMarkers ? linkBadges(canvas.getSceneSnapshot()) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canvas, detailMarkers, docVersion],
+  );
   const onBadgeClick = useCallback((diveElementId: string) => {
     drillRef.current.dive(diveElementId);
   }, []);
+  // The marker is the explicit affordance: it follows even where the same
+  // component also goes deeper, which activating it would prefer (D96).
+  const onLinkBadgeClick = useCallback(
+    (elementId: string) => {
+      const link = links.find((b) => b.elementId === elementId)?.link;
+      if (link) void followRef.current(elementId, link);
+    },
+    [links],
+  );
 
   // Right-click semantic export (D32). Eligible targets: a frame, or a shape
   // whose declared detail layer IS a frame — either way the export is a
@@ -1077,7 +1197,7 @@ export function App() {
       raf = requestAnimationFrame(() => {
         raf = 0;
         const info = canvas.elementAtClient(clientX, clientY);
-        host.style.cursor = info?.detailFrameId ? "pointer" : "";
+        host.style.cursor = info?.detailFrameId || info?.link ? "pointer" : "";
       });
     };
     host.addEventListener("pointermove", onPointerMove);
@@ -1182,6 +1302,7 @@ export function App() {
             trail={trail}
             drill={drill}
             revision={docVersion}
+            onBack={() => void followBack()}
           />
         )}
         {canvas && (
@@ -1192,6 +1313,8 @@ export function App() {
               revision={docVersion}
               badges={badges}
               onBadgeClick={onBadgeClick}
+              linkBadges={links}
+              onLinkClick={onLinkBadgeClick}
               logicMarks={marks}
             />
           </div>
@@ -1211,6 +1334,8 @@ export function App() {
             key={`${singleSelected.id}:${docVersion}`}
             canvas={canvas}
             selection={singleSelected}
+            project={portfolioSourceRef.current?.project ?? null}
+            onFollow={(elementId, link) => void followLink(elementId, link)}
           />
         )}
         {agentWorking && (

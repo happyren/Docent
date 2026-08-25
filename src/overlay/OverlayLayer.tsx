@@ -19,7 +19,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { SceneBounds, Viewport } from "../adapter";
 import type { SceneReader } from "../command/api";
-import type { DetailBadge, LogicMark } from "../scene/detailBadges";
+import type { DetailBadge, LinkBadge, LogicMark } from "../scene/detailBadges";
 import { edgePath, shapePath } from "./geometry";
 import type { OverlayState, OverlayStore } from "./state";
 
@@ -27,6 +27,8 @@ const FLOW_UNITS_PER_SECOND = 500;
 const GLOW_COLOR = "#ffd43b";
 const FLOW_COLOR = "#4dabf7";
 const OUTLINE_COLOR = "#7048e8";
+/** The link marker's chip (D96) — a different errand, a different colour. */
+const LINK_COLOR = "#1c7ed6";
 const GHOST_COLOR = "#e03131";
 const FILTER_MARGIN = 120;
 /** Step-badge radius in scene units — a detail badge's chip, rounded (D89). */
@@ -216,6 +218,8 @@ export function OverlayLayer({
   revision,
   badges = [],
   onBadgeClick,
+  linkBadges = [],
+  onLinkClick,
   logicMarks = [],
 }: {
   reader: SceneReader;
@@ -228,6 +232,12 @@ export function OverlayLayer({
    */
   badges?: DetailBadge[];
   onBadgeClick?: (diveElementId: string) => void;
+  /**
+   * Link markers (D96): the same chip on the other top corner, so a
+   * component that both goes deeper and goes elsewhere wears both.
+   */
+  linkBadges?: LinkBadge[];
+  onLinkClick?: (elementId: string) => void;
   /** `{ }` marks on components that carry logic (D42) — passive chips. */
   logicMarks?: LogicMark[];
 }) {
@@ -572,6 +582,34 @@ export function OverlayLayer({
                     stroke="#ffffff"
                     strokeWidth={s * 0.08}
                   />
+                </g>
+              </g>
+            );
+          })}
+          {linkBadges.map((b) => {
+            const s = b.size;
+            const target = `${b.link.project ? `${b.link.project}/` : ""}${b.link.scene}${b.link.at ? ` #${b.link.at}` : ""}`;
+            return (
+              <g
+                key={`link:${b.id}`}
+                className="docent-detail-badge"
+                transform={`translate(${b.bounds.x - s / 2} ${b.bounds.y - s / 2})`}
+                onClick={() => onLinkClick?.(b.elementId)}
+              >
+                <title>{`${b.label ? `${b.label} — links` : "Links"} to ${target}`}</title>
+                <g className="docent-detail-badge-chip">
+                  <rect width={s} height={s} rx={s * 0.27} fill={LINK_COLOR} opacity={0.92} />
+                  <text
+                    x={s / 2}
+                    y={s * 0.7}
+                    textAnchor="middle"
+                    fontSize={s * 0.66}
+                    fontFamily="ui-sans-serif, system-ui, sans-serif"
+                    fontWeight="700"
+                    fill="#ffffff"
+                  >
+                    ↗
+                  </text>
                 </g>
               </g>
             );

@@ -48,6 +48,7 @@ export const INSTRUCTIONS = [
   "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
   `GENRES: a diagram has a category, and Docent knows five — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
   "SCENARIOS: define_scenario({name, path, description}) names an ordered path of edges — one request's story told over the map you already drew, kept as meaning, not as a second diagram. Replay it: flow({scenario}) pulses the path with numbered step badges, script_tour({scenario}) walks and speaks it. One map carries as many scenarios as it has stories.",
+  "SCENE LINKS: dive when it is this diagram going deeper (a detail layer); link when it is another diagram's story. update({id, link:{scene, project?, at?}}) authors one — `scene` is a path list_projects answered with, `at` the component to arrive on, null clears it — and validate() checks every target still exists.",
   "For a walkthrough: script_tour({frame?}) derives the stops and the author's words from the diagram itself (frames in order, components in flow order; `declared` lines are the author's, `inferred` lines are yours to rewrite) — then present({action:'enter', mode:'guided'}) and tour({steps}). That is three calls for a whole walkthrough, and it is the same walkthrough every time. Each result carries a `next` hint.",
   "You may also AUTHOR: add_node / add_edge / update / remove / add_frame / add_detail_layer / define_kind / use_genre / define_scenario / layout, or many at once with edit({ops}) — one validated, all-or-nothing batch, one undo step, answered with the semantic changelog; propose({ops}) is the same batch as a dry run. You author MEANING, never pixels: a component is a label + a `kind` (from the legend — define_kind adds one) + intents; Docent picks the shape, the style (the diagram's own), and the place. The craft: every component gets a kind and at least one intent; rules and conditions become `logic`; every frame gets a narrative; anything with an inner mechanism gets add_detail_layer rather than a crowded frame (≤12 per frame); reuse existing kinds before defining new ones. COLOUR MEANS SOMETHING: define_kind takes a `tone` (danger, caution, positive, neutral, inactive) or a `role` (storage, compute, messaging, external, people, boundary) and Docent picks a conventional, distinct look — with neither it picks the fill furthest from the legend's — and conventional tags (hot-path, deprecated, draft, critical…) colour themselves. SYMBOLS: when a component is a named product or service (AWS Lambda, S3, Kafka, a browser, a database) call find_symbol first and pass the id as `symbol` to add_node — the icon is placed as one component with the label under it; never draw a product as a plain box when its symbol exists. Refs like `$orders` name things created earlier in the same batch. HOW DOCENT LAYS OUT, so you plan for it: a frame built in one batch is ranked by flow, left to right; a flow longer than five ranks FOLDS into bands that turn (right to left beneath, then left to right again), so a long sequence stays a picture, not a ribbon — plan a frame as a flow, never as a row; the gap between columns is sized to the widest edge label in it, so an edge label is a phrase (two to four words) and the sentence goes in the edge's intents; every edge is routed AROUND any component between its ends with turning points — an arrow never cuts through a shape, and never over the legend. ARROWS MUST NOT CROSS: build a frame in ONE batch (its components and its edges together) so Docent lays it out by flow; add a component with its edges in the same batch so it lands after its feeders; if validate() reports crossings or an edge passing through a component, layout({frame}) a frame you built, re-place the component, or move the tangle into a detail layer — never leave a crossing the diagram does not need. tidy({frame}|{tier}|{all:true}) formats any frame or the whole diagram and never changes meaning — use it after validate reports crossings, or before save_scene. Work in batches of a frame at a time, then validate() and fix what it lists, then save_scene(). validate() answers with a CRAFT SCORE out of 100 — its parts (crossings, bends, alignment, overlaps, edge lengths, angles, colour), a score per frame, and one line of advice each — and a score under 70 means the picture is not ready: tidy the frame it names, or move the tangle a tier down with add_detail_layer, before you save. On a project bound to GitHub and sitting on its base branch (get_view().git.onBase), create_branch({name:'docent/<topic>'}) BEFORE the first edit. While you edit the person sees an orange frame; keep batches short and tell them what you changed.",
 ].join("\n");
@@ -256,7 +257,7 @@ export const TOOLS = [
   {
     name: "open_scene",
     description:
-      "Open a portfolio scene onto the canvas (read-only navigation — the document itself is never modified). Refused while the canvas holds unsaved changes: the user decides what happens to their work, never an agent. `scene` is the path list_projects answered with: a plain name, or folders and a name.\nExample: open_scene({project:'work', scene:'payments/flows/checkout'}) then get_scene_graph() to read what opened.",
+      "Open a portfolio scene onto the canvas (read-only navigation — the document itself is never modified). Refused while the canvas holds unsaved changes: the user decides what happens to their work, never an agent. `scene` is the path list_projects answered with: a plain name, or folders and a name. Scenes reach each other by scene link: dive when it is this diagram going deeper, link when it is another diagram's story — update({id, link}) authors one and validate() checks its target still exists.\nExample: open_scene({project:'work', scene:'payments/flows/checkout'}) then get_scene_graph() to read what opened.",
     inputSchema: {
       type: "object",
       properties: {
@@ -451,6 +452,17 @@ export const TOOLS = [
         tags: { type: "array", items: { type: "string" } },
         intents: { type: "array", items: { type: "string" } },
         logic: { type: "string" },
+        link: {
+          type: "object",
+          description: "Another diagram's story (dive is for this one's depth): {scene, project?, at?}",
+          properties: {
+            scene: { type: "string", description: "The scene path list_projects answered with" },
+            project: { type: "string", description: "Defaults to this scene's own project" },
+            at: { type: "string", description: "The component to arrive focused on" },
+          },
+          required: ["scene"],
+          additionalProperties: false,
+        },
         after: { type: "string", description: "Place it right of this component" },
       },
       required: ["label"],
@@ -477,7 +489,7 @@ export const TOOLS = [
   {
     name: "update",
     description:
-      "Change a component, edge, or frame: label, kind (re-styled through the legend), tags, intents, logic; a frame's name, narrative, order; or move a component into a frame (frame:null takes it out). Only the fields named change; `intents`/`tags` replace, `addIntents`/`addTags` add to the author's.\nExample: update({id:'n_orders', addIntents:['retries failed charges'], logic:'if charge fails: retry 3x then park'})",
+      "Change a component, edge, or frame: label, kind (re-styled through the legend), tags, intents, logic, the scene it links to; a frame's name, narrative, order; or move a component into a frame (frame:null takes it out). Only the fields named change; `intents`/`tags` replace, `addIntents`/`addTags` add to the author's. `link` points at another diagram's story — dive is for this diagram's own depth — and validate() checks the target still exists.\nExample: update({id:'n_orders', addIntents:['retries failed charges'], logic:'if charge fails: retry 3x then park'})",
     inputSchema: {
       type: "object",
       properties: {
@@ -493,6 +505,17 @@ export const TOOLS = [
         name: { type: "string" },
         order: { type: ["number", "null"] },
         frame: { type: ["string", "null"] },
+        link: {
+          type: ["object", "null"],
+          description: "Another diagram's story: {scene, project?, at?}; null clears it",
+          properties: {
+            scene: { type: "string", description: "The scene path list_projects answered with" },
+            project: { type: "string", description: "Defaults to this scene's own project" },
+            at: { type: "string", description: "The component to arrive focused on" },
+          },
+          required: ["scene"],
+          additionalProperties: false,
+        },
       },
       required: ["id"],
       additionalProperties: false,
@@ -610,7 +633,7 @@ export const TOOLS = [
   {
     name: "validate",
     description:
-      "The craft check: components without a kind or an intent, edges without a label or intent, frames without a narrative or over 12 components, dangling edges, unlinked detail frames — and the CRAFT SCORE, 0–100, with the part that costs the most and what would raise it. The parts are what the evidence ranks: crossings (35), bends (20), alignment (15), overlaps (15), edge-length spread (5), the angle where edges meet (5), the legend's least colour distance (5); every part is scored for the diagram whole and for each frame, so `perFrame` says which frame to fix. Below 70 the picture is not ready to save: tidy it, or move a tangle into a detail layer.\nExample: validate() → {findings:[{level:'warn', about:'n_db', message:'Postgres has no intent'}], summary:'3 warnings, 1 note', score:{score:78, parts:[{key:'crossings', value:2, penalty:14, weight:35, detail:'2 pairs of arrows cross'}, …], perFrame:[{id:'f_core', name:'02 Core', score:74, worst:'crossings'}], advice:['crossings cost 14 of 35 — tidy({scope:'f_core'}) lays it out by flow']}}",
+      "The craft check: components without a kind or an intent, edges without a label or intent, frames without a narrative or over 12 components, dangling edges, unlinked detail frames, scene links whose target the store no longer holds — and the CRAFT SCORE, 0–100, with the part that costs the most and what would raise it. The parts are what the evidence ranks: crossings (35), bends (20), alignment (15), overlaps (15), edge-length spread (5), the angle where edges meet (5), the legend's least colour distance (5); every part is scored for the diagram whole and for each frame, so `perFrame` says which frame to fix. Below 70 the picture is not ready to save: tidy it, or move a tangle into a detail layer.\nExample: validate() → {findings:[{level:'warn', about:'n_db', message:'Postgres has no intent'}], summary:'3 warnings, 1 note', score:{score:78, parts:[{key:'crossings', value:2, penalty:14, weight:35, detail:'2 pairs of arrows cross'}, …], perFrame:[{id:'f_core', name:'02 Core', score:74, worst:'crossings'}], advice:['crossings cost 14 of 35 — tidy({scope:'f_core'}) lays it out by flow']}}",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
