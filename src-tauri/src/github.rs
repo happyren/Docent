@@ -10,7 +10,8 @@
 //! and nothing a scene read or write ever reaches. Reconciling those calls with
 //! the working copy on disk is `sync.rs`'s job.
 //!
-//! Everything speaks GitHub's HTTP API — Contents and Git-Data — and nothing
+//! Everything speaks GitHub's Git-Data HTTP API — refs, commits, trees and
+//! blobs, which is the subtree the working copy mirrors (D94) — and nothing
 //! shells out to `git` (D27). The one HTTP client is `ureq`, already carried
 //! for the update check, so the desktop gains no dependency for this.
 //!
@@ -26,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use crate::store::valid_name;
+use crate::store::valid_scene_path;
 
 pub const DEFAULT_API_BASE: &str = "https://api.github.com";
 pub const DEFAULT_BRANCH: &str = "main";
@@ -39,6 +40,11 @@ pub const MOVED_ERROR: &str = "the remote branch moved — pull first";
 /// …and what it gets on the protected trunk (D33), where only a merge lands.
 pub const BASE_BRANCH_ERROR: &str =
     "pushing to the base branch is disabled — create a branch and open a pull request";
+/// …and what every verb gets when GitHub could not hand over the whole tree.
+/// Syncing the half it did send would read as deletions nobody made, so the
+/// subtree is listed completely or not at all (D94).
+pub const TRUNCATED_ERROR: &str =
+    "the repository tree is too large to list in one request — GitHub truncated it";
 
 /// …and what it gets when the last pull left questions the author must answer.
 pub fn unresolved_error(names: &[String]) -> String {
@@ -506,14 +512,16 @@ pub fn token_for(secrets_file: &Path, project: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 struct CachedListing {
-    etag: Option<String>,
+    head: String,
     entries: BTreeMap<String, String>,
 }
 
-/// The If-None-Match cache for the one listing call every sync verb starts
-/// with. Deliberately per-process and not persisted: it is an optimization
-/// against GitHub's rate limit, never a source of truth — the working copy on
-/// disk is that (D29).
+/// The cache for the one listing call every sync verb starts with, keyed by the
+/// branch's head commit (D94): a branch nobody moved has the same tree, so an
+/// unchanged project costs one cheap ref read instead of a whole subtree.
+/// Deliberately per-process and not persisted: it is an optimization against
+/// GitHub's rate limit, never a source of truth — the working copy on disk is
+/// that (D29).
 #[derive(Default)]
 pub struct Cache {
     listings: Mutex<HashMap<String, CachedListing>>,
@@ -530,28 +538,20 @@ impl Cache {
         }
     }
 
-    fn etag(&self, project: &str) -> Option<String> {
-        self.listings
-            .lock()
-            .ok()?
-            .get(project)
-            .and_then(|cached| cached.etag.clone())
+    /// What this project listed at `head`, when that is still where the branch
+    /// is. A head that moved says nothing about the tree it left behind.
+    fn cached(&self, project: &str, head: &str) -> Option<BTreeMap<String, String>> {
+        let listings = self.listings.lock().ok()?;
+        let cached = listings.get(project)?;
+        (cached.head == head).then(|| cached.entries.clone())
     }
 
-    fn cached(&self, project: &str) -> Option<BTreeMap<String, String>> {
-        self.listings
-            .lock()
-            .ok()?
-            .get(project)
-            .map(|cached| cached.entries.clone())
-    }
-
-    fn store(&self, project: &str, etag: Option<String>, entries: &BTreeMap<String, String>) {
+    fn store(&self, project: &str, head: String, entries: &BTreeMap<String, String>) {
         if let Ok(mut listings) = self.listings.lock() {
             listings.insert(
                 project.to_string(),
                 CachedListing {
-                    etag,
+                    head,
                     entries: entries.clone(),
                 },
             );
@@ -650,26 +650,8 @@ fn repo_url(binding: &Binding, rest: &str) -> String {
     )
 }
 
-fn contents_url(binding: &Binding, leaf: Option<&str>) -> String {
-    let mut segments: Vec<String> = if binding.path.is_empty() {
-        Vec::new()
-    } else {
-        binding.path.split('/').map(encode_segment).collect()
-    };
-    if let Some(leaf) = leaf {
-        segments.push(encode_segment(leaf));
-    }
-    let suffix = if segments.is_empty() {
-        String::new()
-    } else {
-        format!("/{}", segments.join("/"))
-    };
-    repo_url(binding, &format!("/contents{suffix}"))
-}
-
 struct Reply {
     status: u16,
-    etag: Option<String>,
     text: String,
 }
 
@@ -679,13 +661,7 @@ impl Reply {
     }
 }
 
-fn request(
-    token: &str,
-    method: &str,
-    url: &str,
-    body: Option<String>,
-    if_none_match: Option<String>,
-) -> Result<Reply> {
+fn request(token: &str, method: &str, url: &str, body: Option<String>) -> Result<Reply> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(TIMEOUT))
         // Statuses are answers here, not errors: a 404 and a 409 both mean
@@ -702,9 +678,6 @@ fn request(
     if body.is_some() {
         builder = builder.header("Content-Type", "application/json");
     }
-    if let Some(etag) = if_none_match {
-        builder = builder.header("If-None-Match", etag);
-    }
     let sent = match body {
         Some(body) => builder.body(body).map_err(bad_request).and_then(|request| {
             agent
@@ -719,18 +692,13 @@ fn request(
     };
     let mut response = sent?;
     let status = response.status().as_u16();
-    let etag = response
-        .headers()
-        .get("etag")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
     let text = response
         .body_mut()
         .with_config()
         .limit(MAX_RESPONSE_BYTES)
         .read_to_string()
         .unwrap_or_default();
-    Ok(Reply { status, etag, text })
+    Ok(Reply { status, text })
 }
 
 fn bad_request(err: ureq::http::Error) -> Failure {
@@ -807,7 +775,7 @@ pub fn probe_access(binding: &Binding, token: &str) -> Probe {
     };
     // Unreachable, refused, timed out: the repository may be perfectly fine
     // and this machine briefly not.
-    let Ok(reply) = request(token, "GET", &repo_url(binding, ""), None, None) else {
+    let Ok(reply) = request(token, "GET", &repo_url(binding, ""), None) else {
         return unverified();
     };
     if reply.status != 200 {
@@ -852,30 +820,44 @@ fn is_too_large(status: u16, text: &str) -> bool {
     status == 403 && text.to_lowercase().contains("too large")
 }
 
-/// What the bound directory holds on the active branch: scene name → blob sha,
-/// in one request. Revalidated with If-None-Match, because every sync verb
-/// starts here and a project that has not moved should cost the rate limit
-/// nothing.
+/// What the bound subtree holds on the active branch: scene path → blob sha,
+/// walked recursively (D94). The Git trees API answers a whole subtree in one
+/// request, which the contents API could only do one directory at a time — and
+/// the working copy is a subtree now, not a folder of files.
+///
+/// The branch head is the cache key: every sync verb starts here, and a branch
+/// nobody moved has the same tree, so a project that has not changed costs one
+/// ref read and nothing else.
 pub fn list(
     project: &str,
     binding: &Binding,
     token: &str,
     cache: &Cache,
 ) -> Result<BTreeMap<String, String>> {
-    let url = format!(
-        "{}?ref={}",
-        contents_url(binding, None),
-        encode_segment(&binding.branch)
-    );
-    let reply = request(token, "GET", &url, None, cache.etag(project))?;
-    if reply.status == 304 {
-        if let Some(entries) = cache.cached(project) {
-            return Ok(entries);
+    // A branch that is not there yet is the normal state right after binding —
+    // the first push creates it. Listing it as empty is honest; a wrong
+    // owner/repo shows the same, and then fails loudly on that push.
+    let head = match branch_head(binding, token, &binding.branch) {
+        Ok(head) => head,
+        Err(failure) if failure.status == 404 => {
+            cache.forget(project);
+            return Ok(BTreeMap::new());
         }
+        Err(failure) => return Err(failure),
+    };
+    if let Some(entries) = cache.cached(project, &head) {
+        return Ok(entries);
     }
-    // A bound path that does not exist yet is the normal state right after
-    // binding — the first push creates it. Listing it as empty is honest; a
-    // wrong owner/repo shows the same, and then fails loudly on the first push.
+    let tree = commit_tree(binding, token, &head)?;
+    let reply = request(
+        token,
+        "GET",
+        &repo_url(
+            binding,
+            &format!("/git/trees/{}?recursive=1", encode_segment(&tree)),
+        ),
+        None,
+    )?;
     if reply.status == 404 {
         cache.forget(project);
         return Ok(BTreeMap::new());
@@ -883,25 +865,39 @@ pub fn list(
     if !reply.is_success() {
         return Err(failure(reply.status, &reply.text));
     }
-    let entries = parse_json(&reply.text)?;
-    let entries = entries
-        .as_array()
-        .ok_or_else(|| Failure::new(502, "the bound path is a file, not a directory"))?;
-    let listed: BTreeMap<String, String> = entries
+    let body = parse_json(&reply.text)?;
+    // A tree GitHub had to cut short is not a listing: the scenes it left out
+    // would read as deletions nobody made, so this fails loudly rather than
+    // synchronizing half a subtree (D94).
+    if body.get("truncated").and_then(|t| t.as_bool()) == Some(true) {
+        return Err(Failure::new(502, TRUNCATED_ERROR));
+    }
+    // The bound path is a directory prefix, and everything under it — at any
+    // depth — is this project's.
+    let prefix = if binding.path.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", binding.path)
+    };
+    let listed: BTreeMap<String, String> = body
+        .get("tree")
+        .and_then(|tree| tree.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
         .filter_map(|entry| {
-            if entry.get("type").and_then(|t| t.as_str()) != Some("file") {
+            if entry.get("type").and_then(|t| t.as_str()) != Some("blob") {
                 return None;
             }
-            let file_name = entry.get("name")?.as_str()?;
-            let name = file_name.strip_suffix(EXT)?;
-            // Only names this store can address round-trip: anything else in
-            // the directory belongs to the repository, not to the portfolio.
-            if !valid_name(name) {
+            let path = entry.get("path")?.as_str()?;
+            let scene = path.strip_prefix(prefix.as_str())?.strip_suffix(EXT)?;
+            // Only paths this store can address round-trip: anything else in
+            // the subtree belongs to the repository, not to the portfolio.
+            if !valid_scene_path(scene) {
                 return None;
             }
             Some((
-                name.to_string(),
+                scene.to_string(),
                 entry
                     .get("sha")
                     .and_then(|s| s.as_str())
@@ -910,7 +906,7 @@ pub fn list(
             ))
         })
         .collect();
-    cache.store(project, reply.etag, &listed);
+    cache.store(project, head, &listed);
     Ok(listed)
 }
 
@@ -922,7 +918,6 @@ pub fn blob(binding: &Binding, token: &str, sha: &str) -> Result<String> {
         token,
         "GET",
         &repo_url(binding, &format!("/git/blobs/{}", encode_segment(sha))),
-        None,
         None,
     )?;
     if !reply.is_success() {
@@ -946,27 +941,29 @@ pub struct Head {
 
 pub fn head(binding: &Binding, token: &str) -> Result<Head> {
     let commit = branch_head(binding, token, &binding.branch)?;
+    let tree = commit_tree(binding, token, &commit)?;
+    Ok(Head { commit, tree })
+}
+
+/// The tree one commit points at — where a push starts from, and what the
+/// listing walks.
+fn commit_tree(binding: &Binding, token: &str, commit: &str) -> Result<String> {
     let reply = request(
         token,
         "GET",
-        &repo_url(
-            binding,
-            &format!("/git/commits/{}", encode_segment(&commit)),
-        ),
-        None,
+        &repo_url(binding, &format!("/git/commits/{}", encode_segment(commit))),
         None,
     )?;
     if !reply.is_success() {
         return Err(failure(reply.status, &reply.text));
     }
-    let tree = parse_json(&reply.text)?
+    parse_json(&reply.text)?
         .get("tree")
         .and_then(|tree| tree.get("sha"))
         .and_then(|sha| sha.as_str())
         .filter(|sha| !sha.is_empty())
-        .ok_or_else(|| Failure::new(502, "GitHub API error (commit carried no tree)"))?
-        .to_string();
-    Ok(Head { commit, tree })
+        .map(str::to_string)
+        .ok_or_else(|| Failure::new(502, "GitHub API error (commit carried no tree)"))
 }
 
 /// The sha a branch currently points at, or a 404 naming the branch.
@@ -980,7 +977,6 @@ fn branch_head(binding: &Binding, token: &str, branch: &str) -> Result<String> {
         token,
         "GET",
         &repo_url(binding, &format!("/git/ref/heads/{heads}")),
-        None,
         None,
     )?;
     if reply.status == 404 {
@@ -1016,7 +1012,6 @@ pub fn create_object(
         "POST",
         &repo_url(binding, endpoint),
         Some(payload.to_string()),
-        None,
     )?;
     if !reply.is_success() {
         return Err(write_failure(binding, reply.status, &reply.text));
@@ -1059,7 +1054,6 @@ pub fn update_ref(binding: &Binding, token: &str, commit: &str) -> Result<()> {
         "PATCH",
         &repo_url(binding, &format!("/git/refs/heads/{heads}")),
         Some(serde_json::json!({ "sha": commit, "force": false }).to_string()),
-        None,
     )?;
     if reply.status == 422 {
         return Err(Failure::new(409, MOVED_ERROR));
@@ -1188,7 +1182,6 @@ pub fn push_review_images(
         "GET",
         &repo_url(binding, &format!("/git/ref/heads/{REVIEW_BRANCH}")),
         None,
-        None,
     )?;
     let mut parent: Option<String> = None;
     let mut base_tree: Option<String> = None;
@@ -1204,7 +1197,6 @@ pub fn push_review_images(
                 token,
                 "GET",
                 &repo_url(binding, &format!("/git/commits/{}", encode_segment(sha))),
-                None,
                 None,
             )?;
             if commit.status == 200 {
@@ -1243,7 +1235,6 @@ pub fn push_review_images(
                 binding,
                 &format!("/git/trees/{}?recursive=1", encode_segment(tree)),
             ),
-            None,
             None,
         )?;
         if listed.status == 200 {
@@ -1294,7 +1285,6 @@ pub fn push_review_images(
             "PATCH",
             &repo_url(binding, &format!("/git/refs/heads/{REVIEW_BRANCH}")),
             Some(serde_json::json!({ "sha": commit, "force": false }).to_string()),
-            None,
         )?,
         None => request(
             token,
@@ -1304,7 +1294,6 @@ pub fn push_review_images(
                 serde_json::json!({ "ref": format!("refs/heads/{REVIEW_BRANCH}"), "sha": commit })
                     .to_string(),
             ),
-            None,
         )?,
     };
     if !reply.is_success() {
@@ -1332,7 +1321,6 @@ pub fn list_branches(binding: &Binding, token: &str) -> Result<Vec<BranchInfo>> 
         token,
         "GET",
         &repo_url(binding, "/branches?per_page=100"),
-        None,
         None,
     )?;
     if !reply.is_success() {
@@ -1371,7 +1359,6 @@ pub fn create_branch(binding: &Binding, token: &str, name: &str, from: &str) -> 
         "POST",
         &repo_url(binding, "/git/refs"),
         Some(payload.to_string()),
-        None,
     )?;
     // GitHub answers a duplicate ref with a 422. That is not a lost race like
     // a stale scene sha — it is a name already taken, and saying so is the fix.
@@ -1447,7 +1434,6 @@ pub fn open_pull_request(
         "POST",
         &repo_url(binding, "/pulls"),
         Some(payload.to_string()),
-        None,
     )?;
     // No commits between the two branches, or a pull request already open for
     // them: GitHub knows which, and its sentence is the one worth relaying.
@@ -1531,17 +1517,16 @@ mod tests {
     #[test]
     fn urls_address_the_same_paths_the_reference_store_builds() {
         assert_eq!(
-            contents_url(&binding("docs/diagrams"), Some("check out.excalidraw")),
-            "https://api.github.com/repos/acme/diagrams/contents/docs/diagrams/check%20out.excalidraw"
-        );
-        // A root binding has no path segment at all.
-        assert_eq!(
-            contents_url(&binding(""), None),
-            "https://api.github.com/repos/acme/diagrams/contents"
-        );
-        assert_eq!(
             repo_url(&binding(""), "/git/blobs/abc"),
             "https://api.github.com/repos/acme/diagrams/git/blobs/abc"
+        );
+        // A scene name with a space addresses the same URL from either store.
+        assert_eq!(
+            repo_url(
+                &binding(""),
+                &format!("/git/ref/heads/{}", encode_segment("wip 2"))
+            ),
+            "https://api.github.com/repos/acme/diagrams/git/ref/heads/wip%202"
         );
     }
 

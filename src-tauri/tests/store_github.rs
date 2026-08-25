@@ -5,11 +5,13 @@
 //!
 //! GitHub is a `tiny_http` server in this file, the way the update check's
 //! tests stand in for the releases API. It answers only the calls the store
-//! makes, but it answers them the way GitHub does: base64 contents, ETag
-//! revalidation on the listing, Git-Data blobs/trees/commits, and a
-//! non-fast-forward ref update refused the way GitHub refuses one. `apiBase` is
-//! part of the binding, so pointing the store at it needs no environment
-//! variable — it is the same mechanism that makes GitHub Enterprise work.
+//! makes, but it answers them the way GitHub does: base64 blobs, a recursive
+//! Git-Data tree behind the branch head, and a non-fast-forward ref update
+//! refused the way GitHub refuses one. A change to the files is a commit here
+//! too, moving the branches that were looking at them — which is what the
+//! store's listing cache keys on (D94). `apiBase` is part of the binding, so
+//! pointing the store at it needs no environment variable — it is the same
+//! mechanism that makes GitHub Enterprise work.
 //!
 //! Every case gets its own store, its own mock, its own data directory and its
 //! own secrets file, so they run in parallel without sharing anything.
@@ -63,7 +65,6 @@ struct Seen {
     method: String,
     url: String,
     body: String,
-    if_none_match: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -90,8 +91,10 @@ struct Repository {
     pulls: i64,
     /// What `GET /repos/acme/diagrams` calls the repository's default branch.
     default_branch: String,
-    /// Bumped by every write, so the listing's ETag changes when it should.
-    version: u64,
+    /// The commit the branches looking at `files` are on. A change to the
+    /// files is a commit, and a commit moves those branches — which is what
+    /// makes the store's listing cache key move with them (D94).
+    files_head: String,
     /// Handed out to every Git-Data object this mock creates.
     objects: u64,
     /// A token that may read and not write — what a fine-grained PAT is by
@@ -104,6 +107,28 @@ struct Repository {
     /// supposed to lose. The commit it then builds names a parent that is no
     /// longer the head, so the ref update is not a fast-forward.
     move_head_on_ref_read: bool,
+}
+
+impl Repository {
+    /// Land the current `files` as a commit: every branch that was looking at
+    /// the previous one follows it, exactly as a push would move them.
+    fn commit_files(&mut self) {
+        self.objects += 1;
+        let sha = format!("commit-{}", self.objects);
+        let previous = std::mem::replace(&mut self.files_head, sha.clone());
+        self.commits.insert(
+            sha.clone(),
+            MockCommit {
+                tree: format!("tree-of-{sha}"),
+                parents: vec![previous.clone()],
+            },
+        );
+        for head in self.branches.values_mut() {
+            if *head == previous {
+                *head = sha.clone();
+            }
+        }
+    }
 }
 
 struct MockGitHub {
@@ -124,10 +149,11 @@ impl MockGitHub {
             .port();
         let server = Arc::new(server);
         let repo = Arc::new(Mutex::new(Repository {
-            version: 1,
-            // One branch, which is also the repository's default.
+            // One branch, which is also the repository's default, and which is
+            // where the files start.
             branches: BTreeMap::from([("main".to_string(), "sha-main".to_string())]),
             default_branch: "main".to_string(),
+            files_head: "sha-main".to_string(),
             ..Repository::default()
         }));
         let worker = {
@@ -138,12 +164,9 @@ impl MockGitHub {
                     let mut body = String::new();
                     let _ = request.as_reader().read_to_string(&mut body);
                     let (status, payload) = answer(&repo, &request, &body);
-                    let mut response = tiny_http::Response::from_string(payload.body)
+                    let response = tiny_http::Response::from_string(payload.body)
                         .with_status_code(status)
                         .with_header(head("Content-Type", "application/json"));
-                    if let Some(etag) = payload.etag {
-                        response = response.with_header(head("ETag", &etag));
-                    }
                     let _ = request.respond(response);
                 }
             })
@@ -160,17 +183,18 @@ impl MockGitHub {
         self.repo.lock().expect("repository")
     }
 
-    /// Someone else's commit: a file changes and the listing's ETag moves.
+    /// Someone else's commit: a file changes and the branches looking at the
+    /// files move to the commit that changed it.
     fn write(&self, path: &str, content: &str) {
         let mut repo = self.lock();
         repo.files.insert(path.to_string(), content.to_string());
-        repo.version += 1;
+        repo.commit_files();
     }
 
     fn remove(&self, path: &str) {
         let mut repo = self.lock();
         repo.files.remove(path);
-        repo.version += 1;
+        repo.commit_files();
     }
 
     fn file(&self, path: &str) -> Option<String> {
@@ -248,27 +272,13 @@ impl Drop for MockGitHub {
 
 struct Payload {
     body: String,
-    etag: Option<String>,
 }
 
 impl Payload {
     fn json(value: serde_json::Value) -> Self {
         Self {
             body: value.to_string(),
-            etag: None,
         }
-    }
-
-    fn empty() -> Self {
-        Self {
-            body: String::new(),
-            etag: None,
-        }
-    }
-
-    fn with_etag(mut self, etag: String) -> Self {
-        self.etag = Some(etag);
-        self
     }
 }
 
@@ -331,16 +341,6 @@ fn base64_decode(text: &str) -> Vec<u8> {
     out
 }
 
-fn entry_json(path: &str, content: &str) -> serde_json::Value {
-    serde_json::json!({
-        "name": path.rsplit('/').next().unwrap_or(path),
-        "path": path,
-        "sha": blob_sha(content),
-        "size": content.len(),
-        "type": "file",
-    })
-}
-
 fn not_found() -> (u16, Payload) {
     (
         404,
@@ -364,14 +364,12 @@ fn answer(
     body: &str,
 ) -> (u16, Payload) {
     let url = request.url().to_string();
-    let if_none_match = header_of(request, "If-None-Match");
     let method = request.method().as_str().to_string();
     let mut repo = repo.lock().expect("repository");
     repo.seen.push(Seen {
         method: method.clone(),
         url: url.clone(),
         body: body.to_string(),
-        if_none_match: if_none_match.clone(),
     });
 
     if header_of(request, "Authorization").as_deref() != Some(&format!("Bearer {TOKEN}")) {
@@ -479,10 +477,6 @@ fn answer(
                 })),
             )
         }
-        Some(&"contents") if method == "GET" => {
-            let repo_path = rest[1..].join("/");
-            list_contents(&repo, &repo_path, if_none_match.as_deref())
-        }
         _ => not_found(),
     }
 }
@@ -507,7 +501,6 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
                 },
             );
             repo.branches.insert(wanted.clone(), moved);
-            repo.version += 1;
         }
         return (
             200,
@@ -584,9 +577,11 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
         if name != "docent-review" {
             if let Some(snapshot) = repo.trees.get(&commit.tree).cloned() {
                 repo.files = snapshot;
+                // The pushed commit is where the files are now, so the next
+                // change made here descends from it.
+                repo.files_head = sha.clone();
             }
         }
-        repo.version += 1;
         return (
             200,
             Payload::json(serde_json::json!({
@@ -664,16 +659,28 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
         return (201, Payload::json(serde_json::json!({ "sha": sha })));
     }
     if rest.first() == Some(&"trees") && rest.len() == 2 && method == "GET" {
-        let Some(snapshot) = repo.trees.get(rest[1]) else {
-            return not_found();
-        };
+        // A tree this mock never created is the branch's current files — the
+        // same fallback the commit route makes for a seeded head, and what
+        // lets a repository be set up by writing files rather than pushing.
+        let snapshot = repo
+            .trees
+            .get(rest[1])
+            .cloned()
+            .unwrap_or_else(|| repo.files.clone());
         let tree: Vec<serde_json::Value> = snapshot
-            .keys()
-            .map(|path| serde_json::json!({ "path": path, "type": "blob", "mode": "100644" }))
+            .iter()
+            .map(|(path, content)| {
+                serde_json::json!({
+                    "path": path,
+                    "type": "blob",
+                    "mode": "100644",
+                    "sha": blob_sha(content),
+                })
+            })
             .collect();
         return (
             200,
-            Payload::json(serde_json::json!({ "sha": rest[1], "tree": tree })),
+            Payload::json(serde_json::json!({ "sha": rest[1], "tree": tree, "truncated": false })),
         );
     }
     if rest.first() == Some(&"commits") && rest.len() == 1 && method == "POST" {
@@ -723,38 +730,6 @@ fn git_data(repo: &mut Repository, rest: &[&str], method: &str, body: &str) -> (
         );
     }
     not_found()
-}
-
-fn list_contents(
-    repo: &Repository,
-    repo_path: &str,
-    if_none_match: Option<&str>,
-) -> (u16, Payload) {
-    let prefix = if repo_path.is_empty() {
-        String::new()
-    } else {
-        format!("{repo_path}/")
-    };
-    let children: Vec<&String> = repo
-        .files
-        .keys()
-        .filter(|key| key.starts_with(&prefix) && !key[prefix.len()..].contains('/'))
-        .collect();
-    if children.is_empty() {
-        return not_found();
-    }
-    let etag = format!("W/\"listing-{}\"", repo.version);
-    if if_none_match == Some(etag.as_str()) {
-        return (304, Payload::empty().with_etag(etag));
-    }
-    let listing: Vec<serde_json::Value> = children
-        .into_iter()
-        .map(|key| entry_json(key, &repo.files[key]))
-        .collect();
-    (
-        200,
-        Payload::json(serde_json::Value::Array(listing)).with_etag(etag),
-    )
 }
 
 fn decode(segment: &str) -> String {
@@ -1050,8 +1025,11 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 
 /// `encodeURIComponent` for the one character a scene name may carry that a
 /// URL may not.
+/// `encodeURIComponent`, as far as the names these tests use need it: a
+/// scene's whole path rides in one URL segment, so the separator is encoded
+/// along with everything else (D92).
 fn encode(scene: &str) -> String {
-    scene.replace(' ', "%20")
+    scene.replace(' ', "%20").replace('/', "%2F")
 }
 
 fn names(value: &serde_json::Value, key: &str) -> Vec<String> {
@@ -1584,7 +1562,7 @@ fn names_what_the_branch_did_on_one_listing_call() {
         .github
         .write("docs/diagrams/added.excalidraw", SCENE);
     fixture.github.remove("docs/diagrams/edited.excalidraw");
-    let before = fixture.github.requests_to("/contents/docs/diagrams").len();
+    let before = fixture.github.requests_to("/git/trees/").len();
 
     let status = fixture.status("states");
     assert_eq!(status["remote"]["reachable"], true);
@@ -1592,20 +1570,29 @@ fn names_what_the_branch_did_on_one_listing_call() {
     assert_eq!(names(&status["remote"], "changed"), ["added", "clean"]);
     // A scene the branch dropped, which the working copy still has.
     assert_eq!(names(&status["remote"], "removed"), ["edited"]);
-    let listings = fixture.github.requests_to("/contents/docs/diagrams");
+    let listings = fixture.github.requests_to("/git/trees/");
     assert_eq!(
         listings.len() - before,
         1,
         "one listing call, and nothing else"
     );
-    // …and it revalidates rather than refetching blind: the previous listing's
-    // ETag rides along, so an unchanged branch costs the rate limit nothing.
+    // …and it walks the whole subtree in that one call rather than a request
+    // per folder (D94).
     assert!(
         listings
             .last()
-            .and_then(|entry| entry.if_none_match.clone())
-            .is_some_and(|etag| etag.contains("listing-")),
-        "the listing carried no If-None-Match"
+            .is_some_and(|entry| entry.url.contains("recursive=1")),
+        "the listing was not recursive"
+    );
+
+    // A branch nobody moved costs the tree nothing at all: the head is the
+    // cache key, so the second status reads the ref and stops there.
+    let before = fixture.github.requests_to("/git/trees/").len();
+    fixture.status("states");
+    assert_eq!(
+        fixture.github.requests_to("/git/trees/").len(),
+        before,
+        "an unmoved branch refetched its tree"
     );
 }
 
@@ -1675,23 +1662,33 @@ fn brings_a_legacy_bindings_scenes_in_without_losing_local_work() {
         answer,
         serde_json::json!({
             "ok": true,
-            "updated": ["only there"],
+            // The subtree, not the top folder of it (D92): a scene in a
+            // folder arrives named by its path.
+            "updated": ["nested/deep", "only there"],
             "removed": [],
             "kept": ["only here"],
             "conflicts": [],
         })
     );
-    // The remote scene arrived, the local one stayed, and nothing outside the
-    // bound directory's own .excalidraw files was touched.
+    // The remote scenes arrived, the local one stayed, and nothing outside the
+    // bound subtree's own .excalidraw files was touched.
     assert_eq!(
         fixture.local_scene("legacy", "only there").as_deref(),
         Some(OTHER_SCENE)
     );
     assert_eq!(
+        fixture.local_scene("legacy", "nested/deep").as_deref(),
+        Some(SCENE)
+    );
+    assert_eq!(
         fixture.local_scene("legacy", "only here").as_deref(),
         Some(SCENE)
     );
-    assert_eq!(fixture.scene_names("legacy"), ["only here", "only there"]);
+    // Folders first, then names (D92).
+    assert_eq!(
+        fixture.scene_names("legacy"),
+        ["nested/deep", "only here", "only there"]
+    );
 }
 
 #[test]
@@ -2126,6 +2123,109 @@ fn refuses_a_resolution_it_does_not_know_and_a_scene_that_is_not_conflicted() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_scene_in_a_folder_syncs_at_its_place_in_the_tree() {
+    let fixture = Fixture::new();
+    fixture.bound_project("subtree");
+    fixture
+        .github
+        .write("docs/diagrams/notes/2026/plan.excalidraw", SCENE);
+
+    // Pulled by path (D94), and laid out on disk as the folders the path
+    // names (D92).
+    assert_eq!(
+        fixture.pulled("subtree"),
+        serde_json::json!({
+            "ok": true,
+            "updated": ["notes/2026/plan"],
+            "removed": [],
+            "kept": [],
+            "conflicts": [],
+        })
+    );
+    assert_eq!(
+        fixture.local_scene("subtree", "notes/2026/plan").as_deref(),
+        Some(SCENE)
+    );
+    // The "before" copy nests the same way, under the `.docent` exception and
+    // never inside the working copy.
+    assert_eq!(fixture.base_of("subtree", "notes/2026/plan").body, SCENE);
+    assert!(fixture
+        .data_dir()
+        .join(".docent")
+        .join("sync")
+        .join("subtree")
+        .join("base")
+        .join("notes")
+        .join("2026")
+        .join("plan.excalidraw")
+        .is_file());
+
+    fixture.draft_on("subtree", "docent/subtree");
+    assert_eq!(
+        fixture
+            .put_scene("subtree", "notes/2026/plan", OTHER_SCENE)
+            .status,
+        200
+    );
+    assert_eq!(
+        fixture
+            .put_scene("subtree", "notes/drafts/new", THIRD_SCENE)
+            .status,
+        200
+    );
+    let pushed = fixture.push("subtree");
+    assert_eq!(pushed.status, 200, "{}", pushed.body);
+    assert_eq!(
+        names(&pushed.json(), "pushed"),
+        ["notes/2026/plan", "notes/drafts/new"]
+    );
+    // Each one landed at its own path inside the bound prefix.
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/notes/2026/plan.excalidraw"),
+        Some(OTHER_SCENE.to_string())
+    );
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/notes/drafts/new.excalidraw"),
+        Some(THIRD_SCENE.to_string())
+    );
+
+    // …and a deletion prunes here and removes there.
+    assert_eq!(
+        fixture.delete_scene("subtree", "notes/drafts/new").status,
+        200
+    );
+    assert!(!fixture
+        .data_dir()
+        .join("subtree")
+        .join("notes")
+        .join("drafts")
+        .exists());
+    let removed = fixture.push("subtree");
+    assert_eq!(removed.status, 200, "{}", removed.body);
+    assert_eq!(
+        names(&removed.json(), "removedRemotely"),
+        ["notes/drafts/new"]
+    );
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/notes/drafts/new.excalidraw"),
+        None
+    );
+    // The scene that stayed is still there, at its own place in the tree.
+    assert_eq!(
+        fixture
+            .github
+            .file("docs/diagrams/notes/2026/plan.excalidraw"),
+        Some(OTHER_SCENE.to_string())
+    );
+}
+
+#[test]
 fn lands_every_local_change_as_one_commit() {
     let fixture = Fixture::new();
     fixture.bound_project("landing");
@@ -2154,6 +2254,12 @@ fn lands_every_local_change_as_one_commit() {
         .into_iter()
         .filter(|entry| entry.method == "POST")
         .count();
+    // Where the branch stands before the push, which is what the one commit
+    // has to be built on top of.
+    let head = fixture
+        .github
+        .branch_head("docent/landing")
+        .expect("the draft branch exists");
     let res = fixture.push("landing");
     assert_eq!(res.status, 200, "{}", res.body);
     let answer = res.json();
@@ -2176,10 +2282,10 @@ fn lands_every_local_change_as_one_commit() {
     let commit: serde_json::Value =
         serde_json::from_str(&commits.last().expect("a commit").body).expect("JSON");
     assert_eq!(commit["message"], "docent: update landing (3 scene(s))");
-    assert_eq!(commit["parents"], serde_json::json!(["sha-main"]));
+    assert_eq!(commit["parents"], serde_json::json!([head]));
 
     let tree = fixture.github.body_of("/git/trees", "POST");
-    assert_eq!(tree["base_tree"], "tree-of-sha-main");
+    assert_eq!(tree["base_tree"], format!("tree-of-{head}"));
     assert_eq!(
         tree["tree"],
         serde_json::json!([
@@ -2678,7 +2784,7 @@ fn creates_a_branch_switches_to_it_and_keeps_the_base_the_token_and_the_copy() {
         fixture.github.body_of("/git/refs", "POST"),
         serde_json::json!({
             "ref": "refs/heads/docent/diagrams-2026-08-20",
-            "sha": "sha-main",
+            "sha": fixture.github.branch_head("main").expect("main exists"),
         })
     );
 

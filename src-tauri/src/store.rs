@@ -1,7 +1,8 @@
 //! Desktop portfolio store (S13, D25) — the second implementation of the one
-//! store *contract*: the D17 file tree (`<data>/<project>/<scene>.excalidraw`)
-//! behind the D18 `/api` routes. Route shapes, status codes, error bodies, the
-//! name gate, and the `.excalidraw`-only write gate match
+//! store *contract*: the D17 file tree, a subtree now
+//! (`<data>/<project>/<seg>/…/<leaf>.excalidraw`, D92), behind the D18 `/api`
+//! routes. Route shapes, status codes, error bodies, the name and path gates,
+//! and the `.excalidraw`-only write gate match
 //! `server/docent-store.mjs` byte for byte; `tests/store_contract.rs` is what
 //! keeps the two honest.
 //!
@@ -574,7 +575,7 @@ fn dispatch(
     {
         let (project, scene) = (&segments[2], &segments[4]);
         check_name(project, "project")?;
-        check_name(scene, "scene")?;
+        check_scene_path(scene)?;
         return match sync::read_base(data_dir, project, scene) {
             Some(text) => Ok(Reply::ok(text)),
             None => Err(HttpError::new(
@@ -618,6 +619,11 @@ fn dispatch(
             if !dir.is_dir() {
                 return Err(HttpError::new(404, format!("no such project: {project}")));
             }
+            // A directory exists because a scene lives in it (D92), so a PUT
+            // at a path is what creates the folders on the way to it.
+            if let Some(parent) = file.parent() {
+                fs::create_dir_all(parent).map_err(internal)?;
+            }
             // Atomic: a crash mid-write must never truncate an existing scene.
             let mut tmp = file.clone().into_os_string();
             tmp.push(".tmp");
@@ -629,7 +635,10 @@ fn dispatch(
 
         if method == Method::Delete {
             return match fs::remove_file(&file) {
-                Ok(()) => Ok(Reply::ok(r#"{"ok":true}"#)),
+                Ok(()) => {
+                    prune_empty_dirs(&file, &project_dir(data_dir, project)?);
+                    Ok(Reply::ok(r#"{"ok":true}"#))
+                }
                 Err(_) => Err(HttpError::new(
                     404,
                     format!("no such scene: {project}/{scene}"),
@@ -1035,6 +1044,42 @@ pub fn valid_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b' ' | b'_' | b'-'))
 }
 
+/// How deep a scene path may go (D92): eight segments, so a flat name is a
+/// path of one and nothing addresses further than a reader can follow.
+pub const MAX_SCENE_DEPTH: usize = 8;
+
+/// The reference store's message for a path that is not one. Every route that
+/// names a scene answers with exactly this, because the two stores are one
+/// contract (S13).
+pub const SCENE_PATH_ERROR: &str = "invalid scene path — up to 8 folders of letters, digits, spaces, - or _ (max 64 each, no leading symbol)";
+
+/// A scene's name is a path (D92): one to eight slash-separated segments, each
+/// obeying the one name rule above. One rule per segment keeps traversal
+/// impossible the same way one rule per name always has.
+pub fn valid_scene_path(path: &str) -> bool {
+    let mut segments = 0;
+    for segment in path.split('/') {
+        segments += 1;
+        if segments > MAX_SCENE_DEPTH || !valid_name(segment) {
+            return false;
+        }
+        // `.docent` is reserved at every level. The name rule already refuses
+        // a leading dot, so this is the contract written down rather than the
+        // gate that enforces it — and it stays true if either rule moves.
+        if segment.eq_ignore_ascii_case(".docent") {
+            return false;
+        }
+    }
+    true
+}
+
+fn check_scene_path(path: &str) -> Result<()> {
+    if valid_scene_path(path) {
+        return Ok(());
+    }
+    Err(HttpError::new(400, SCENE_PATH_ERROR))
+}
+
 fn check_name(name: &str, what: &str) -> Result<()> {
     if valid_name(name) {
         return Ok(());
@@ -1054,8 +1099,39 @@ fn project_dir(data_dir: &Path, project: &str) -> Result<PathBuf> {
 
 fn scene_path(data_dir: &Path, project: &str, scene: &str) -> Result<PathBuf> {
     let dir = project_dir(data_dir, project)?;
-    check_name(scene, "scene")?;
-    Ok(dir.join(format!("{scene}{EXT}")))
+    check_scene_path(scene)?;
+    Ok(nested_file(dir, scene))
+}
+
+/// `<root>/<seg>/…/<leaf>.excalidraw` — the one layout the working copy and
+/// the base copies beside it both use (D92, D94). Pushed segment by segment
+/// rather than joined, so the separator is the platform's.
+pub(crate) fn nested_file(root: PathBuf, scene: &str) -> PathBuf {
+    let mut file = root;
+    let mut segments = scene.split('/').peekable();
+    while let Some(segment) = segments.next() {
+        if segments.peek().is_some() {
+            file.push(segment);
+        } else {
+            file.push(format!("{segment}{EXT}"));
+        }
+    }
+    file
+}
+
+/// Remove the directories a deleted scene left empty, ancestor by ancestor,
+/// stopping at — and never removing — `stop_at` (D92). A directory exists
+/// because scenes live in it, and Git cannot keep an empty one either, so the
+/// store never pretends to. A directory that still holds something ends the
+/// walk, which is what `remove_dir` refusing already means.
+pub(crate) fn prune_empty_dirs(file: &Path, stop_at: &Path) {
+    let mut current = file.parent();
+    while let Some(dir) = current {
+        if dir == stop_at || !dir.starts_with(stop_at) || fs::remove_dir(dir).is_err() {
+            return;
+        }
+        current = dir.parent();
+    }
 }
 
 /// Split the request target into decoded path segments. Decoding happens
@@ -1159,16 +1235,9 @@ fn list_projects(context: &Context) -> Result<Reply> {
         let binding = bindings.get(&id);
         let mut scenes = 0_usize;
         let mut updated_at: Option<u128> = None;
-        for scene in fs::read_dir(entry.path()).map_err(internal)? {
-            let scene = scene.map_err(internal)?;
-            if !scene.file_name().to_string_lossy().ends_with(EXT) {
-                continue;
-            }
-            scenes += 1;
-            if let Some(ms) = modified_millis(&scene.path()) {
-                updated_at = Some(updated_at.map_or(ms, |current| current.max(ms)));
-            }
-        }
+        // Recursively (D92): a scene in a folder is still one of the
+        // project's, and the count the modal shows has to say so.
+        count_scenes(&entry.path(), 0, &mut scenes, &mut updated_at);
         projects.push(ProjectInfo {
             id,
             scenes,
@@ -1181,36 +1250,117 @@ fn list_projects(context: &Context) -> Result<Reply> {
     Ok(Reply::ok(serde_json::to_string(&projects).map_err(json)?))
 }
 
-fn list_scenes(data_dir: &Path, project: &str) -> Result<Reply> {
-    let dir = project_dir(data_dir, project)?;
-    let entries = fs::read_dir(&dir)
-        .map_err(|_| HttpError::new(404, format!("no such project: {project}")))?;
-    let mut scenes = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(internal)?;
+/// Count a project's scenes, and date it by the newest of them. Infallible on
+/// purpose: a directory that cannot be read is a project with fewer scenes in
+/// the listing, never a portfolio that refuses to open.
+fn count_scenes(dir: &Path, depth: usize, scenes: &mut usize, updated_at: &mut Option<u128>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if depth + 1 < MAX_SCENE_DEPTH && valid_name(&file_name) {
+                count_scenes(&entry.path(), depth + 1, scenes, updated_at);
+            }
+            continue;
+        }
         if !file_name.ends_with(EXT) {
             continue;
         }
-        let meta = entry.metadata().map_err(internal)?;
+        *scenes += 1;
+        if let Some(ms) = modified_millis(&entry.path()) {
+            *updated_at = Some(updated_at.map_or(ms, |current| current.max(ms)));
+        }
+    }
+}
+
+/// Every scene under a project, as a path relative to it (D92). Only folders
+/// the path rule could address are entered, so a repository's own `.git` — or
+/// anything deeper than the rule allows — is not part of the portfolio.
+fn collect_scenes(
+    dir: &Path,
+    prefix: &str,
+    depth: usize,
+    scenes: &mut Vec<SceneInfo>,
+) -> std::io::Result<()> {
+    // Only the project's own directory answers a 404; an entry that cannot be
+    // read under it is a scene the listing does without.
+    for entry in fs::read_dir(dir)?.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if depth + 1 < MAX_SCENE_DEPTH && valid_name(&file_name) {
+                let _ = collect_scenes(
+                    &entry.path(),
+                    &format!("{prefix}{file_name}/"),
+                    depth + 1,
+                    scenes,
+                );
+            }
+            continue;
+        }
+        let Some(stem) = file_name.strip_suffix(EXT) else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
         scenes.push(SceneInfo {
-            name: file_name[..file_name.len() - EXT.len()].to_string(),
+            name: format!("{prefix}{stem}"),
             updated_at: modified_millis(&entry.path()).map(iso8601),
             size: meta.len(),
         });
     }
-    sort_by(&mut scenes, |scene| &scene.name);
+    Ok(())
+}
+
+fn list_scenes(data_dir: &Path, project: &str) -> Result<Reply> {
+    let dir = project_dir(data_dir, project)?;
+    let mut scenes = Vec::new();
+    collect_scenes(&dir, "", 0, &mut scenes)
+        .map_err(|_| HttpError::new(404, format!("no such project: {project}")))?;
+    scenes.sort_by(|a, b| compare_scene_paths(&a.name, &b.name));
     Ok(Reply::ok(serde_json::to_string(&scenes).map_err(json)?))
 }
 
 /// `localeCompare` order, approximated: case-insensitive first so `apples`
 /// sorts before `Bananas` as it does in the reference store, with the raw
 /// string breaking ties so the result stays deterministic (I3 habits).
+pub(crate) fn compare_names(a: &str, b: &str) -> std::cmp::Ordering {
+    a.to_lowercase()
+        .cmp(&b.to_lowercase())
+        .then_with(|| a.cmp(b))
+}
+
+/// …applied to a whole listing.
 pub(crate) fn sort_by<T>(values: &mut [T], key: impl Fn(&T) -> &String) {
-    values.sort_by(|a, b| {
-        let (a, b) = (key(a), key(b));
-        a.to_lowercase().cmp(&b.to_lowercase()).then(a.cmp(b))
-    });
+    values.sort_by(|a, b| compare_names(key(a), key(b)));
+}
+
+/// Folders first, then names (D92). Two paths are compared segment by segment;
+/// where one still has a folder under the segment and the other does not, the
+/// folder wins outright — which is what keeps a directory's contents together
+/// in the listing instead of interleaved with its siblings. Segments that are
+/// equally folders, or equally leaves, fall back to the name order above.
+pub(crate) fn compare_scene_paths(a: &str, b: &str) -> std::cmp::Ordering {
+    let (left, right): (Vec<&str>, Vec<&str>) = (a.split('/').collect(), b.split('/').collect());
+    for index in 0..left.len().min(right.len()) {
+        let (left_folder, right_folder) = (index + 1 < left.len(), index + 1 < right.len());
+        if left_folder != right_folder {
+            return right_folder.cmp(&left_folder);
+        }
+        let order = compare_names(left[index], right[index]);
+        if order != std::cmp::Ordering::Equal {
+            return order;
+        }
+    }
+    left.len().cmp(&right.len())
 }
 
 fn json(err: serde_json::Error) -> HttpError {
@@ -1308,6 +1458,117 @@ mod tests {
         }
     }
 
+    /// A directory of this test's own, under the system temp directory.
+    fn scratch(prefix: &str) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "docent-{prefix}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    #[test]
+    fn a_scene_path_is_up_to_eight_segments_of_the_one_name_rule() {
+        for path in [
+            "sketch",
+            "work/checkout",
+            "a/b/c/d/e/f/g/h",
+            "Team notes/2026/Q1 plan",
+        ] {
+            assert!(valid_scene_path(path), "{path} should pass");
+        }
+        for path in [
+            "",
+            // Nine segments is one too many.
+            "a/b/c/d/e/f/g/h/i",
+            "work//checkout",
+            "work/",
+            "/work",
+            "work/../escape",
+            // Reserved at the top and at every level under it.
+            ".docent/notes",
+            "work/.docent/notes",
+            "work/.DOCENT",
+            &format!("work/{}", "a".repeat(65)),
+        ] {
+            assert!(!valid_scene_path(path), "{path} should fail");
+        }
+        // A flat name is a path of one segment, so nothing that addressed a
+        // scene before this stops addressing one (D92).
+        for name in ["a", "Check out 2", "a-b_c", "-flag", "a.b"] {
+            assert_eq!(valid_name(name), valid_scene_path(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn folders_sort_before_files_at_every_level() {
+        let mut paths = vec![
+            "zeta",
+            "alpha",
+            "beta/second",
+            "beta/first",
+            "beta",
+            "Alps/peak",
+        ];
+        paths.sort_by(|a, b| compare_scene_paths(a, b));
+        assert_eq!(
+            paths,
+            [
+                // Folders first, in name order, each one's contents kept
+                // together rather than interleaved with its siblings…
+                "Alps/peak",
+                "beta/first",
+                "beta/second",
+                // …then the loose scenes, `beta` among them even though a
+                // folder shares its name.
+                "alpha",
+                "beta",
+                "zeta",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_path_becomes_a_nesting_not_a_name_with_slashes_in_it() {
+        assert_eq!(
+            nested_file(PathBuf::from("/data/work"), "folder/deep/sketch"),
+            Path::new("/data/work/folder/deep/sketch.excalidraw")
+        );
+        // A flat name is one segment, laid out exactly where it always was.
+        assert_eq!(
+            nested_file(PathBuf::from("/data/work"), "sketch"),
+            Path::new("/data/work/sketch.excalidraw")
+        );
+    }
+
+    #[test]
+    fn a_deleted_scene_takes_the_folders_it_emptied_with_it() {
+        let project = scratch("prune");
+        let file = nested_file(project.clone(), "a/b/c/sketch");
+        fs::create_dir_all(file.parent().expect("a parent")).expect("the folders");
+        fs::write(&file, "{}").expect("the scene");
+        // A sibling one level up keeps its own folder — and everything above
+        // it — alive.
+        let sibling = nested_file(project.clone(), "a/b/other");
+        fs::write(&sibling, "{}").expect("the sibling");
+
+        fs::remove_file(&file).expect("the scene goes");
+        prune_empty_dirs(&file, &project);
+        assert!(!project.join("a").join("b").join("c").exists());
+        assert!(sibling.is_file());
+
+        fs::remove_file(&sibling).expect("the sibling goes");
+        prune_empty_dirs(&sibling, &project);
+        // Empty all the way up now — but never the project itself.
+        assert!(!project.join("a").exists());
+        assert!(project.is_dir());
+        let _ = fs::remove_dir_all(&project);
+    }
+
     #[test]
     fn segments_decode_after_splitting() {
         assert_eq!(path_segments("/api/health"), ["api", "health"]);
@@ -1318,6 +1579,13 @@ mod tests {
         assert_eq!(
             path_segments("/api/projects/work/scenes/check%20out?x=1"),
             ["api", "projects", "work", "scenes", "check out"]
+        );
+        // Which is what carries a whole scene path in one URL segment (D92):
+        // the encoded separator survives the split and arrives as one name
+        // with slashes in it, for the path gate rather than the name gate.
+        assert_eq!(
+            path_segments("/api/projects/work/scenes/notes%2F2026%2Fplan"),
+            ["api", "projects", "work", "scenes", "notes/2026/plan"]
         );
     }
 

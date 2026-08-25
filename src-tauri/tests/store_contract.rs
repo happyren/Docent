@@ -348,6 +348,112 @@ fn rejects_path_escaping_and_malformed_names() {
 }
 
 #[test]
+fn scenes_address_by_path_and_folders_come_and_go_with_them() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    // The routes do not change (D92): the whole path rides in the scene's own
+    // URL segment, encoded.
+    let deep = encode("Team notes/2026/Q1 plan");
+    let nested = put(
+        port,
+        &format!("/api/projects/work/scenes/{deep}"),
+        Some(SCENE),
+    );
+    assert_eq!(nested.status, 200, "{}", nested.body);
+    assert_eq!(
+        put(port, "/api/projects/work/scenes/flat", Some(SCENE)).status,
+        200
+    );
+
+    // The PUT created the folders on the way to it, and the scene is a plain
+    // file at the end of them.
+    assert_eq!(
+        fs::read_to_string(
+            fixture
+                .data_dir()
+                .join("work")
+                .join("Team notes")
+                .join("2026")
+                .join("Q1 plan.excalidraw")
+        )
+        .expect("the nested scene"),
+        SCENE
+    );
+
+    // It reads back by the same path…
+    let round_trip = get(port, &format!("/api/projects/work/scenes/{deep}"));
+    assert_eq!(round_trip.status, 200);
+    assert_eq!(round_trip.body, SCENE);
+
+    // …and lists as a relative path, folders before files.
+    let scenes = get(port, "/api/projects/work/scenes").json();
+    assert_eq!(
+        scenes
+            .as_array()
+            .expect("array")
+            .iter()
+            .map(|scene| scene["name"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>(),
+        ["Team notes/2026/Q1 plan", "flat"]
+    );
+    // The project's own count is recursive, so the modal says two.
+    let projects = get(port, "/api/projects").json();
+    assert_eq!(projects[0]["scenes"], 2);
+
+    // DELETE takes the folders it emptied with it, ancestor by ancestor, and
+    // stops at the project.
+    assert_eq!(
+        delete(port, &format!("/api/projects/work/scenes/{deep}")).status,
+        200
+    );
+    assert_eq!(
+        entries(&fixture.data_dir().join("work")),
+        ["flat.excalidraw".to_string()]
+    );
+}
+
+#[test]
+fn rejects_scene_paths_that_are_not_paths() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    put(port, "/api/projects/work", None);
+
+    for path in [
+        "a/b/c/d/e/f/g/h/i",
+        "work/../escape",
+        "work/.docent/notes",
+        ".docent",
+        "work//checkout",
+        "work/",
+    ] {
+        let res = put(
+            port,
+            &format!("/api/projects/work/scenes/{}", encode(path)),
+            Some(SCENE),
+        );
+        assert_eq!(res.status, 400, "{path} should be refused");
+        assert_eq!(
+            res.json()["error"],
+            "invalid scene path — up to 8 folders of letters, digits, spaces, - or _ (max 64 each, no leading symbol)"
+        );
+    }
+    // Nothing escaped, and eight segments is the depth that is allowed.
+    assert!(entries(&fixture.data_dir().join("work")).is_empty());
+    assert_eq!(
+        put(
+            port,
+            &format!("/api/projects/work/scenes/{}", encode("a/b/c/d/e/f/g/h")),
+            Some(SCENE),
+        )
+        .status,
+        200
+    );
+    assert_eq!(entries(&fixture.data_dir().join("work")), ["a".to_string()]);
+}
+
+#[test]
 fn only_persists_excalidraw_scenes() {
     let fixture = Fixture::new();
     let port = fixture.port();
