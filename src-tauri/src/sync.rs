@@ -11,13 +11,20 @@
 //! per scene: the blob sha it had at the last synchronization, and the hash of
 //! the content that came with it. Everything else is derived from those two by
 //! comparison, which is why a pull can never silently lose a drawing.
+//!
+//! A scene is named by its path (D92), so all of that keys by path: the state
+//! file, the base copies nested beside it, the working copy walked
+//! recursively, and every changelog, conflict and dirty listing that names a
+//! scene (D94). The subtree was always the contract with the repository.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::github::{self, Binding, Cache, Failure};
-use crate::store::valid_name;
+use crate::store::{
+    nested_file, prune_empty_dirs, valid_name, valid_scene_path, MAX_SCENE_DEPTH, SCENE_PATH_ERROR,
+};
 
 const EXT: &str = ".excalidraw";
 
@@ -124,17 +131,25 @@ fn base_dir(data_dir: &Path, project: &str) -> PathBuf {
         .join("base")
 }
 
+/// A base copy sits at the scene's own path under the base directory (D94),
+/// so a subtree of scenes has a subtree of "before" copies mirroring it.
 fn base_file(data_dir: &Path, project: &str, scene: &str) -> PathBuf {
-    base_dir(data_dir, project).join(format!("{scene}{EXT}"))
+    nested_file(base_dir(data_dir, project), scene)
 }
 
 fn write_base(data_dir: &Path, project: &str, scene: &str, text: &str) -> Result<()> {
-    fs::create_dir_all(base_dir(data_dir, project)).map_err(internal)?;
-    fs::write(base_file(data_dir, project, scene), text).map_err(internal)
+    let file = base_file(data_dir, project, scene);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(internal)?;
+    }
+    fs::write(file, text).map_err(internal)
 }
 
 fn remove_base(data_dir: &Path, project: &str, scene: &str) {
-    let _ = fs::remove_file(base_file(data_dir, project, scene));
+    let file = base_file(data_dir, project, scene);
+    if fs::remove_file(&file).is_ok() {
+        prune_empty_dirs(&file, &base_dir(data_dir, project));
+    }
 }
 
 /// The base copy of a scene, or None when nothing has been synced for it.
@@ -155,31 +170,62 @@ fn project_dir(data_dir: &Path, project: &str) -> PathBuf {
 }
 
 fn scene_file(data_dir: &Path, project: &str, scene: &str) -> PathBuf {
-    project_dir(data_dir, project).join(format!("{scene}{EXT}"))
+    nested_file(project_dir(data_dir, project), scene)
 }
 
-/// Every addressable scene in the project directory, by content hash. A
-/// `.excalidraw` file whose name this store could not address round-trip is
-/// left out of sync entirely — it stays on disk, and no verb ever claims to
-/// have pushed it.
+/// Remove a scene from the working copy and prune the folders that left empty
+/// — the same shape the store's own DELETE has (D92).
+fn remove_working_file(data_dir: &Path, project: &str, scene: &str) {
+    let file = scene_file(data_dir, project, scene);
+    if fs::remove_file(&file).is_ok() {
+        prune_empty_dirs(&file, &project_dir(data_dir, project));
+    }
+}
+
+/// Every addressable scene in the project directory, by content hash, walked
+/// recursively (D92). A `.excalidraw` file whose path this store could not
+/// address round-trip is left out of sync entirely — it stays on disk, and no
+/// verb ever claims to have pushed it.
 pub fn working_copy(data_dir: &Path, project: &str) -> BTreeMap<String, String> {
     let mut copy = BTreeMap::new();
-    let Ok(entries) = fs::read_dir(project_dir(data_dir, project)) else {
-        return copy;
+    collect_copy(&project_dir(data_dir, project), "", 0, &mut copy);
+    copy
+}
+
+/// One directory of the working copy. Only folders the path rule could address
+/// are entered, so nothing the store cannot name round-trip is ever walked
+/// into — a repository's own `.git`, or anything deeper than the rule allows.
+fn collect_copy(dir: &Path, prefix: &str, depth: usize, copy: &mut BTreeMap<String, String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
     };
     for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if depth + 1 < MAX_SCENE_DEPTH && valid_name(&file_name) {
+                collect_copy(
+                    &entry.path(),
+                    &format!("{prefix}{file_name}/"),
+                    depth + 1,
+                    copy,
+                );
+            }
+            continue;
+        }
         let Some(name) = file_name.strip_suffix(EXT) else {
             continue;
         };
-        if !valid_name(name) {
+        let scene = format!("{prefix}{name}");
+        if !valid_scene_path(&scene) {
             continue;
         }
         if let Ok(text) = fs::read_to_string(entry.path()) {
-            copy.insert(name.to_string(), sha256(&text));
+            copy.insert(scene, sha256(&text));
         }
     }
-    copy
 }
 
 /// What happened to one scene since the last sync, from this side alone. No
@@ -319,7 +365,7 @@ pub fn pull(
         if state == "clean" {
             match remote_sha {
                 None => {
-                    let _ = fs::remove_file(scene_file(data_dir, project, &name));
+                    remove_working_file(data_dir, project, &name);
                     remove_base(data_dir, project, &name);
                     bases.remove(&name);
                     answer.removed.push(name);
@@ -410,11 +456,8 @@ pub fn resolve(
     body: &serde_json::Value,
 ) -> Result<ResolveAnswer> {
     let scene = match body.get("scene").and_then(|scene| scene.as_str()) {
-        Some(scene) if valid_name(scene) => scene.to_string(),
-        Some(_) => return Err(Failure::new(
-            400,
-            "invalid scene name — use letters, digits, spaces, - or _ (max 64, no leading symbol)",
-        )),
+        Some(scene) if valid_scene_path(scene) => scene.to_string(),
+        Some(_) => return Err(Failure::new(400, SCENE_PATH_ERROR)),
         None => {
             return Err(Failure::new(
                 400,
@@ -466,7 +509,7 @@ pub fn resolve(
     } else if conflict.is_empty() {
         // The remote deleted it and the author accepts that, so the local file
         // goes too and the scene stops being tracked.
-        let _ = fs::remove_file(scene_file(data_dir, project, &scene));
+        remove_working_file(data_dir, project, &scene);
         remove_base(data_dir, project, &scene);
         bases.remove(&scene);
     } else {
@@ -499,7 +542,9 @@ pub struct PushAnswer {
     pub removed_remotely: Vec<String>,
 }
 
-/// Where a scene lives inside the repository, from the repository's root.
+/// Where a scene lives inside the repository, from the repository's root:
+/// `<prefix>/<path>.excalidraw`, the scene's own path inside the bound
+/// subtree (D94).
 fn repo_file(binding: &Binding, scene: &str) -> String {
     if binding.path.is_empty() {
         format!("{scene}{EXT}")
@@ -836,6 +881,74 @@ mod tests {
         };
         assert_eq!(scene_state(Some(&same), Some(&conflicted)), "conflicted");
         assert_eq!(scene_state(None, Some(&conflicted)), "conflicted");
+    }
+
+    /// A data directory of this test's own, under the system temp directory.
+    fn scratch(prefix: &str) -> PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "docent-{prefix}-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    #[test]
+    fn a_base_copy_nests_under_the_scene_path_and_prunes_when_it_goes() {
+        let data_dir = scratch("sync-base");
+        let base = base_dir(&data_dir, "work");
+
+        write_base(&data_dir, "work", "folder/deep/sketch", "before").expect("a base copy");
+        write_base(&data_dir, "work", "flat", "before").expect("a base copy");
+        // Nested exactly where the scene is (D94) — under the data root's
+        // `.docent` exception, never inside the project directory.
+        assert!(base
+            .join("folder")
+            .join("deep")
+            .join("sketch.excalidraw")
+            .is_file());
+        assert_eq!(
+            read_base(&data_dir, "work", "folder/deep/sketch").as_deref(),
+            Some("before")
+        );
+        assert!(!data_dir.join("work").exists());
+
+        remove_base(&data_dir, "work", "folder/deep/sketch");
+        assert_eq!(read_base(&data_dir, "work", "folder/deep/sketch"), None);
+        // The folders it emptied went with it; the flat copy beside them never
+        // noticed.
+        assert!(!base.join("folder").exists());
+        assert_eq!(
+            read_base(&data_dir, "work", "flat").as_deref(),
+            Some("before")
+        );
+        let _ = fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn the_working_copy_walks_the_whole_subtree() {
+        let data_dir = scratch("sync-copy");
+        for (scene, text) in [("flat", "a"), ("folder/deep/sketch", "b")] {
+            let file = nested_file(data_dir.join("work"), scene);
+            fs::create_dir_all(file.parent().expect("a parent")).expect("the folders");
+            fs::write(file, text).expect("the scene");
+        }
+        // A folder this store could not address round-trip is not walked into
+        // at all: whatever is in there stays on disk, and no verb claims it.
+        let hidden = data_dir.join("work").join(".git");
+        fs::create_dir_all(&hidden).expect("the folders");
+        fs::write(hidden.join("stashed.excalidraw"), "c").expect("the file");
+
+        let copy = working_copy(&data_dir, "work");
+        assert_eq!(
+            copy.keys().cloned().collect::<Vec<_>>(),
+            ["flat", "folder/deep/sketch"]
+        );
+        assert_eq!(copy["folder/deep/sketch"], sha256("b"));
+        let _ = fs::remove_dir_all(&data_dir);
     }
 
     #[test]
