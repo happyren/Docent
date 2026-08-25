@@ -44,7 +44,7 @@ pub const BASE_BRANCH_ERROR: &str =
 /// Syncing the half it did send would read as deletions nobody made, so the
 /// subtree is listed completely or not at all (D94).
 pub const TRUNCATED_ERROR: &str =
-    "the repository tree is too large to list in one request — GitHub truncated it";
+    "the repository tree is too large to list in one request — bind a narrower path";
 
 /// …and what it gets when the last pull left questions the author must answer.
 pub fn unresolved_error(names: &[String]) -> String {
