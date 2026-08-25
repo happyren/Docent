@@ -80,6 +80,7 @@ describe("mcp streamable http", () => {
       "create_branch",
       "create_scene",
       "define_kind",
+      "define_scenario",
       "dive",
       "edit",
       "find",
@@ -105,11 +106,38 @@ describe("mcp streamable http", () => {
       "tour",
       "undo_edit",
       "update",
+      "use_genre",
       "validate",
     ]);
     for (const tool of body.result.tools) {
       expect(tool.description, tool.name).toContain("Example:");
     }
+  });
+
+  it("publishes the genre surface with schemas its neighbours' shape (D91)", async () => {
+    const res = await rpc("tools/list", undefined, 7);
+    const body = (await res.json()) as {
+      result: { tools: { name: string; inputSchema: Record<string, unknown> }[] }
+    };
+    const byName = new Map(body.result.tools.map((t) => [t.name, t.inputSchema]));
+    expect(byName.get("use_genre")).toEqual({
+      type: "object",
+      properties: { genre: { type: "string", description: expect.any(String) } },
+      required: ["genre"],
+      additionalProperties: false,
+    });
+    const scenario = byName.get("define_scenario") as {
+      required: string[];
+      properties: Record<string, { type: string; items?: { type: string } }>;
+    };
+    expect(scenario.required).toEqual(["name", "path"]);
+    expect(scenario.properties.path).toMatchObject({ type: "array", items: { type: "string" } });
+    // flow takes a path OR a scenario, so neither is required any more.
+    const flow = byName.get("flow") as { required?: string[]; properties: Record<string, unknown> };
+    expect(flow.required).toBeUndefined();
+    expect(flow.properties.scenario).toMatchObject({ type: "string" });
+    expect((byName.get("script_tour") as { properties: Record<string, unknown> }).properties.scenario).toMatchObject({ type: "string" });
+    expect((byName.get("create_scene") as { properties: Record<string, unknown> }).properties.genre).toMatchObject({ type: "string" });
   });
 
   it("reports no-canvas as a tool error, not a transport failure", async () => {
@@ -211,13 +239,22 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
     // D45: every client is told the diagram is tiered and how to read it.
     expect(init.result.instructions).toMatch(/TIERED/);
     expect(init.result.instructions).toMatch(/get_outline/);
+    // D91: and told the genres — the menu, and the loop, never the recipes.
+    expect(init.result.instructions).toMatch(/GENRES/);
+    for (const genre of ["architecture", "request", "event-flow", "data-flow", "lifecycle"]) {
+      expect(init.result.instructions).toContain(genre);
+    }
+    expect(init.result.instructions).toMatch(/use_genre → draw with the seeded kinds → validate → tidy/);
+    expect(init.result.instructions).toMatch(/define_scenario/);
+    // The full guidance stays out of the menu; it answers from use_genre.
+    expect(init.result.instructions).not.toContain("Event-Modeling-shaped");
 
     const tools = (await send(proxy, {
       jsonrpc: "2.0",
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(35);
+    expect(tools.result.tools).toHaveLength(37);
   });
 
   it("relays tool calls, including their errors", async () => {

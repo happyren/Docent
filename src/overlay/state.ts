@@ -29,6 +29,18 @@ export interface FlowState {
 }
 
 /**
+ * One numbered step of a scenario replay (D89): the step's number at the
+ * middle of the edge it travels, in scene coordinates. Badges live on the
+ * overlay and only while the replay runs (I2) — the diagram itself stays
+ * clean, which is how one map carries as many stories as it has.
+ */
+export interface StepBadge {
+  x: number;
+  y: number;
+  n: number;
+}
+
+/**
  * A removed entity drawn where it used to be (D48): the review's "before"
  * laid over the live scene as a dashed, labelled ghost. Comes from the
  * base copy, never from the scene — nothing is written (I2).
@@ -42,13 +54,15 @@ export interface GhostState {
 export interface OverlayState {
   highlight: HighlightState | null;
   flow: FlowState | null;
+  /** The numbered steps of the flow in force, empty for a plain pulse. */
+  steps: StepBadge[];
   ghosts: GhostState[];
 }
 
 type Listener = (state: OverlayState) => void;
 
 export class OverlayStore {
-  private state: OverlayState = { highlight: null, flow: null, ghosts: [] };
+  private state: OverlayState = { highlight: null, flow: null, steps: [], ghosts: [] };
   private listeners = new Set<Listener>();
   private generation = 0;
 
@@ -94,13 +108,19 @@ export class OverlayStore {
     this.emit({ ...this.state, highlight: { ids: sorted, targets, style } });
   }
 
-  setFlow(path: string[], speed: number, loop: boolean): void {
+  /**
+   * The step badges belong to the flow that raised them (D89): a pulse
+   * that replaces or clears this one takes its numbers with it, so a stale
+   * "3" can never sit over a diagram nothing is replaying.
+   */
+  setFlow(path: string[], speed: number, loop: boolean, steps: StepBadge[] = []): void {
     this.generation += 1;
     this.emit({
       ...this.state,
       flow: path.length
         ? { path, speed, loop, generation: this.generation }
         : null,
+      steps: path.length ? steps.map((s) => ({ ...s })) : [],
     });
   }
 
@@ -117,6 +137,6 @@ export class OverlayStore {
   }
 
   clear(): void {
-    this.emit({ highlight: null, flow: null, ghosts: [] });
+    this.emit({ highlight: null, flow: null, steps: [], ghosts: [] });
   }
 }

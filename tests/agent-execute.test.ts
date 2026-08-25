@@ -5,9 +5,11 @@
  * what an agent may actually do.
  */
 import { describe, expect, it } from "vitest";
-import { snapshotFromRawElements } from "../src/adapter/snapshot";
+import { snapshotFromRawElements, type SceneSnapshot } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import type { CommandAPI } from "../src/command/api";
+import { GENRES } from "../src/authoring/genre";
+import type { Op } from "../src/authoring/ops";
 import { execute, type AgentShellHooks, WALL_THRESHOLD } from "../src/agent/execute";
 
 const base = {
@@ -52,10 +54,10 @@ const snapshot = snapshotFromRawElements([
   { ...base, id: "queue", type: "rectangle", x: 40, y: 30060, width: 160, height: 80, frameId: "G" },
 ]);
 
-function fakeCommands(): CommandAPI {
+function fakeCommands(scene: SceneSnapshot = snapshot): CommandAPI {
   return {
-    getSceneGraph: () => buildSceneGraph(snapshot),
-    getSceneSnapshot: () => snapshot,
+    getSceneGraph: () => buildSceneGraph(scene),
+    getSceneSnapshot: () => scene,
     focus: async () => {},
     highlight: () => {},
     flow: async () => {},
@@ -382,6 +384,231 @@ describe("agent reading (D43, D45)", () => {
     const view = (await execute(fakeCommands(), shell, "get_view", {})) as { canEdit: boolean; git: { onBase: boolean } };
     expect(view.canEdit).toBe(true);
     expect(view.git).toEqual({ branch: "main", baseBranch: "main", onBase: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// genres and scenarios at the surface (A21: D87, D89, D91)
+// ---------------------------------------------------------------------------
+
+/** A map with a genre recorded and one story told over it (D87, D89). */
+const story = snapshotFromRawElements([
+  {
+    ...base,
+    id: "legend_carrier",
+    type: "text",
+    x: 0,
+    y: -80,
+    width: 200,
+    height: 40,
+    text: "Legend",
+    customData: {
+      docent: {
+        legend: [{ attr: "backgroundColor", value: "#e7f5ff", key: "kind", meaning: "service" }],
+        genre: "request",
+        scenarios: [
+          {
+            name: "Checkout",
+            description: "A customer places an order and the card is charged.",
+            path: ["e_place", "e_charge"],
+          },
+        ],
+      },
+    },
+  },
+  { ...base, id: "F", type: "frame", name: "Core", x: 0, y: 0, width: 900, height: 400 },
+  { ...base, id: "checkout", type: "rectangle", x: 40, y: 60, width: 160, height: 80, frameId: "F", boundElements: [{ id: "checkout_t", type: "text" }] },
+  { ...base, id: "checkout_t", type: "text", x: 50, y: 90, width: 140, height: 20, text: "Checkout page", containerId: "checkout", frameId: "F" },
+  { ...base, id: "orders", type: "rectangle", x: 340, y: 60, width: 160, height: 80, frameId: "F", boundElements: [{ id: "orders_t", type: "text" }] },
+  { ...base, id: "orders_t", type: "text", x: 350, y: 90, width: 140, height: 20, text: "Orders", containerId: "orders", frameId: "F" },
+  { ...base, id: "payments", type: "rectangle", x: 640, y: 60, width: 160, height: 80, frameId: "F", boundElements: [{ id: "payments_t", type: "text" }] },
+  { ...base, id: "payments_t", type: "text", x: 650, y: 90, width: 140, height: 20, text: "Payments", containerId: "payments", frameId: "F" },
+  {
+    ...base, id: "e_place", type: "arrow", x: 200, y: 100, width: 140, height: 0, frameId: "F",
+    points: [[0, 0], [140, 0]], startBinding: { elementId: "checkout" }, endBinding: { elementId: "orders" },
+    boundElements: [{ id: "e_place_t", type: "text" }],
+  },
+  { ...base, id: "e_place_t", type: "text", x: 240, y: 90, width: 80, height: 20, text: "place order", containerId: "e_place", frameId: "F" },
+  {
+    ...base, id: "e_charge", type: "arrow", x: 500, y: 100, width: 140, height: 0, frameId: "F",
+    points: [[0, 0], [140, 0]], startBinding: { elementId: "orders" }, endBinding: { elementId: "payments" },
+    customData: { docent: { note: "only after stock is reserved" } },
+  },
+]);
+
+/** A Command API that records the batches it is asked to apply. */
+function recordingCommands(scene: SceneSnapshot) {
+  const batches: Op[][] = [];
+  const flows: { path: string[]; steps?: boolean }[] = [];
+  const commands = {
+    ...fakeCommands(scene),
+    edit: async (ops: Op[]) => {
+      batches.push(ops);
+      return { applied: true, changelog: "legend: +person, +service", ids: {}, notes: ["genre: Life of a request"], touched: [], lint: { findings: [], summary: "clean" } };
+    },
+    flow: async (p: { path: string[]; steps?: boolean }) => {
+      flows.push(p);
+    },
+  } as unknown as CommandAPI;
+  return { commands, batches, flows };
+}
+
+describe("genres at the surface (D87, D91)", () => {
+  it("use_genre runs the op through edit and answers with the guidance", async () => {
+    const { shell } = fakeShell();
+    const { commands, batches } = recordingCommands(story);
+    const answer = (await execute(commands, shell, "use_genre", { genre: "event-flow" })) as {
+      applied: boolean;
+      changelog: string;
+      genre: string;
+      guidance: string;
+      next: string;
+    };
+    expect(batches).toEqual([[{ op: "use_genre", genre: "event-flow" }]]);
+    expect(answer.applied).toBe(true);
+    expect(answer.changelog).toBe("legend: +person, +service");
+    expect(answer.genre).toBe("event-flow");
+    // The recipe arrives when it is ordered (D91) — verbatim from the profile.
+    expect(answer.guidance).toBe(GENRES["event-flow"].guidance);
+    expect(answer.next).toMatch(/seeded kinds/);
+  });
+
+  it("an unknown genre is refused by the op, which names the five", async () => {
+    const { shell } = fakeShell();
+    const commands = {
+      ...fakeCommands(story),
+      edit: async (ops: { genre?: string }[]) => {
+        throw new Error(`Nothing applied — 1 problem:\n- op 1 (use_genre): unknown genre "${ops[0].genre}" — one of architecture, request, event-flow, data-flow, lifecycle`);
+      },
+    } as unknown as CommandAPI;
+    await expect(execute(commands, shell, "use_genre", { genre: "uml" })).rejects.toThrow(
+      /unknown genre "uml" — one of architecture, request, event-flow, data-flow, lifecycle/,
+    );
+  });
+
+  it("define_scenario lands as an edit and reminds how to replay it", async () => {
+    const { shell } = fakeShell();
+    const { commands, batches } = recordingCommands(story);
+    const answer = (await execute(commands, shell, "define_scenario", {
+      name: "Checkout",
+      path: ["e_place", "e_charge"],
+      description: "A customer places an order.",
+    })) as { applied: boolean; scenario: string; steps: number; next: string };
+    expect(batches).toEqual([[{ op: "define_scenario", name: "Checkout", path: ["e_place", "e_charge"], description: "A customer places an order." }]]);
+    expect(answer).toMatchObject({ applied: true, scenario: "Checkout", steps: 2 });
+    expect(answer.next).toContain("flow({scenario:'Checkout'})");
+    expect(answer.next).toContain("script_tour({scenario:'Checkout'})");
+  });
+
+  it("create_scene seeds the genre at birth, and refuses a typo before making anything", async () => {
+    const log: string[] = [];
+    const { shell } = fakeShell();
+    shell.authoring = {
+      saveScene: async () => ({ project: "work", scene: "s" }),
+      createScene: async (project, scene) => {
+        log.push(`create:${project}/${scene}`);
+      },
+      binding: async () => null,
+      createBranch: async () => {},
+    };
+    const { commands, batches } = recordingCommands(story);
+    const answer = (await execute(commands, shell, "create_scene", { project: "work", scene: "orders", genre: "Life of a request" })) as {
+      created: { scene: string };
+      genre: string;
+      guidance: string;
+      changelog: string;
+    };
+    expect(log).toEqual(["create:work/orders"]);
+    expect(batches).toEqual([[{ op: "use_genre", genre: "request" }]]);
+    expect(answer.genre).toBe("request");
+    expect(answer.guidance).toBe(GENRES.request.guidance);
+    expect(answer.changelog).toBe("legend: +person, +service");
+    // A genre nobody knows never reaches the store.
+    await expect(
+      execute(commands, shell, "create_scene", { project: "work", scene: "nope", genre: "uml" }),
+    ).rejects.toThrow(/Unknown genre "uml" — one of architecture, request/);
+    expect(log).toEqual(["create:work/orders"]);
+    // And without one, nothing changed: no batch, the old way forward.
+    const plain = (await execute(commands, shell, "create_scene", { project: "work", scene: "plain" })) as { next: string; genre?: string };
+    expect(plain.genre).toBeUndefined();
+    expect(plain.next).toMatch(/define_kind/);
+    expect(batches).toHaveLength(1);
+  });
+});
+
+describe("scenario replay (D89)", () => {
+  it("flow({scenario}) pulses the declared path, numbered", async () => {
+    const { shell } = fakeShell();
+    const { commands, flows } = recordingCommands(story);
+    const answer = (await execute(commands, shell, "flow", { scenario: "checkout" })) as {
+      pulsed: string[];
+      scenario: string;
+      steps: number;
+    };
+    // Matched on the author's own name, case aside; answered in graph ids.
+    expect(answer).toEqual({ pulsed: ["e_place", "e_charge"], scenario: "Checkout", steps: 2 });
+    expect(flows).toEqual([{ path: ["e_place", "e_charge"], speed: undefined, loop: undefined, steps: true }]);
+  });
+
+  it("an unknown scenario names the ones the scene has (I5)", async () => {
+    const { shell } = fakeShell();
+    const { commands, flows } = recordingCommands(story);
+    await expect(execute(commands, shell, "flow", { scenario: "Refund" })).rejects.toThrow(
+      /Unknown scenario: Refund — this scene has "Checkout"/,
+    );
+    // A scene with no stories says that instead of listing nothing.
+    const bare = recordingCommands(snapshot);
+    await expect(execute(bare.commands, shell, "flow", { scenario: "Refund" })).rejects.toThrow(
+      /this scene has none; define_scenario/,
+    );
+    expect(flows).toEqual([]);
+  });
+
+  it("a path and a scenario together, or neither, is refused", async () => {
+    const { shell } = fakeShell();
+    const { commands, flows } = recordingCommands(story);
+    await expect(
+      execute(commands, shell, "flow", { path: ["e_place"], scenario: "Checkout" }),
+    ).rejects.toThrow(/never both/);
+    await expect(execute(commands, shell, "flow", {})).rejects.toThrow(/path of edge ids or a scenario/);
+    expect(flows).toEqual([]);
+    // A plain path still pulses exactly as it always did, unnumbered.
+    await execute(commands, shell, "flow", { path: ["e_place"] });
+    expect(flows).toEqual([{ path: ["e_place"], speed: undefined, loop: undefined, steps: false }]);
+  });
+
+  it("the outline reads the genre and the scenarios (D87, D89)", async () => {
+    const { shell } = fakeShell();
+    const outline = (await execute(fakeCommands(story), shell, "get_outline", {})) as {
+      genre?: string;
+      scenarios?: { name: string; steps: number; description?: string }[];
+    };
+    expect(outline.genre).toBe("Life of a request");
+    expect(outline.scenarios).toEqual([
+      { name: "Checkout", steps: 2, description: "A customer places an order and the card is charged." },
+    ]);
+    // A scene with neither says neither.
+    const plain = (await execute(fakeCommands(), shell, "get_outline", {})) as { genre?: string; scenarios?: unknown };
+    expect(plain.genre).toBeUndefined();
+    expect(plain.scenarios).toBeUndefined();
+  });
+
+  it("find matches a scenario's description and answers with its first edge", async () => {
+    const { shell } = fakeShell();
+    const hits = (await execute(fakeCommands(story), shell, "find", { query: "charged" })) as {
+      hits: { id: string; type: string; label: string; steps?: number; matched: string[] }[];
+    };
+    const scenario = hits.hits.find((h) => h.type === "scenario")!;
+    expect(scenario.label).toBe("Checkout");
+    expect(scenario.steps).toBe(2);
+    // The first edge's id: enough to focus or flow it without another call.
+    expect(scenario.id).toBe("e_place");
+    expect(scenario.matched).toEqual(["description"]);
+    // The name matches too.
+    const byName = (await execute(fakeCommands(story), shell, "find", { query: "checkout" })) as {
+      hits: { type: string; matched: string[] }[];
+    };
+    expect(byName.hits.find((h) => h.type === "scenario")?.matched).toEqual(["scenario"]);
   });
 });
 

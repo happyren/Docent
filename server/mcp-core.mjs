@@ -17,6 +17,22 @@
 export const SERVER_INFO = { name: "docent", version: "1.1.0" };
 
 /**
+ * The five genres as the menu says them (S22, D91): the id, and the one
+ * line saying when it is the right one. Duplicated from each profile's
+ * `when` in `src/authoring/genre.ts` — the source of truth — because this
+ * file is plain ESM that cannot import TypeScript, the same reason the
+ * craft-score weights are spelled out in `validate` below. Only the menu
+ * lives here; each genre's full guidance answers from `use_genre`.
+ */
+const GENRE_MENU = [
+  ["architecture", "systems, services, and stores and how they talk — the default map"],
+  ["request", "how one request moves through the map — scenarios, replayed and spoken"],
+  ["event-flow", "commands, events, read models in lanes — event-driven designs"],
+  ["data-flow", "pipelines: sources to consumers, contracts on the edges"],
+  ["lifecycle", "one thing's states and transitions — orders, documents, jobs"],
+];
+
+/**
  * Handed to every client at initialize (D45): how a Docent diagram is meant
  * to be read. Diagrams are tiered — a Layer 1 of frames, with components
  * that declare detail layers beneath — and the honest way to read one is the
@@ -30,8 +46,10 @@ export const INSTRUCTIONS = [
   "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
   "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
+  `GENRES: a diagram has a category, and Docent knows five — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
+  "SCENARIOS: define_scenario({name, path, description}) names an ordered path of edges — one request's story told over the map you already drew, kept as meaning, not as a second diagram. Replay it: flow({scenario}) pulses the path with numbered step badges, script_tour({scenario}) walks and speaks it. One map carries as many scenarios as it has stories.",
   "For a walkthrough: script_tour({frame?}) derives the stops and the author's words from the diagram itself (frames in order, components in flow order; `declared` lines are the author's, `inferred` lines are yours to rewrite) — then present({action:'enter', mode:'guided'}) and tour({steps}). That is three calls for a whole walkthrough, and it is the same walkthrough every time. Each result carries a `next` hint.",
-  "You may also AUTHOR: add_node / add_edge / update / remove / add_frame / add_detail_layer / define_kind / layout, or many at once with edit({ops}) — one validated, all-or-nothing batch, one undo step, answered with the semantic changelog; propose({ops}) is the same batch as a dry run. You author MEANING, never pixels: a component is a label + a `kind` (from the legend — define_kind adds one) + intents; Docent picks the shape, the style (the diagram's own), and the place. The craft: every component gets a kind and at least one intent; rules and conditions become `logic`; every frame gets a narrative; anything with an inner mechanism gets add_detail_layer rather than a crowded frame (≤12 per frame); reuse existing kinds before defining new ones. COLOUR MEANS SOMETHING: define_kind takes a `tone` (danger, caution, positive, neutral, inactive) or a `role` (storage, compute, messaging, external, people, boundary) and Docent picks a conventional, distinct look — with neither it picks the fill furthest from the legend's — and conventional tags (hot-path, deprecated, draft, critical…) colour themselves. SYMBOLS: when a component is a named product or service (AWS Lambda, S3, Kafka, a browser, a database) call find_symbol first and pass the id as `symbol` to add_node — the icon is placed as one component with the label under it; never draw a product as a plain box when its symbol exists. Refs like `$orders` name things created earlier in the same batch. HOW DOCENT LAYS OUT, so you plan for it: a frame built in one batch is ranked by flow, left to right; a flow longer than five ranks FOLDS into bands that turn (right to left beneath, then left to right again), so a long sequence stays a picture, not a ribbon — plan a frame as a flow, never as a row; the gap between columns is sized to the widest edge label in it, so an edge label is a phrase (two to four words) and the sentence goes in the edge's intents; every edge is routed AROUND any component between its ends with turning points — an arrow never cuts through a shape, and never over the legend. ARROWS MUST NOT CROSS: build a frame in ONE batch (its components and its edges together) so Docent lays it out by flow; add a component with its edges in the same batch so it lands after its feeders; if validate() reports crossings or an edge passing through a component, layout({frame}) a frame you built, re-place the component, or move the tangle into a detail layer — never leave a crossing the diagram does not need. tidy({frame}|{tier}|{all:true}) formats any frame or the whole diagram and never changes meaning — use it after validate reports crossings, or before save_scene. Work in batches of a frame at a time, then validate() and fix what it lists, then save_scene(). validate() answers with a CRAFT SCORE out of 100 — its parts (crossings, bends, alignment, overlaps, edge lengths, angles, colour), a score per frame, and one line of advice each — and a score under 70 means the picture is not ready: tidy the frame it names, or move the tangle a tier down with add_detail_layer, before you save. On a project bound to GitHub and sitting on its base branch (get_view().git.onBase), create_branch({name:'docent/<topic>'}) BEFORE the first edit. While you edit the person sees an orange frame; keep batches short and tell them what you changed.",
+  "You may also AUTHOR: add_node / add_edge / update / remove / add_frame / add_detail_layer / define_kind / use_genre / define_scenario / layout, or many at once with edit({ops}) — one validated, all-or-nothing batch, one undo step, answered with the semantic changelog; propose({ops}) is the same batch as a dry run. You author MEANING, never pixels: a component is a label + a `kind` (from the legend — define_kind adds one) + intents; Docent picks the shape, the style (the diagram's own), and the place. The craft: every component gets a kind and at least one intent; rules and conditions become `logic`; every frame gets a narrative; anything with an inner mechanism gets add_detail_layer rather than a crowded frame (≤12 per frame); reuse existing kinds before defining new ones. COLOUR MEANS SOMETHING: define_kind takes a `tone` (danger, caution, positive, neutral, inactive) or a `role` (storage, compute, messaging, external, people, boundary) and Docent picks a conventional, distinct look — with neither it picks the fill furthest from the legend's — and conventional tags (hot-path, deprecated, draft, critical…) colour themselves. SYMBOLS: when a component is a named product or service (AWS Lambda, S3, Kafka, a browser, a database) call find_symbol first and pass the id as `symbol` to add_node — the icon is placed as one component with the label under it; never draw a product as a plain box when its symbol exists. Refs like `$orders` name things created earlier in the same batch. HOW DOCENT LAYS OUT, so you plan for it: a frame built in one batch is ranked by flow, left to right; a flow longer than five ranks FOLDS into bands that turn (right to left beneath, then left to right again), so a long sequence stays a picture, not a ribbon — plan a frame as a flow, never as a row; the gap between columns is sized to the widest edge label in it, so an edge label is a phrase (two to four words) and the sentence goes in the edge's intents; every edge is routed AROUND any component between its ends with turning points — an arrow never cuts through a shape, and never over the legend. ARROWS MUST NOT CROSS: build a frame in ONE batch (its components and its edges together) so Docent lays it out by flow; add a component with its edges in the same batch so it lands after its feeders; if validate() reports crossings or an edge passing through a component, layout({frame}) a frame you built, re-place the component, or move the tangle into a detail layer — never leave a crossing the diagram does not need. tidy({frame}|{tier}|{all:true}) formats any frame or the whole diagram and never changes meaning — use it after validate reports crossings, or before save_scene. Work in batches of a frame at a time, then validate() and fix what it lists, then save_scene(). validate() answers with a CRAFT SCORE out of 100 — its parts (crossings, bends, alignment, overlaps, edge lengths, angles, colour), a score per frame, and one line of advice each — and a score under 70 means the picture is not ready: tidy the frame it names, or move the tangle a tier down with add_detail_layer, before you save. On a project bound to GitHub and sitting on its base branch (get_view().git.onBase), create_branch({name:'docent/<topic>'}) BEFORE the first edit. While you edit the person sees an orange frame; keep batches short and tell them what you changed.",
 ].join("\n");
 
 /**
@@ -181,13 +199,13 @@ export const TOOLS = [
   {
     name: "get_outline",
     description:
-      "The diagram's table of contents — read this FIRST. Tiers, every frame with its tier, name, narrative opener, component count, and which of its components go deeper (declare a detail layer), plus the totals. Cheap on any size of diagram; it is how you decide which frame to read_frame next and where to dive.\nExample: get_outline() → {tiers:2, components:41, frames:[{id:'f_core',name:'02 Core Services',tier:1,components:4,deeper:[{id:'n_orders',label:'Orders'}]},{id:'f_orders_internals',name:'Orders — internals',tier:2,via:{id:'n_orders',label:'Orders'},parent:'f_core',components:3}]}",
+      "The diagram's table of contents — read this FIRST. Tiers, every frame with its tier, name, narrative opener, component count, and which of its components go deeper (declare a detail layer), plus the totals — and the conventions it was drawn under: its `genre` when one is recorded, and each `scenario` with its step count and the opening of its description. Cheap on any size of diagram; it is how you decide which frame to read_frame next, where to dive, and which story to replay.\nExample: get_outline() → {tiers:2, genre:'Life of a request', components:41, scenarios:[{name:'Checkout',steps:4,description:'A customer places an order.'}], frames:[{id:'f_core',name:'02 Core Services',tier:1,components:4,deeper:[{id:'n_orders',label:'Orders'}]},{id:'f_orders_internals',name:'Orders — internals',tier:2,via:{id:'n_orders',label:'Orders'},parent:'f_core',components:3}]}",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "find",
     description:
-      "Locate the part of the diagram a question is about: case-insensitive keyword match across labels, tags, intents, notes, logic, frame names and narratives, and legend meanings, over EVERY tier. Hits come ranked (label and intents weigh most) with their `trail` — the tier path from Layer 1 down to the frame the hit lives in — so the right layer is one dive away; an empty trail means Layer 1.\nExample: find({query:'retry'}) → {hits:[{id:'n_retry_queue',type:'node',label:'Retry queue',frame:'f_orders_internals',trail:[{id:'f_orders_internals',name:'Orders — internals'}],matched:['label','logic']}]}",
+      "Locate the part of the diagram a question is about: case-insensitive keyword match across labels, tags, intents, notes, logic, frame names and narratives, legend meanings, and scenario names and descriptions, over EVERY tier. Hits come ranked (label and intents weigh most) with their `trail` — the tier path from Layer 1 down to the frame the hit lives in — so the right layer is one dive away; an empty trail means Layer 1. A scenario hit carries its `steps` count and the id of the edge it starts on, so you can focus or flow it straight away.\nExample: find({query:'retry'}) → {hits:[{id:'n_retry_queue',type:'node',label:'Retry queue',frame:'f_orders_internals',trail:[{id:'f_orders_internals',name:'Orders — internals'}],matched:['label','logic']},{id:'e_charge',type:'scenario',label:'Checkout',steps:4,matched:['description']}]}",
     inputSchema: {
       type: "object",
       properties: { query: { type: "string", description: "One or more keywords" } },
@@ -344,17 +362,17 @@ export const TOOLS = [
   {
     name: "flow",
     description:
-      "Animate a light pulse traveling each edge end-to-end, in order — multi-hop request tracing. Resolves when the pulse finishes (loop: first cycle).\nExample: flow({path:['e_req','e_verify','e_query']}) traces client → gateway → auth → database.",
+      "Animate a light pulse traveling each edge end-to-end, in order — multi-hop request tracing. Give it a `path` of edge ids, or a `scenario` name to replay the path the author already declared, which also numbers the steps on the overlay while it runs. Exactly one of the two. Resolves when the pulse finishes (loop: first cycle).\nExample: flow({path:['e_req','e_verify','e_query']}) traces client → gateway → auth → database; flow({scenario:'Checkout'}) replays the declared story with numbered steps.",
     inputSchema: {
       type: "object",
       properties: {
-        path: { type: "array", items: { type: "string" }, description: "Ordered edge ids" },
+        path: { type: "array", items: { type: "string" }, description: "Ordered edge ids — omit when you pass a scenario" },
+        scenario: { type: "string", description: "The name of a scenario from get_outline — replays its path, steps numbered" },
         speed: { type: "number", description: "1.0 ≈ 500 scene-units/s" },
         loop: { type: "boolean" },
         narrate: { type: "string", description: "Say this on arrival (one call = one stop)" },
         interrupt: { type: "boolean", description: "Cut the voice in flight instead of waiting for it" },
       },
-      required: ["path"],
       additionalProperties: false,
     },
   },
@@ -375,11 +393,12 @@ export const TOOLS = [
   {
     name: "script_tour",
     description:
-      "Derive a walkthrough from the diagram itself — nothing authored for it: stops are the frames in declared order and, inside a frame, the components in flow order (what feeds comes before what is fed); words are the author's narrative, intents, notes and logic where declared (`provenance:'declared'` — keep verbatim) and a plain factual line from the graph and legend otherwise (`'inferred'` — yours to rewrite). Pass the steps to tour(). With `frame`, that frame only; without, every Layer 1 frame.\nExample: script_tour({frame:'f_core'}) → {steps:[{focus:'f_core', narrate:'…', provenance:'declared'}, {focus:'n_orders', highlight:['n_orders'], narrate:'Orders: retries failed charges.', provenance:'declared'}, …], declared:5}",
+      "Derive a walkthrough from the diagram itself — nothing authored for it: stops are the frames in declared order and, inside a frame, the components in flow order (what feeds comes before what is fed); words are the author's narrative, intents, notes and logic where declared (`provenance:'declared'` — keep verbatim) and a plain factual line from the graph and legend otherwise (`'inferred'` — yours to rewrite). Pass the steps to tour(). With `frame`, that frame only; without, every Layer 1 frame.\nExample: script_tour({frame:'f_core'}) → {steps:[{focus:'f_core', narrate:'…', provenance:'declared'}, {focus:'n_orders', highlight:['n_orders'], narrate:'Orders: retries failed charges.', provenance:'declared'}, …], declared:5}\nWith `scenario`, the walkthrough is that story instead: an opening stop in the author's words, then one stop per step — the edge focused and pulsed, said with its label and intents.\nExample: script_tour({scenario:'Checkout'}) → {scenario:{name:'Checkout',description:'A customer places an order.'}, steps:[{narrate:'Checkout. A customer places an order.', provenance:'declared'}, {focus:'e_place', flow:['e_place'], narrate:'Step 1. place order: Checkout page to Orders.', provenance:'declared'}, …]}",
     inputSchema: {
       type: "object",
       properties: {
         frame: { type: "string", description: "A frame id from get_outline; omit for the whole Layer 1" },
+        scenario: { type: "string", description: "A scenario name from get_outline — walks its path instead of the frames" },
       },
       additionalProperties: false,
     },
@@ -569,7 +588,7 @@ export const TOOLS = [
   {
     name: "edit",
     description:
-      "Apply many authoring operations as ONE batch: validated whole (unknown ids, duplicate labels, missing refs — nothing applied if anything is wrong), laid out once, one undo step, answered with the semantic changelog, the ids for your refs, and the lint. Each op is one of add_node, add_edge, update, remove, add_frame, add_detail_layer, define_kind, layout with that tool's fields plus `op` and an optional `ref` ($name) later ops can use. Prefer this over one call per component.\nExample: edit({ops:[{op:'add_frame', ref:'$core', name:'02 Core'}, {op:'add_node', ref:'$orders', label:'Orders', kind:'service', frame:'$core', intents:['owns the order state']}, {op:'add_node', ref:'$pay', label:'Payments', kind:'service', frame:'$core', intents:['charges the card']}, {op:'add_edge', from:'$orders', to:'$pay', label:'charge'}]})",
+      "Apply many authoring operations as ONE batch: validated whole (unknown ids, duplicate labels, missing refs — nothing applied if anything is wrong), laid out once, one undo step, answered with the semantic changelog, the ids for your refs, and the lint. Each op is one of add_node, add_edge, update, remove, add_frame, add_detail_layer, define_kind, use_genre, define_scenario, layout with that tool's fields plus `op` and an optional `ref` ($name) later ops can use. Prefer this over one call per component.\nExample: edit({ops:[{op:'add_frame', ref:'$core', name:'02 Core'}, {op:'add_node', ref:'$orders', label:'Orders', kind:'service', frame:'$core', intents:['owns the order state']}, {op:'add_node', ref:'$pay', label:'Payments', kind:'service', frame:'$core', intents:['charges the card']}, {op:'add_edge', from:'$orders', to:'$pay', label:'charge'}]})",
     inputSchema: {
       type: "object",
       properties: { ops: { type: "array", items: { type: "object", additionalProperties: true } } },
@@ -608,11 +627,46 @@ export const TOOLS = [
   {
     name: "create_scene",
     description:
-      "Create an empty scene in a portfolio project and open it (refused while the canvas holds unsaved changes).\nExample: create_scene({project:'work', scene:'payments-platform'})",
+      "Create an empty scene in a portfolio project and open it (refused while the canvas holds unsaved changes). With `genre`, the new scene adopts it at birth — the genre's kinds are seeded into the legend and the answer carries that genre's guidance, so you can start drawing from the reply.\nExample: create_scene({project:'work', scene:'payments-platform', genre:'architecture'})",
     inputSchema: {
       type: "object",
-      properties: { project: { type: "string" }, scene: { type: "string" } },
+      properties: {
+        project: { type: "string" },
+        scene: { type: "string" },
+        genre: { type: "string", description: "architecture, request, event-flow, data-flow, or lifecycle" },
+      },
       required: ["project", "scene"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "use_genre",
+    description:
+      "Adopt a genre for the open scene — the category of diagram it is. One of five: architecture (systems, services and stores), request (one request's journey, told as scenarios), event-flow (commands, events, read models in lanes), data-flow (sources to consumers), lifecycle (states and transitions). Records the choice beside the legend, seeds the genre's kinds into the legend where it does not already hold them, turns on that genre's lint and its layout posture, and ANSWERS WITH THE GENRE'S GUIDANCE: how this kind of diagram is drawn well. One undo step, like any edit; switching genre never deletes what is drawn.\nExample: use_genre({genre:'event-flow'}) → {changelog:'…', guidance:'Event flow (Event-Modeling-shaped). One frame per context — each becomes a lane; time runs left to right…', next:'draw with the seeded kinds…'}",
+    inputSchema: {
+      type: "object",
+      properties: {
+        genre: {
+          type: "string",
+          description: "architecture, request, event-flow, data-flow, or lifecycle (the genre's own name is accepted too)",
+        },
+      },
+      required: ["genre"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "define_scenario",
+    description:
+      "Name a path through the diagram: the edges one request takes, in the order it takes them. A scenario is meaning stored beside the legend — not a second drawing — so one map carries as many stories as it has. Replay it with flow({scenario}) or walk it with script_tour({scenario}); the outline and both exports list its steps in your words. A name already used is replaced.\nExample: define_scenario({name:'Checkout', path:['e_place','e_charge','e_confirm'], description:'A customer places an order and the card is charged.'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        path: { type: "array", items: { type: "string" }, description: "Edge ids from get_scene_graph, in the order the story runs" },
+        description: { type: "string", description: "What the story is, in a sentence — it opens the walkthrough" },
+      },
+      required: ["name", "path"],
       additionalProperties: false,
     },
   },

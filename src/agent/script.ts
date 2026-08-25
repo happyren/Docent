@@ -8,7 +8,7 @@
  * graph and legend where there are none, marked `inferred` so a model
  * knows which sentences are its to rewrite. Pure and deterministic (I3).
  */
-import type { SceneSnapshot } from "../adapter/snapshot";
+import type { Scenario, SceneSnapshot } from "../adapter/snapshot";
 import type { TourStep } from "../command/api";
 import { applyLegend } from "../export/legend";
 import type { GraphEdge, GraphFrame, GraphNode, SceneGraph } from "../scene/graph";
@@ -23,6 +23,8 @@ export interface ScriptStep extends TourStep {
 
 export interface TourScript {
   frame: { id: string; name: string } | null;
+  /** The story walked, when the script is a scenario's (D89). */
+  scenario?: { name: string; description: string | null };
   tier: number;
   steps: ScriptStep[];
   /** How many of the steps speak the author's own words. */
@@ -132,18 +134,93 @@ function declaredLine(node: GraphNode, graph: SceneGraph): string | null {
   return sentences.join(" ");
 }
 
+/** "Checkout page to Orders" — an edge said the way it is read aloud. */
+function edgeHop(edge: GraphEdge, graph: SceneGraph): string {
+  const end = (id: string | null): string => {
+    const node = id ? graph.nodes.find((n) => n.id === id) : undefined;
+    return node ? nameOf(node, graph) : "nothing";
+  };
+  return `${end(edge.from)} to ${end(edge.to)}`;
+}
+
+/** The author's words for an edge, or null when there are none. */
+function declaredEdgeLine(edge: GraphEdge, graph: SceneGraph): string | null {
+  const intents = edge.intents.map(clean).filter(Boolean);
+  const logic = clean(edge.logic);
+  const label = clean(edge.label);
+  if (!intents.length && !logic && !label) return null;
+  const hop = edgeHop(edge, graph);
+  const sentences: string[] = [label ? `${label}: ${hop}.` : `${hop}.`];
+  for (const intent of intents) sentences.push(/[.!?]$/.test(intent) ? intent : `${intent}.`);
+  if (logic) sentences.push(`Its logic: ${/[.!?]$/.test(logic) ? logic : `${logic}.`}`);
+  return sentences.join(" ");
+}
+
 /**
- * Compile the walkthrough. With a frame, that frame's stops; without one,
+ * The stops a scenario walks (D89): the story's own introduction, then one
+ * stop per step in the order the author named them — each focused on the
+ * edge it travels and pulsed, so the walkthrough replays the path it
+ * describes. A step whose edge is gone is said as such rather than skipped:
+ * a hole in the story is what sends the author back to re-point it (I5).
+ */
+function scenarioSteps(scenario: Scenario, graph: SceneGraph): ScriptStep[] {
+  const edges = scenario.path.map((step) => graph.edges.find((e) => e.sourceId === step) ?? null);
+  const description = clean(scenario.description);
+  const intro: ScriptStep = {
+    about: scenario.name,
+    highlight: edges.filter((e): e is GraphEdge => e !== null).map((e) => e.id),
+    narrate: description
+      ? `${scenario.name}. ${description}`
+      : `${scenario.name}: ${scenario.path.length} step${scenario.path.length === 1 ? "" : "s"} through the diagram.`,
+    provenance: description ? "declared" : "inferred",
+  };
+  const steps: ScriptStep[] = [intro];
+  edges.forEach((edge, i) => {
+    const n = i + 1;
+    if (!edge) {
+      steps.push({
+        about: scenario.path[i],
+        narrate: `Step ${n} points at an edge that is gone.`,
+        provenance: "inferred",
+      });
+      return;
+    }
+    const declared = declaredEdgeLine(edge, graph);
+    steps.push({
+      focus: edge.id,
+      about: edge.id,
+      flow: [edge.id],
+      narrate: `Step ${n}. ${declared ?? `${edgeHop(edge, graph)}.`}`,
+      provenance: declared ? "declared" : "inferred",
+    });
+  });
+  return steps;
+}
+
+/**
+ * Compile the walkthrough. With a scenario, its path in the author's order;
+ * with a frame, that frame's stops; without one,
  * every Layer 1 frame in order, each opened by its narrative and followed
  * by its components. Components outside any frame come last as Layer 1.
  */
 export function scriptTour(
   graph: SceneGraph,
   snapshot: SceneSnapshot,
-  options: { frame?: string | null } = {},
+  options: { frame?: string | null; scenario?: Scenario | null } = {},
 ): TourScript {
   const tiers = computeTiers(snapshot);
   const tierOf = (frame: GraphFrame) => tiers.frameTier.get(frame.sourceId) ?? 1;
+  if (options.scenario) {
+    if (options.frame) throw new Error("script_tour walks a frame or a scenario, never both");
+    const walk = scenarioSteps(options.scenario, graph);
+    return {
+      frame: null,
+      scenario: { name: options.scenario.name, description: clean(options.scenario.description) || null },
+      tier: 1,
+      steps: walk,
+      declared: walk.filter((s) => s.provenance === "declared").length,
+    };
+  }
   let frames: GraphFrame[];
   let chosen: GraphFrame | null = null;
   if (options.frame) {

@@ -29,6 +29,8 @@ const FLOW_COLOR = "#4dabf7";
 const OUTLINE_COLOR = "#7048e8";
 const GHOST_COLOR = "#e03131";
 const FILTER_MARGIN = 120;
+/** Step-badge radius in scene units — a detail badge's chip, rounded (D89). */
+const STEP_BADGE_R = 12;
 const MIN_WRITE_INTERVAL_MS = 7.5;
 
 interface TargetPath {
@@ -477,6 +479,29 @@ export function OverlayLayer({
               <circle ref={pulseRef} r={16} fill="url(#docent-pulse-halo)" />
             </>
           )}
+          {overlay.steps.map((s) => (
+            // A scenario's step number, on the stroke it travels (D89).
+            // Neon over pencil like the pulse it belongs to (D3), and sized
+            // in scene units like the detail badges, so the digit keeps its
+            // proportions at every zoom.
+            <g key={`step:${s.n}`} className="docent-step-badge">
+              <title>{`step ${s.n}`}</title>
+              <circle cx={s.x} cy={s.y} r={STEP_BADGE_R + 3} fill={FLOW_COLOR} opacity={0.3} filter="url(#docent-glow)" />
+              <circle cx={s.x} cy={s.y} r={STEP_BADGE_R} fill="#1c3d5a" stroke={FLOW_COLOR} strokeWidth={2} opacity={0.95} />
+              <text
+                x={s.x}
+                y={s.y}
+                textAnchor="middle"
+                dominantBaseline="central"
+                fontSize={STEP_BADGE_R * 1.2}
+                fontFamily="ui-sans-serif, system-ui, sans-serif"
+                fontWeight="700"
+                fill="#e7f5ff"
+              >
+                {s.n}
+              </text>
+            </g>
+          ))}
           {overlay.ghosts.map((g) => (
             <g key={`ghost:${g.id}`} className="docent-ghost">
               <title>{`${g.label} — removed`}</title>

@@ -255,6 +255,49 @@ describe("command API (B4, I5)", () => {
     await done;
   });
 
+  it("a scenario replay numbers its steps on the edge middles (D89)", async () => {
+    const store = new OverlayStore();
+    const api = new CommandAPI(makeReader(), makeCamera(), store);
+    await api.flow({ path: ["e_req", "e_verify"], speed: 1000, steps: true });
+    // Half the arc length along each edge's absolute polyline.
+    expect(store.get().steps).toEqual([
+      { x: 280, y: 175, n: 1 },
+      { x: 610, y: 175, n: 2 },
+    ]);
+    // A plain pulse raises none: the numbers belong to a named story.
+    await api.flow({ path: ["e_query"], speed: 1000 });
+    expect(store.get().steps).toEqual([]);
+  });
+
+  it("step badges walk the polyline, not the bounding box", async () => {
+    const store = new OverlayStore();
+    const bent: SceneReader = {
+      ...makeReader(),
+      getEdgeGeometry: (id) =>
+        id === "bend"
+          ? { points: [[0, 0], [100, 0], [100, 100]], x: 0, y: 0, rounded: false, elbowed: true }
+          : null,
+    };
+    const api = new CommandAPI(bent, makeCamera(), store);
+    await api.flow({ path: ["bend"], speed: 1000, steps: true });
+    // 200 units of stroke: the middle is the corner, not the box centre.
+    expect(store.get().steps).toEqual([{ x: 100, y: 0, n: 1 }]);
+  });
+
+  it("the badges go when the flow they belong to goes (I2)", async () => {
+    const store = new OverlayStore();
+    const api = new CommandAPI(makeReader(), makeCamera(), store);
+    await api.flow({ path: ["e_req"], speed: 1000, steps: true });
+    expect(store.get().steps).toHaveLength(1);
+    api.clearEffects();
+    expect(store.get().steps).toEqual([]);
+    expect(store.get().flow).toBeNull();
+    // Clearing the flow with an empty path takes them too — no stale "1".
+    await api.flow({ path: ["e_req"], speed: 1000, steps: true });
+    await api.flow({ path: [] });
+    expect(store.get().steps).toEqual([]);
+  });
+
   it("scene content is untouched by any command sequence (I2/Q3)", async () => {
     const reader = makeReader();
     const before = JSON.stringify(reader.getSceneSnapshot());
