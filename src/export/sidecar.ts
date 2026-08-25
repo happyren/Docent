@@ -9,10 +9,11 @@
  * (read from the drawing). `declared` and `inferred` facts are always
  * listed per entity.
  */
+import type { SceneLink } from "../adapter/snapshot";
 import { genreOf } from "../authoring/genre";
 import type { SceneGraph } from "../scene/graph";
 import { applyLegend, legendToRecord } from "./legend";
-import { orderFrames, scenarioSteps } from "./mermaid";
+import { orderFrames, scenarioSteps, type ExportContext } from "./mermaid";
 
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
@@ -33,7 +34,23 @@ function xywh(bounds: { x: number; y: number; width: number; height: number }): 
   return [bounds.x, bounds.y, bounds.width, bounds.height];
 }
 
-export function exportSidecar(graph: SceneGraph): string {
+/**
+ * A scene link as its own fact (D95, I4): the author's object with the
+ * project it means spelled out, never left to the reader to guess. The
+ * provenance rides ON the object because `provenance.link` already speaks
+ * for how an arrow found its ends — two different links, one word.
+ */
+function linkEntry(link: SceneLink, context?: ExportContext): Json {
+  const project = link.project ?? context?.project;
+  return {
+    scene: link.scene,
+    ...(project ? { project } : {}),
+    ...(link.at ? { at: link.at } : {}),
+    provenance: "declared",
+  };
+}
+
+export function exportSidecar(graph: SceneGraph, context?: ExportContext): string {
   const legendRecord = legendToRecord(graph.legend);
 
   const nodes: Json[] = graph.nodes.map((node) => {
@@ -81,6 +98,7 @@ export function exportSidecar(graph: SceneGraph): string {
       entity.detail = node.detailFrameId;
       provenance.detail = "declared";
     }
+    if (node.link !== null) entity.link = linkEntry(node.link, context);
     if (node.composite !== null) {
       // One component drawn from several elements (D22) — say so, and say
       // whether the author declared it or the glyph signature implied it.
@@ -125,6 +143,7 @@ export function exportSidecar(graph: SceneGraph): string {
       entity.fromRefined = edge.fromRefined;
       provenance.fromRefined = "declared";
     }
+    if (edge.link !== null) entity.link = linkEntry(edge.link, context);
     if (edge.fromProvenance === "inferred" || edge.toProvenance === "inferred") {
       provenance.link = "inferred";
     }
@@ -155,6 +174,7 @@ export function exportSidecar(graph: SceneGraph): string {
       entity.order = frame.order;
       provenance.order = "declared";
     }
+    if (frame.link !== null) entity.link = linkEntry(frame.link, context);
     if (Object.keys(provenance).length) entity.provenance = provenance;
     return entity;
   });

@@ -53,7 +53,7 @@ import { snapshotFromRawElements, snapshotFromSceneJSON } from "../src/adapter/s
 import { makeHandle } from "../src/adapter/excalidraw";
 import { plan } from "../src/authoring/ops";
 import { buildSceneGraph } from "../src/scene/graph";
-import { exportScene, applyLegend, legendToRecord } from "../src/export";
+import { exportScene, exportMermaid, exportSidecar, applyLegend, legendToRecord } from "../src/export";
 import type { LegendRule } from "../src/adapter/snapshot";
 
 const FIXTURES = fileURLToPath(new URL("../fixtures", import.meta.url));
@@ -349,5 +349,99 @@ describe("composite legend rules (D9 extension)", () => {
     expect(legendToRecord([serviceRule])).toEqual({
       "shape.rectangle+color.#1e1e1e+strokeWidth.2": "kind: service",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// a link travels with the drawing (A23: D95, I4)
+// ---------------------------------------------------------------------------
+
+/** The demo fixture with a link on a component, an edge, and a frame. */
+function demoWithLinks() {
+  const parsed = JSON.parse(demoJSON);
+  const link = (id: string, value: unknown) => {
+    const el = parsed.elements.find((e: { id: string }) => e.id === id);
+    el.customData = { docent: { ...(el.customData?.docent ?? {}), link: value } };
+  };
+  link("n_db", { scene: "storage/postgres", at: "n_wal" });
+  link("e_session", { scene: "auth/sessions", project: "Security" });
+  link("f_core", { scene: "core/overview" });
+  return snapshotFromSceneJSON(JSON.stringify(parsed));
+}
+
+describe("scene links in the exports (D95, I4)", () => {
+  const graph = buildSceneGraph(demoWithLinks());
+
+  it("Mermaid clicks a component and comments an edge and a frame", () => {
+    const mermaid = exportMermaid(graph, { project: "Platform" });
+    const lines = mermaid.split("\n");
+    expect(mermaid).toContain(
+      '  click n_db "docent://Platform/storage/postgres#n_wal" "scene link (declared): Platform/storage/postgres#n_wal"',
+    );
+    // The frame's comment sits inside its own subgraph; the edge's beside it.
+    expect(lines[lines.indexOf('  subgraph f_core["02 Core"]') + 1]).toBe(
+      "    %% link (declared): docent://Platform/core/overview",
+    );
+    expect(lines[lines.indexOf('  n_db -->|"session reads"| n_auth') + 1]).toBe(
+      "  %% link (declared): docent://Security/auth/sessions",
+    );
+    // Clicks come after the node lines and before the edges.
+    expect(lines.findIndex((l) => l.startsWith("  click "))).toBeLessThan(
+      lines.findIndex((l) => l.includes("-->")),
+    );
+  });
+
+  it("uses the scene's own project, and keeps the authority empty when it has none", () => {
+    const mermaid = exportMermaid(graph);
+    expect(mermaid).toContain('  click n_db "docent:///storage/postgres#n_wal"');
+    // A link that names its project needs no context at all.
+    expect(mermaid).toContain("  %% link (declared): docent://Security/auth/sessions");
+  });
+
+  it("the sidecar carries the object, provenance on it", () => {
+    const parsed = JSON.parse(exportSidecar(graph, { project: "Platform" }));
+    expect(parsed.nodes.find((n: { id: string }) => n.id === "n_db").link).toEqual({
+      scene: "storage/postgres",
+      project: "Platform",
+      at: "n_wal",
+      provenance: "declared",
+    });
+    expect(parsed.frames.find((f: { id: string }) => f.id === "f_core").link).toEqual({
+      scene: "core/overview",
+      project: "Platform",
+      provenance: "declared",
+    });
+    const session = parsed.edges.find((e: { id: string }) => e.id === "e_session");
+    expect(session.link).toEqual({
+      scene: "auth/sessions",
+      project: "Security",
+      provenance: "declared",
+    });
+    // How the arrow found its ends is a different fact under the same word.
+    expect(session.provenance.link).toBe("inferred");
+    // With no project to default to, the link says only what the author did.
+    const bare = JSON.parse(exportSidecar(graph));
+    expect(bare.nodes.find((n: { id: string }) => n.id === "n_db").link).toEqual({
+      scene: "storage/postgres",
+      at: "n_wal",
+      provenance: "declared",
+    });
+  });
+
+  it("adds nothing else, and a scene with no links exports what it always did", () => {
+    const plain = exportScene(snapshotFromSceneJSON(demoJSON));
+    expect(plain.mermaid).toBe(readFileSync(join(FIXTURES, "golden", "demo.mmd"), "utf8"));
+    expect(plain.sidecar).toBe(readFileSync(join(FIXTURES, "golden", "demo.docent.json"), "utf8"));
+    expect(plain.mermaid).not.toContain("click ");
+    expect(plain.sidecar).not.toContain('"scene"');
+    // The drawing itself is untouched by the declaration.
+    expect(
+      exportMermaid(graph, { project: "Platform" }).replace(/^ *(?:click |%% link ).*\n/gm, ""),
+    ).toBe(plain.mermaid);
+  });
+
+  it("stays deterministic with them (I3)", () => {
+    expect(exportMermaid(graph, { project: "Platform" })).toBe(exportMermaid(graph, { project: "Platform" }));
+    expect(exportSidecar(graph, { project: "Platform" })).toBe(exportSidecar(graph, { project: "Platform" }));
   });
 });

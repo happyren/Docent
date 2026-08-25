@@ -10,6 +10,7 @@
 import type {
   LegendRule,
   Scenario,
+  SceneLink,
   SceneSnapshot,
   SnapshotElement,
 } from "../adapter/snapshot";
@@ -31,6 +32,11 @@ export interface GraphNode {
   /** Declared pseudocode/rules (D42). */
   logic: string | null;
   detailFrameId: string | null;
+  /**
+   * The scene this component points at (D95), declared by the author: the
+   * drill affordance dives on `detailFrameId` and links on this one.
+   */
+  link: SceneLink | null;
   /**
    * Set when this node stands for a grouped composite (D22) — a library
    * icon drawn from many primitives reads as ONE component. `members` is
@@ -75,6 +81,8 @@ export interface GraphEdge {
   /** Declared intents of the edge (D41) and its logic (D42). */
   intents: string[];
   logic: string | null;
+  /** The scene this edge points at (D95) — an arrow tells a story too. */
+  link: SceneLink | null;
   style: GraphNode["style"];
 }
 
@@ -84,6 +92,8 @@ export interface GraphFrame {
   name: string;
   order: number | null;
   narrative: string | null;
+  /** The scene this frame points at (D95). */
+  link: SceneLink | null;
   bounds: GraphNode["bounds"];
 }
 
@@ -405,6 +415,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       name: el.name ?? "",
       order: el.docent.order,
       narrative: el.docent.narrative,
+      link: el.docent.link,
       bounds: boundsOf(el),
     }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -426,6 +437,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         parts.map((p) => labelFor(p, byId)).find((l) => l !== null) ??
         null;
       const detailSource = parts.find((p) => p.docent.detailFrameId !== null);
+      const linkSource = parts.find((p) => p.docent.link !== null);
       const tags = [...new Set(parts.flatMap((p) => p.docent.tags))].sort();
       const intents = parts.flatMap((p) => p.docent.intents);
       const note = intents[0] ?? null;
@@ -445,6 +457,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         detailFrameId: detailSource?.docent.detailFrameId
           ? (graphId.get(detailSource.docent.detailFrameId) ?? null)
           : null,
+        link: linkSource?.docent.link ?? null,
         composite: composite
           ? { members: parts.length, provenance: composite.provenance }
           : null,
@@ -515,6 +528,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
         frameId: el.frameId ? (graphId.get(el.frameId) ?? null) : null,
         intents: el.docent.intents,
         logic: el.docent.logic,
+        link: el.docent.link,
         style: styleOf(el),
       };
     })

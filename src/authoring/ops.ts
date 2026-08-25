@@ -7,11 +7,12 @@
  * say what it would change before it does; `lint` is the craft check.
  * Pure and deterministic given the id source (I3).
  */
-import type { LegendRule, Scenario, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
+import type { LegendRule, Scenario, SceneLink, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
 import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle, WriteSymbol } from "../adapter/excalidraw";
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
+import { isScenePath, SCENE_PATH_ERROR, segmentsOf } from "../portfolio/tree";
 import { GENRE_IDS, genreFindings, genreOf, scenarioFindings, type GenreProfile } from "./genre";
 import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, laneLayout, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement, type LayoutOptions } from "./layout";
 import {
@@ -58,6 +59,13 @@ export interface AddNode {
   tags?: string[];
   intents?: string[];
   logic?: string;
+  /**
+   * Another scene this component points at (D95, D97): link when it is
+   * another diagram's story, `add_detail_layer` when it is this one going
+   * deeper. Only the shape is checked here — whether the target exists is
+   * `validate`'s question, asked where the store can answer it.
+   */
+  link?: SceneLink;
   /** Place it after this component (id or ref) — right of it, same row. */
   after?: string;
   /** Discouraged: a raw look. The legend and house style decide otherwise. */
@@ -87,6 +95,8 @@ export interface Update {
   addIntents?: string[];
   logic?: string | null;
   narrative?: string | null;
+  /** Point at another scene (D95, D97); null clears the link, absent keeps it. */
+  link?: SceneLink | null;
   name?: string;
   order?: number | null;
   /** Move a component into a frame (id or ref), or out with null. */
@@ -166,11 +176,36 @@ export interface DefineScenario {
 export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout | UseGenre | DefineScenario;
 
 /**
+ * The meaning a write carries, plus the scene link (D95): the link travels
+ * the same path intents, logic and the detail pointer take, so one writer
+ * still stores all of it. Named fields are set, null clears, absent keeps.
+ */
+export interface LinkMeaning extends WriteMeaning {
+  link?: SceneLink | null;
+}
+
+export interface LinkShape extends Omit<WriteShape, "meaning"> {
+  meaning: LinkMeaning | null;
+}
+
+export interface LinkSymbol extends Omit<WriteSymbol, "meaning"> {
+  meaning: LinkMeaning | null;
+}
+
+export interface LinkPatch extends Omit<WritePatch, "meaning"> {
+  meaning?: LinkMeaning;
+}
+
+/**
  * A write, and what rides beside the legend on its carrier (D87, D89):
  * the scene's genre and its scenarios. Optional additions, so a
- * `MeaningWrite` is a `SceneWrite` everywhere one is asked for.
+ * `MeaningWrite` is a `SceneWrite` everywhere one is asked for — and the
+ * elements it makes or patches may carry a scene link (D95).
  */
 export interface MeaningWrite extends SceneWrite {
+  shapes?: LinkShape[];
+  symbols?: LinkSymbol[];
+  patches?: LinkPatch[];
   /** The genre this write records; absent leaves what the scene has. */
   genre?: string;
   /** The scenarios this write records, whole, in authored order. */
@@ -228,6 +263,39 @@ export function idSource(seed?: number): () => string {
 
 const clean = (s: string | undefined | null) => (s ?? "").replace(/\s+/g, " ").trim();
 
+/** The store's own refusal for a project name, said before the round trip. */
+const PROJECT_NAME_ERROR =
+  "invalid project name — use letters, digits, spaces, - or _ (max 64, no leading symbol)";
+
+/**
+ * A scene link's SHAPE (D97): D92's one rule for the path, the store's one
+ * rule for the project, and an arrival point that is either a component id
+ * or nothing at all. Existence is not asked here — a planner that listed
+ * the store would refuse a link to a scene about to be created, and the
+ * lint is where a stale link is caught (D97).
+ */
+function checkLink(link: SceneLink, at: string, problems: string[]): SceneLink | null {
+  const scene = clean(link.scene);
+  if (!isScenePath(scene)) {
+    problems.push(`${at}: ${SCENE_PATH_ERROR}`);
+    return null;
+  }
+  const project = clean(link.project);
+  if (link.project !== undefined && (!isScenePath(project) || segmentsOf(project).length !== 1)) {
+    problems.push(`${at}: ${PROJECT_NAME_ERROR}`);
+    return null;
+  }
+  const point = clean(link.at);
+  if (link.at !== undefined && !point) {
+    problems.push(`${at}: link.at is empty — name the component to arrive on, or leave it out`);
+    return null;
+  }
+  return { scene, ...(project ? { project } : {}), ...(point ? { at: point } : {}) };
+}
+
+/** A link as a note says it: the project when it names one, then the path. */
+const linkNote = (link: SceneLink) => `${link.project ? `${link.project}/` : ""}${link.scene}`;
+
 /** How a drawn element's type sizes a label: anything else takes a box's room (D80). */
 const drawnShape = (type: string): Shape => (type === "ellipse" || type === "diamond" ? type : "rectangle");
 
@@ -268,7 +336,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   const profile: GenreProfile | null = adopted ? genreOf(adopted.genre) : genreOf(graph.genre);
   const posture = profile?.posture ?? "map";
 
-  const write: Required<Pick<SceneWrite, "shapes" | "symbols" | "arrows" | "frames" | "patches" | "remove">> = {
+  const write: Required<Pick<MeaningWrite, "shapes" | "symbols" | "arrows" | "frames" | "patches" | "remove">> = {
     shapes: [],
     symbols: [],
     arrows: [],
@@ -687,16 +755,23 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         );
         noteGrow(frameId, box);
         const id = nextId();
-        const meaning: WriteMeaning = {};
+        const meaning: LinkMeaning = {};
         if (tags.length) meaning.tags = tags;
         if (op.intents?.length) meaning.intents = op.intents.map(clean).filter(Boolean);
         if (op.logic) meaning.logic = op.logic;
+        if (op.link) {
+          const link = checkLink(op.link, at, problems);
+          if (link) {
+            meaning.link = link;
+            notes.push(`${label}: linked to ${linkNote(link)}`);
+          }
+        }
         if (placement) {
           // The carrier's box is the icon's; arrows meet the drawing, not
           // the caption's room (D83). The label rides where the library put
           // the caption it replaces, wrapped to the icon's width.
           const icon = { x: box.x + placement.icon.x, y: box.y + placement.icon.y, width: placement.icon.width, height: placement.icon.height };
-          const symbol: WriteSymbol = {
+          const symbol: LinkSymbol = {
             id,
             symbol: placement.entry.symbol,
             library: placement.entry.library,
@@ -717,7 +792,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           created.set(id, { ...box, type: "rectangle", frameId, label, kind: `symbol:${placement.entry.symbol}`, symbol: placement.entry.symbol, port: icon });
           notes.push(`${label}: drawn as ${placement.entry.name} (${placement.entry.symbol})`);
         } else {
-          const node: WriteShape = {
+          const node: LinkShape = {
             id,
             type: shape,
             ...box,
@@ -772,8 +847,8 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         const target = resolve(op.id, at, ["node", "edge", "frame"]);
         if (!target) break;
         const kindOfTarget = createdFrames.has(target) ? "frame" : created.get(target)?.type === "arrow" ? "edge" : sourceOf(graph, op.id)?.kind ?? "node";
-        const patch: WritePatch = { id: target };
-        const meaning: WriteMeaning = {};
+        const patch: LinkPatch = { id: target };
+        const meaning: LinkMeaning = {};
         if (op.label !== undefined) {
           if (kindOfTarget === "frame") problems.push(`${at}: a frame has a name, not a label`);
           else patch.label = clean(op.label);
@@ -799,6 +874,19 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           else meaning.narrative = op.narrative;
         }
         if (op.order !== undefined) meaning.order = op.order;
+        if (op.link !== undefined) {
+          const about = clean(patch.label ?? current?.label) || op.id;
+          if (op.link === null) {
+            meaning.link = null;
+            notes.push(`${about}: link cleared`);
+          } else {
+            const link = checkLink(op.link, at, problems);
+            if (link) {
+              meaning.link = link;
+              notes.push(`${about}: linked to ${linkNote(link)}`);
+            }
+          }
+        }
         // A placed symbol wears the library's drawing, not a style (D83):
         // nothing a kind or a tag would paint has anywhere to go on it.
         const symbolTarget = symbolNode(target);
@@ -1548,10 +1636,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
-  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], legendSample: false, refine: null, composite: {}, symbol: null };
+  return { detailFrameId: null, link: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], legendSample: false, refine: null, composite: {}, symbol: null };
 }
 
-function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
+function docentFromMeaning(meaning: LinkMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
   const next = { ...base };
   if (!meaning) return next;
   if (meaning.tags !== undefined) next.tags = meaning.tags;
@@ -1563,6 +1651,7 @@ function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: Snaps
   if (meaning.narrative !== undefined) next.narrative = meaning.narrative;
   if (meaning.order !== undefined) next.order = meaning.order;
   if (meaning.detailFrameId !== undefined) next.detailFrameId = meaning.detailFrameId;
+  if (meaning.link !== undefined) next.link = meaning.link;
   return next;
 }
 

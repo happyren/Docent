@@ -46,8 +46,22 @@ export interface Scenario {
   path: string[];
 }
 
+/**
+ * A scene this element points at (D95): another drawing's story, not a
+ * deeper tier of this one. `scene` is a path (D92), `project` defaults to
+ * the scene's own, and `at` is the stable id (I6) of the component to
+ * arrive focused on.
+ */
+export interface SceneLink {
+  scene: string;
+  project?: string;
+  at?: string;
+}
+
 export interface DocentElementData {
   detailFrameId: string | null;
+  /** Declared scene link (D95) — where this element goes, not what it holds. */
+  link: SceneLink | null;
   tags: string[];
   /**
    * The first declared intent — kept as its own field because a single
@@ -227,6 +241,21 @@ export function parseScenarios(v: unknown): Scenario[] {
   return out;
 }
 
+/**
+ * The scene link on an element (D95). A link with no path is no link:
+ * anything that cannot be followed reads as nothing rather than as a
+ * half-target the reader would chase (I5).
+ */
+export function parseSceneLink(v: unknown): SceneLink | null {
+  if (typeof v !== "object" || v === null) return null;
+  const raw = v as Record<string, unknown>;
+  const scene = cleaned(raw.scene);
+  if (!scene) return null;
+  const project = cleaned(raw.project);
+  const at = cleaned(raw.at);
+  return { scene, ...(project ? { project } : {}), ...(at ? { at } : {}) };
+}
+
 function parseCompositeFlags(v: unknown): Record<string, boolean> {
   if (typeof v !== "object" || v === null) return {};
   const out: Record<string, boolean> = {};
@@ -239,6 +268,7 @@ function parseCompositeFlags(v: unknown): Record<string, boolean> {
 function parseDocent(customData: unknown): DocentElementData {
   const empty: DocentElementData = {
     detailFrameId: null,
+    link: null,
     tags: [],
     note: null,
     intents: [],
@@ -280,6 +310,7 @@ function parseDocent(customData: unknown): DocentElementData {
   const intents = listed.length ? listed : note ? [note] : [];
   return {
     detailFrameId: detail ? asString(detail.frameId) : null,
+    link: parseSceneLink(d.link),
     refine: refine && (refine.to || refine.from) ? refine : null,
     composite: parseCompositeFlags(d.composite),
     symbol: asString(d.symbol),
