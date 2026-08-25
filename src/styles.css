@@ -1095,6 +1095,46 @@ body {
   resize: vertical;
 }
 
+/* The scene link on the selected element (D95, D97) and the way back (D96). */
+.docent-link-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.docent-link-target {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--docent-fg);
+}
+
+.docent-link-current button {
+  background: #26262c;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.docent-link-problem {
+  color: var(--docent-accent);
+}
+
+.docent-chip-back {
+  background: #dbeafe;
+  border-color: #bcd7fb;
+  color: #17457f;
+}
+
+.docent-chip-back:hover {
+  background: #c9e0fd;
+}
+
 /* The Plugins panel (S17, S18). */
 .docent-plugins {
   width: min(800px, 94vw);

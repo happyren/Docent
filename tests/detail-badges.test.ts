@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { snapshotFromRawElements } from "../src/adapter/snapshot";
-import { detailBadges } from "../src/scene/detailBadges";
+import { detailBadges, linkBadges } from "../src/scene/detailBadges";
 
 const base = {
   angle: 0,
@@ -136,5 +136,116 @@ describe("detail badges", () => {
     const vast = badges.find((b) => b.diveElementId === "vast");
     expect(tiny?.size).toBe(12);
     expect(vast?.size).toBe(22);
+  });
+});
+
+describe("link markers (D96)", () => {
+  it("marks a component that goes elsewhere, and only that one", () => {
+    const badges = linkBadges(
+      snapshotFromRawElements([
+        {
+          ...base,
+          id: "orders",
+          type: "rectangle",
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 100,
+          customData: {
+            docent: { link: { scene: "payments/events", project: "Billing", at: "n_hub" } },
+          },
+        },
+        { ...base, id: "plain", type: "rectangle", x: 400, y: 100, width: 200, height: 100 },
+      ]),
+    );
+    expect(badges).toHaveLength(1);
+    expect(badges[0].elementId).toBe("orders");
+    expect(badges[0].link).toEqual({
+      scene: "payments/events",
+      project: "Billing",
+      at: "n_hub",
+    });
+    expect(badges[0].bounds).toEqual({ x: 100, y: 100, width: 200, height: 100 });
+    expect(badges[0].size).toBe(22);
+  });
+
+  it("reads a half-target as no link at all, so nothing is marked (I5)", () => {
+    const badges = linkBadges(
+      snapshotFromRawElements([
+        {
+          ...base,
+          id: "half",
+          type: "rectangle",
+          x: 0,
+          y: 0,
+          width: 120,
+          height: 80,
+          customData: { docent: { link: { project: "Billing", at: "n_hub" } } },
+        },
+      ]),
+    );
+    expect(badges).toHaveLength(0);
+  });
+
+  it("a component that goes deeper AND elsewhere wears both markers", () => {
+    const snapshot = snapshotFromRawElements([
+      frame,
+      {
+        ...base,
+        id: "broker",
+        type: "rectangle",
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 100,
+        customData: {
+          docent: { detail: { frameId: "f1" }, link: { scene: "payments/events" } },
+        },
+      },
+    ]);
+    const dives = detailBadges(snapshot);
+    const links = linkBadges(snapshot);
+    expect(dives.map((b) => b.diveElementId)).toEqual(["broker"]);
+    expect(links.map((b) => b.elementId)).toEqual(["broker"]);
+    // One graph node, so one id and one chip: the two markers differ only
+    // in the corner OverlayLayer puts them on.
+    expect(links[0].id).toBe(dives[0].id);
+    expect(links[0].size).toBe(dives[0].size);
+  });
+
+  it("gives a composite one marker off whichever member declares it (D22)", () => {
+    const badges = linkBadges(
+      snapshotFromRawElements([
+        {
+          ...base,
+          id: "i1",
+          type: "rectangle",
+          x: 0,
+          y: 0,
+          width: 80,
+          height: 80,
+          groupIds: ["g"],
+          customData: { docent: { composite: { g: true } } },
+        },
+        {
+          ...base,
+          id: "i2",
+          type: "line",
+          x: 10,
+          y: 10,
+          width: 60,
+          height: 60,
+          groupIds: ["g"],
+          points: [
+            [0, 0],
+            [60, 60],
+          ],
+          customData: { docent: { composite: { g: true }, link: { scene: "aws/lambda notes" } } },
+        },
+      ]),
+    );
+    expect(badges).toHaveLength(1);
+    expect(badges[0].elementId).toBe("i1");
+    expect(badges[0].link).toEqual({ scene: "aws/lambda notes" });
   });
 });

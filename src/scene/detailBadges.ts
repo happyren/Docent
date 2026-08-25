@@ -4,8 +4,11 @@
  * composite (D22) carries ONE badge on the whole glyph and a dangling
  * detail link (deleted frame) reads as no badge — the same validation the
  * drill navigation applies.
+ *
+ * The link marker (D96) is derived the same way, from the same machinery:
+ * "goes elsewhere" is a second kind of marker, not a second mechanism.
  */
-import type { SceneSnapshot } from "../adapter/snapshot";
+import type { SceneLink, SceneSnapshot } from "../adapter/snapshot";
 import { buildSceneGraph } from "./graph";
 
 export interface DetailBadge {
@@ -21,6 +24,13 @@ export interface DetailBadge {
 
 const BADGE_SIZE = 22;
 const BADGE_MIN = 12;
+
+/** One chip's edge, clamped so small shapes keep theirs and big ones stay subtle. */
+const chipSize = (bounds: DetailBadge["bounds"]): number =>
+  Math.min(
+    BADGE_SIZE,
+    Math.max(BADGE_MIN, Math.min(bounds.width, bounds.height) * 0.4),
+  );
 
 export function detailBadges(snapshot: SceneSnapshot): DetailBadge[] {
   const graph = buildSceneGraph(snapshot);
@@ -41,22 +51,46 @@ export function detailBadges(snapshot: SceneSnapshot): DetailBadge[] {
       );
       if (carrier) diveElementId = carrier.id;
     }
-    const size = Math.min(
-      BADGE_SIZE,
-      Math.max(
-        BADGE_MIN,
-        Math.min(node.bounds.width, node.bounds.height) * 0.4,
-      ),
-    );
     badges.push({
       id: node.id,
       diveElementId,
       label: node.label,
       bounds: node.bounds,
-      size,
+      size: chipSize(node.bounds),
     });
   }
   return badges;
+}
+
+/**
+ * Link markers (D96): "goes elsewhere", visible the way "goes deeper" is.
+ * Derived exactly as the detail badge is — off the graph, so a composite
+ * carries ONE marker however many members declare it — and sized by the
+ * same chip. A component may wear both; they sit on opposite corners.
+ */
+export interface LinkBadge {
+  /** Graph node id — a stable render key (I6). */
+  id: string;
+  /** The component the follow acts on, in the ids the shell speaks. */
+  elementId: string;
+  label: string | null;
+  /** Where it goes, as the author declared it. */
+  link: SceneLink;
+  bounds: DetailBadge["bounds"];
+  size: number;
+}
+
+export function linkBadges(snapshot: SceneSnapshot): LinkBadge[] {
+  return buildSceneGraph(snapshot)
+    .nodes.filter((node) => node.link !== null)
+    .map((node) => ({
+      id: node.id,
+      elementId: node.sourceId,
+      label: node.label,
+      link: node.link!,
+      bounds: node.bounds,
+      size: chipSize(node.bounds),
+    }));
 }
 
 /** A `{ }` mark for every component that carries logic (D42). */
@@ -75,10 +109,7 @@ export function logicMarks(snapshot: SceneSnapshot): LogicMark[] {
     .map((node) => ({
       id: node.id,
       bounds: node.bounds,
-      size: Math.min(
-        BADGE_SIZE,
-        Math.max(BADGE_MIN, Math.min(node.bounds.width, node.bounds.height) * 0.4),
-      ),
+      size: chipSize(node.bounds),
       preview: (node.logic ?? "").split("\n")[0].slice(0, 60),
     }));
 }

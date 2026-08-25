@@ -4,13 +4,42 @@
  * transports around it are tested elsewhere — this is the part that decides
  * what an agent may actually do.
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * The store, scripted (D97): `validate` asks it what scenes a project holds
+ * and what a target scene still carries, and nothing else here goes near
+ * the network. Hoisted so the mock factory — which runs at import time —
+ * can see it.
+ */
+const store = vi.hoisted(() => ({
+  /** project → scene paths, or absent for a project nobody can list. */
+  scenes: new Map<string, string[]>(),
+  /** "project/path" → the scene file, for the `at` question. */
+  files: new Map<string, string>(),
+}));
+vi.mock("../src/portfolio/client", () => ({
+  listProjects: async () =>
+    [...store.scenes.keys()].map((id) => ({ id, scenes: 0, updatedAt: null })),
+  listScenes: async (project: string) => {
+    const names = store.scenes.get(project);
+    if (!names) throw new Error(`no such project: ${project}`);
+    return names.map((name) => ({ name, updatedAt: null, size: 0 }));
+  },
+  loadScene: async (project: string, scene: string) => {
+    const text = store.files.get(`${project}/${scene}`);
+    if (text === undefined) throw new Error(`no such scene: ${project}/${scene}`);
+    return text;
+  },
+}));
+
 import { snapshotFromRawElements, type SceneSnapshot } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import type { CommandAPI } from "../src/command/api";
 import { GENRES } from "../src/authoring/genre";
-import type { Op } from "../src/authoring/ops";
+import type { LintFinding, Op } from "../src/authoring/ops";
 import { execute, type AgentShellHooks, WALL_THRESHOLD } from "../src/agent/execute";
+import { INSTRUCTIONS } from "../server/mcp-core.mjs";
 
 const base = {
   angle: 0,
@@ -614,6 +643,157 @@ describe("scenario replay (D89)", () => {
       hits: { type: string; matched: string[] }[];
     };
     expect(byName.hits.find((h) => h.type === "scenario")?.matched).toEqual(["scenario"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validate checks a link's target exists (A23: D97)
+// ---------------------------------------------------------------------------
+
+/** A map whose Orders component points at another diagram's story (D95). */
+const linked = (link: Record<string, unknown>) =>
+  snapshotFromRawElements([
+    {
+      ...base,
+      id: "orders",
+      type: "rectangle",
+      x: 0,
+      y: 0,
+      width: 160,
+      height: 80,
+      boundElements: [{ id: "orders_t", type: "text" }],
+      customData: { docent: { link } },
+    },
+    {
+      ...base,
+      id: "orders_t",
+      type: "text",
+      x: 10,
+      y: 20,
+      width: 140,
+      height: 20,
+      text: "Orders",
+      containerId: "orders",
+      fontFamily: 5,
+      fontSize: 20,
+    },
+  ]);
+
+/** A scene file holding one component, for the `at` question. */
+const sceneFile = (id: string) =>
+  JSON.stringify({
+    elements: [
+      { ...base, id, type: "rectangle", x: 0, y: 0, width: 160, height: 80 },
+    ],
+  });
+
+/** A shell with a store behind it — what makes the question askable. */
+const storeShell = (scene: { project: string; scene: string } | null) => {
+  const { shell } = fakeShell(scene ? { scene } : {});
+  shell.authoring = {
+    saveScene: async () => ({ project: "work", scene: "here" }),
+    createScene: async () => {},
+    binding: async () => null,
+    createBranch: async () => {},
+  };
+  return shell;
+};
+
+const findingsOf = async (shell: AgentShellHooks, snapshot: SceneSnapshot) =>
+  (
+    (await execute(fakeCommands(snapshot), shell, "validate", {})) as {
+      findings: LintFinding[];
+      summary: string;
+    }
+  );
+
+describe("validate checks where a link goes (D97)", () => {
+  beforeEach(() => {
+    store.scenes.clear();
+    store.files.clear();
+    store.scenes.set("work", ["payments/events", "here"]);
+    store.files.set("work/payments/events", sceneFile("n_hub"));
+  });
+
+  it("warns on a target the store does not hold, naming the path", async () => {
+    const report = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "payments/moved-away" }),
+    );
+    expect(report.findings).toContainEqual({
+      level: "warn",
+      about: "orders",
+      message: '"Orders": links to work/payments/moved-away — no such scene',
+    });
+    // The sentence the lint reads by counts what the lint now lists.
+    expect(report.summary).toBe("1 warning, 0 notes");
+  });
+
+  it("says nothing when the target is there", async () => {
+    const report = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "payments/events" }),
+    );
+    expect(report.findings).toEqual([]);
+    expect(report.summary).toBe("clean");
+  });
+
+  it("notes an arrival point the target no longer holds, and keeps quiet about one it does", async () => {
+    const gone = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "payments/events", at: "n_settlement" }),
+    );
+    expect(gone.findings).toEqual([
+      {
+        level: "info",
+        about: "orders",
+        message: '"Orders": links to work/payments/events at a component it no longer holds',
+      },
+    ]);
+    expect(gone.summary).toBe("0 warnings, 1 note");
+
+    const held = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "payments/events", at: "n_hub" }),
+    );
+    expect(held.findings).toEqual([]);
+  });
+
+  it("reads a link's project as the scene's own, and follows one that names another", async () => {
+    store.scenes.set("archive", ["old/ledger"]);
+    const report = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "old/ledger", project: "archive" }),
+    );
+    expect(report.findings).toEqual([]);
+  });
+
+  it("asks nothing without a store, and nothing about a project it cannot list", async () => {
+    // No authoring surface: the pure lint has said all it can (D97).
+    const { shell } = fakeShell({ scene: { project: "work", scene: "here" } });
+    const quiet = await findingsOf(shell, linked({ scene: "payments/moved-away" }));
+    expect(quiet.findings).toEqual([]);
+
+    // A listing that cannot be had is not evidence a link is stale.
+    const unlistable = await findingsOf(
+      storeShell({ project: "work", scene: "here" }),
+      linked({ scene: "some/scene", project: "not-a-project" }),
+    );
+    expect(unlistable.findings).toEqual([]);
+
+    // A loose file: a link that names no project resolves to nothing.
+    const loose = await findingsOf(storeShell(null), linked({ scene: "payments/moved-away" }));
+    expect(loose.findings).toEqual([]);
+  });
+});
+
+describe("the instructions state the rule (D95, D97)", () => {
+  it("says dive for depth, link for another diagram's story", () => {
+    expect(INSTRUCTIONS).toMatch(/dive when it is this diagram going deeper/);
+    expect(INSTRUCTIONS).toMatch(/link when it is another diagram's story/);
+    // And where the two halves of D97 live: authoring, and the check.
+    expect(INSTRUCTIONS).toContain("update({id, link:{scene, project?, at?}})");
+    expect(INSTRUCTIONS).toMatch(/validate\(\) checks every target still exists/);
   });
 });
 
