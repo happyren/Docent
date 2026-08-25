@@ -14,7 +14,9 @@
  * the same mechanism a GitHub Enterprise deployment uses.
  *
  * The Rust store's mirror of this suite is `src-tauri/tests/store_github.rs`;
- * the two exist to keep the one contract honest across both implementations.
+ * the two exist to keep the one contract honest across both implementations —
+ * including the nested half of it (D92, D94): create, list, get, move, delete
+ * and a sync round trip, all at a path.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -106,8 +108,10 @@ class MockGitHub {
   pulls = 0;
   /** What `GET /repos/acme/diagrams` calls the repository's default branch. */
   defaultBranch = "main";
-  /** Bumped by every write, so the listing's ETag changes when it should. */
+  /** Bumped by every write, so a caller can tell the content moved. */
   version = 1;
+  /** `GET /git/trees/<sha>?recursive=1` answers `truncated: true` (D94). */
+  truncateTrees = false;
   port = 0;
   objects = 0;
   /**
@@ -157,15 +161,45 @@ class MockGitHub {
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  /** Someone else's commit: a file changes and the listing's ETag moves. */
+  /** Someone else's commit: the file changes and every branch head moves. */
   write(repoPath: string, content: string): void {
     this.files.set(repoPath, content);
-    this.version += 1;
+    this.commitAll();
   }
 
   remove(repoPath: string): void {
     this.files.delete(repoPath);
+    this.commitAll();
+  }
+
+  /**
+   * What a write is on a real repository: a commit, so the ref moves. This
+   * mock keeps one file map for every branch, so the commit lands on all of
+   * them — and the store's listing cache, which keys on the branch head
+   * (D94), sees the content move exactly when it did.
+   */
+  private commitAll(): void {
     this.version += 1;
+    for (const [name, parent] of [...this.branches]) {
+      const tree = this.nextSha("tree");
+      this.trees.set(tree, new Map(this.files));
+      const sha = this.nextSha("commit");
+      this.commits.set(sha, { tree, parents: [parent], message: "someone else" });
+      this.branches.set(name, sha);
+    }
+  }
+
+  /** The tree at a branch's head — what a push builds on top of. */
+  treeOf(branch: string): string {
+    const head = this.branches.get(branch) ?? "";
+    return this.commits.get(head)?.tree ?? `tree-of-${head}`;
+  }
+
+  /** The recursive tree reads a listing makes (D94). */
+  treeReads(): SeenRequest[] {
+    return this.seen.filter(
+      (entry) => entry.method === "GET" && entry.url.includes("/git/trees/"),
+    );
   }
 
   requestsTo(fragment: string): SeenRequest[] {
@@ -366,13 +400,21 @@ class MockGitHub {
       return [201, { sha }];
     }
     if (rest[0] === "trees" && rest.length === 2 && req.method === "GET") {
-      const snapshot = this.trees.get(rest[1].split("?")[0]);
-      if (!snapshot) return notFound;
+      // The seeded head's tree is not one this mock created, and it is the
+      // current content by definition — every other sha is a snapshot.
+      const snapshot = this.trees.get(rest[1].split("?")[0]) ?? this.files;
       return [
         200,
         {
           sha: rest[1],
-          tree: [...snapshot.keys()].map((path) => ({ path, type: "blob", mode: "100644" })),
+          // GitHub truncates a tree it will not answer whole, and says so.
+          truncated: this.truncateTrees,
+          tree: [...snapshot.entries()].map(([path, content]) => ({
+            path,
+            type: "blob",
+            mode: "100644",
+            sha: blobSha(content),
+          })),
         },
       ];
     }
@@ -423,6 +465,12 @@ class MockGitHub {
     };
   }
 
+  /**
+   * One directory of the contents API, ETag and all. Nothing the store does
+   * calls it any more — the listing reads the tree recursively instead (D94)
+   * — and it stays so that a regression back to it is a request this mock
+   * records rather than a silent 404.
+   */
   private get(
     repoPath: string,
     req: http.IncomingMessage,
@@ -508,7 +556,9 @@ const pushWith = (project: string, body: unknown) =>
     body: JSON.stringify(body),
   });
 const baseOf = (project: string, scene: string) =>
-  fetch(`${BASE}/api/projects/${project}/scenes/${scene}/base`);
+  fetch(
+    `${BASE}/api/projects/${project}/scenes/${encodeURIComponent(scene)}/base`,
+  );
 
 type SyncAnswer = {
   branch: string;
@@ -534,6 +584,8 @@ const readSyncFile = async (project: string) =>
   };
 const localFile = (project: string, scene: string) =>
   path.join(dataDir, project, `${scene}.excalidraw`);
+const baseFile = (project: string, scene: string) =>
+  path.join(dataDir, ".docent", "sync", project, "base", `${scene}.excalidraw`);
 
 /**
  * Draft on a branch: the base branch is protected (D30), so every case that
@@ -876,11 +928,11 @@ describe("sync status", () => {
     expect(status.remote).toEqual({ reachable: true, changed: [], removed: [] });
   });
 
-  it("names what the branch did, on one listing call", async () => {
+  it("names what the branch did, on one recursive tree read (D94)", async () => {
     github.write("docs/states/clean.excalidraw", OTHER_SCENE);
     github.write("docs/states/added.excalidraw", SCENE);
     github.remove("docs/states/edited.excalidraw");
-    const before = github.requestsTo("/contents/docs/states").length;
+    const before = github.treeReads().length;
 
     const status = await statusOf("states");
     expect(status.remote.reachable).toBe(true);
@@ -888,11 +940,24 @@ describe("sync status", () => {
     expect(status.remote.changed).toEqual(["added", "clean"]);
     // A scene the branch dropped, which the working copy still has.
     expect(status.remote.removed).toEqual(["edited"]);
-    const listings = github.requestsTo("/contents/docs/states");
-    expect(listings.length - before, "one listing call, and nothing else").toBe(1);
-    // …and it revalidates rather than refetching blind: the previous listing's
-    // ETag rides along, so an unchanged branch costs the rate limit nothing.
-    expect(listings.at(-1)?.ifNoneMatch).toMatch(/listing-/);
+    const reads = github.treeReads();
+    expect(reads.length - before, "one tree read, and nothing else").toBe(1);
+    // The whole bound subtree, not one directory of it: the subtree was
+    // always the contract with the repository (D94).
+    expect(reads.at(-1)?.url).toContain("recursive=1");
+
+    // …and while the branch head has not moved, the same answer costs one ref
+    // read and no tree at all — the caching the ETag used to buy.
+    const again = await statusOf("states");
+    expect(again.remote.changed).toEqual(["added", "clean"]);
+    expect(github.treeReads().length - before, "the head has not moved").toBe(1);
+    // …until it does, and then the listing is read again.
+    github.write("docs/states/added.excalidraw", THIRD_SCENE);
+    expect((await statusOf("states")).remote.changed).toEqual(["added", "clean"]);
+    expect(github.treeReads().length - before, "the head moved").toBe(2);
+
+    // The contents API is not part of sync any more, on any route.
+    expect(github.requestsTo("/contents")).toEqual([]);
   });
 
   it("says plainly when the remote cannot be reached, and still answers locally", async () => {
@@ -930,23 +995,35 @@ describe("pull", () => {
     await boundProject("legacy");
     github.write("docs/legacy/only there.excalidraw", OTHER_SCENE);
     github.write("docs/legacy/README.md", "not a scene");
-    github.write("docs/legacy/nested/deep.excalidraw", SCENE);
+    github.write("docs/legacy/nested/deep.excalidraw", THIRD_SCENE);
+    // Nine segments: deeper than a scene path goes (D92), so the store leaves
+    // it to the repository rather than pretending it can address it.
+    github.write("docs/legacy/a/b/c/d/e/f/g/h/i.excalidraw", SCENE);
 
     const res = await pull("legacy");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
-      updated: ["only there"],
+      // The bound path is a subtree, so a scene in a folder is a scene (D94).
+      updated: ["nested/deep", "only there"],
       removed: [],
       kept: ["only here"],
       conflicts: [],
     });
-    // The remote scene arrived, the local one stayed, and nothing outside the
-    // bound directory's own .excalidraw files was touched.
+    // The remote scenes arrived — the nested one at its own path — the local
+    // one stayed, and nothing outside the bound subtree's own addressable
+    // .excalidraw files was touched.
     expect(await readFile(localFile("legacy", "only there"), "utf8")).toBe(OTHER_SCENE);
+    expect(await readFile(localFile("legacy", "nested/deep"), "utf8")).toBe(THIRD_SCENE);
     expect(await readFile(localFile("legacy", "only here"), "utf8")).toBe(SCENE);
+    await expect(readFile(localFile("legacy", "a/b/c/d/e/f/g/h/i"), "utf8")).rejects.toThrow();
     const listed = (await (await listScenes("legacy")).json()) as { name: string }[];
-    expect(listed.map((scene) => scene.name)).toEqual(["only here", "only there"]);
+    // Folders first, siblings in the order flat names always had (D92).
+    expect(listed.map((scene) => scene.name)).toEqual([
+      "nested/deep",
+      "only here",
+      "only there",
+    ]);
   });
 
   it("adopts a local file that already matches the remote", async () => {
@@ -1228,6 +1305,10 @@ describe("push", () => {
     expect((await deleteScene("landing", "removed")).status).toBe(200);
 
     const commitsBefore = github.requestsTo("/git/commits").filter((r) => r.method === "POST");
+    // What the branch is at right now: everything the push builds is measured
+    // against this head, and someone else's commits have moved it already.
+    const head = github.branches.get("docent/landing");
+    const baseTree = github.treeOf("docent/landing");
     const res = await push("landing");
     expect(res.status, await res.clone().text()).toBe(200);
     const answer = (await res.json()) as {
@@ -1252,13 +1333,13 @@ describe("push", () => {
       parents: string[];
     };
     expect(commit.message).toBe("docent: update landing (3 scene(s))");
-    expect(commit.parents).toEqual(["sha-main"]);
+    expect(commit.parents).toEqual([head]);
 
     const tree = github.bodyOf("/git/trees", "POST") as {
       base_tree: string;
       tree: { path: string; mode: string; type: string; sha: string | null }[];
     };
-    expect(tree.base_tree).toBe("tree-of-sha-main");
+    expect(tree.base_tree).toBe(baseTree);
     expect(tree.tree).toEqual([
       {
         path: "docs/landing/added.excalidraw",
@@ -1423,6 +1504,183 @@ describe("push", () => {
     expect(await res.json()).toEqual({
       error: "no GitHub binding for project: plain",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// scenes at paths (D92): the subtree is what syncs (D94)
+// ---------------------------------------------------------------------------
+
+describe("a scene at a path", () => {
+  it("pushes to its place in the tree, and keeps its base copy nested", async () => {
+    await boundProject("subtree");
+    await draftOn("subtree", "docent/subtree");
+    // A scene in a folder and one at the project root, side by side.
+    expect((await putScene("subtree", "checkout/api/v2", SCENE)).status).toBe(200);
+    expect((await putScene("subtree", "flat", OTHER_SCENE)).status).toBe(200);
+    expect((await statusOf("subtree")).local).toEqual([
+      { name: "checkout/api/v2", state: "new" },
+      { name: "flat", state: "new" },
+    ]);
+
+    const res = await push("subtree");
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect((await res.json()) as { pushed: string[] }).toMatchObject({
+      pushed: ["checkout/api/v2", "flat"],
+    });
+    // Each scene lands at its own path under the bound prefix — the tree the
+    // repository already is (D94).
+    const tree = github.bodyOf("/git/trees", "POST") as {
+      tree: { path: string; sha: string | null }[];
+    };
+    expect(tree.tree.map((entry) => entry.path)).toEqual([
+      "docs/subtree/checkout/api/v2.excalidraw",
+      "docs/subtree/flat.excalidraw",
+    ]);
+    expect(github.files.get("docs/subtree/checkout/api/v2.excalidraw")).toBe(SCENE);
+
+    // The sync state keys by path, and the "before" copy sits at that path
+    // under the `.docent/` exception — never inside the project.
+    const stored = (await readSyncFile("subtree")).scenes["checkout/api/v2"];
+    expect(stored).toEqual({
+      baseSha: blobSha(SCENE),
+      baseHash: contentHash(SCENE),
+    });
+    expect(await readFile(baseFile("subtree", "checkout/api/v2"), "utf8")).toBe(SCENE);
+    expect(await (await baseOf("subtree", "checkout/api/v2")).text()).toBe(SCENE);
+    expect((await statusOf("subtree")).remote).toEqual({
+      reachable: true,
+      changed: [],
+      removed: [],
+    });
+  });
+
+  it("names a conflict by path, and resolves by it", async () => {
+    // Both sides move the same nested scene.
+    expect((await putScene("subtree", "checkout/api/v2", THIRD_SCENE)).status).toBe(200);
+    github.write("docs/subtree/checkout/api/v2.excalidraw", OTHER_SCENE);
+
+    const pulled = await pull("subtree");
+    expect(await pulled.json()).toEqual({
+      ok: true,
+      updated: [],
+      removed: [],
+      kept: [],
+      conflicts: ["checkout/api/v2"],
+    });
+    expect(stateOf(await statusOf("subtree"), "checkout/api/v2")).toBe("conflicted");
+    // A push over an unanswered question names the path too.
+    const refused = await push("subtree");
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({
+      error: "resolve the conflicted scenes first: checkout/api/v2",
+    });
+
+    const resolved = await resolve("subtree", {
+      scene: "checkout/api/v2",
+      resolution: "take-remote",
+    });
+    expect(resolved.status, await resolved.clone().text()).toBe(200);
+    expect(await readFile(localFile("subtree", "checkout/api/v2"), "utf8")).toBe(OTHER_SCENE);
+    expect(stateOf(await statusOf("subtree"), "checkout/api/v2")).toBe("clean");
+  });
+
+  it("prunes the folders a delete empties, on disk, in the base copies and on the branch", async () => {
+    expect((await deleteScene("subtree", "checkout/api/v2")).status).toBe(200);
+    // The working copy's folders went with the scene; the project stayed.
+    await expect(readdir(path.join(dataDir, "subtree", "checkout"))).rejects.toThrow();
+    expect(await readdir(path.join(dataDir, "subtree"))).toEqual(["flat.excalidraw"]);
+
+    const res = await push("subtree");
+    expect(res.status, await res.clone().text()).toBe(200);
+    expect((await res.json()) as { removedRemotely: string[] }).toMatchObject({
+      removedRemotely: ["checkout/api/v2"],
+    });
+    expect(github.files.has("docs/subtree/checkout/api/v2.excalidraw")).toBe(false);
+    // …and the base copy's folders with it, leaving the flat scene's alone.
+    await expect(
+      readdir(path.join(dataDir, ".docent", "sync", "subtree", "base", "checkout")),
+    ).rejects.toThrow();
+    expect(
+      await readdir(path.join(dataDir, ".docent", "sync", "subtree", "base")),
+    ).toEqual(["flat.excalidraw"]);
+    expect((await readSyncFile("subtree")).scenes["checkout/api/v2"]).toBeUndefined();
+  });
+
+  it("pulls a scene the branch added deep in the tree", async () => {
+    github.write("docs/subtree/billing/2026/q3.excalidraw", THIRD_SCENE);
+    const res = await pull("subtree");
+    expect(await res.json()).toEqual({
+      ok: true,
+      updated: ["billing/2026/q3"],
+      removed: [],
+      kept: [],
+      conflicts: [],
+    });
+    expect(await readFile(localFile("subtree", "billing/2026/q3"), "utf8")).toBe(THIRD_SCENE);
+    // The listing answers relative paths, folders first, flat scenes last.
+    const listed = (await (await listScenes("subtree")).json()) as { name: string }[];
+    expect(listed.map((scene) => scene.name)).toEqual(["billing/2026/q3", "flat"]);
+
+    // …and the remote deleting it takes the local folders with it.
+    github.remove("docs/subtree/billing/2026/q3.excalidraw");
+    expect(await (await pull("subtree")).json()).toMatchObject({
+      removed: ["billing/2026/q3"],
+    });
+    await expect(readdir(path.join(dataDir, "subtree", "billing"))).rejects.toThrow();
+  });
+
+  it("moves a scene between folders as a PUT and a DELETE, and pushes it as a move", async () => {
+    // What the portfolio does to move a scene (D93): write it at the new path,
+    // delete it at the old. The store never sees a "move" verb at all.
+    expect((await putScene("subtree", "archive/flat", OTHER_SCENE)).status).toBe(200);
+    expect((await deleteScene("subtree", "flat")).status).toBe(200);
+    const listed = (await (await listScenes("subtree")).json()) as { name: string }[];
+    expect(listed.map((scene) => scene.name)).toEqual(["archive/flat"]);
+
+    const res = await push("subtree");
+    expect(res.status, await res.clone().text()).toBe(200);
+    // One commit, the new path added and the old one dropped: what Git shows
+    // any move as, and what a teammate reviews on GitHub.
+    const tree = github.bodyOf("/git/trees", "POST") as {
+      tree: { path: string; sha: string | null }[];
+    };
+    expect(tree.tree).toEqual([
+      {
+        path: "docs/subtree/archive/flat.excalidraw",
+        mode: "100644",
+        type: "blob",
+        sha: blobSha(OTHER_SCENE),
+      },
+      {
+        path: "docs/subtree/flat.excalidraw",
+        mode: "100644",
+        type: "blob",
+        sha: null,
+      },
+    ]);
+    expect(github.files.get("docs/subtree/archive/flat.excalidraw")).toBe(OTHER_SCENE);
+    expect(github.files.has("docs/subtree/flat.excalidraw")).toBe(false);
+    expect((await statusOf("subtree")).local).toEqual([
+      { name: "archive/flat", state: "clean" },
+    ]);
+  });
+
+  it("refuses to sync half a tree", async () => {
+    await boundProject("halftree");
+    github.truncateTrees = true;
+    try {
+      const res = await pull("halftree");
+      expect(res.status).toBe(502);
+      expect(await res.json()).toEqual({
+        error:
+          "the repository tree is too large to list in one request — bind a narrower path",
+      });
+    } finally {
+      github.truncateTrees = false;
+    }
+    // With the whole tree answerable again, the same pull works.
+    expect((await pull("halftree")).status).toBe(200);
   });
 });
 
@@ -1655,6 +1913,7 @@ describe("branches and pull requests", () => {
     github.write("docs/drafts/checkout.excalidraw", SCENE);
     expect((await pull("drafts")).status).toBe(200);
 
+    const mainHead = github.branches.get("main");
     const created = await createBranch("drafts", { name: "docent/diagrams-2026-08-20" });
     expect(created.status).toBe(201);
     expect(await created.json()).toEqual({
@@ -1668,7 +1927,7 @@ describe("branches and pull requests", () => {
       .at(-1);
     expect(JSON.parse(ref?.body ?? "{}")).toEqual({
       ref: "refs/heads/docent/diagrams-2026-08-20",
-      sha: "sha-main",
+      sha: mainHead,
     });
 
     // The binding moved, and nothing else about it did.
