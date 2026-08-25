@@ -7,12 +7,13 @@
  * say what it would change before it does; `lint` is the craft check.
  * Pure and deterministic given the id source (I3).
  */
-import type { LegendRule, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
+import type { LegendRule, Scenario, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
 import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle, WriteSymbol } from "../adapter/excalidraw";
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement } from "./layout";
+import { GENRE_IDS, genreFindings, genreOf, scenarioFindings, type GenreProfile } from "./genre";
+import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, laneLayout, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement, type LayoutOptions } from "./layout";
 import {
   absolutePoints,
   arcCorners,
@@ -138,10 +139,46 @@ export interface Layout {
   frame: string | null;
 }
 
-export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout;
+/**
+ * Adopt a genre (D87): the id (or the name) of one of the five. The genre
+ * is recorded beside the legend, its kinds are seeded into the legend it
+ * does not already hold, and everything downstream — the lint, the
+ * layout's posture — reads what was recorded.
+ */
+export interface UseGenre {
+  op: "use_genre";
+  genre: string;
+}
+
+/**
+ * Name a path through the diagram (D89): the edges one request takes, in
+ * the order it takes them. Stored beside the legend, replayed by `flow`
+ * and the guided tour. A name already used is replaced.
+ */
+export interface DefineScenario {
+  op: "define_scenario";
+  name: string;
+  /** Edge ids (or refs from this batch), in the order the story runs. */
+  path: string[];
+  description?: string;
+}
+
+export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout | UseGenre | DefineScenario;
+
+/**
+ * A write, and what rides beside the legend on its carrier (D87, D89):
+ * the scene's genre and its scenarios. Optional additions, so a
+ * `MeaningWrite` is a `SceneWrite` everywhere one is asked for.
+ */
+export interface MeaningWrite extends SceneWrite {
+  /** The genre this write records; absent leaves what the scene has. */
+  genre?: string;
+  /** The scenarios this write records, whole, in authored order. */
+  scenarios?: Scenario[];
+}
 
 export interface Plan {
-  write: SceneWrite;
+  write: MeaningWrite;
   /** Caller refs (`$orders`) and new source ids → the ids the scene will carry. */
   ids: Record<string, string>;
   /** What was decided on the caller's behalf, one line each. */
@@ -218,6 +255,18 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   const touched: string[] = [];
   let legend: LegendRule[] = [...graph.legend];
   let legendChanged = false;
+  // The scene's conventions, as this batch will leave them (D87, D89).
+  let genre: string | null = graph.genre;
+  let genreChanged = false;
+  let scenarios: Scenario[] = [...graph.scenarios];
+  let scenariosChanged = false;
+  // The genre this plan lays out by (D90): what the scene records, or
+  // what a `use_genre` in this very batch establishes — an agent's first
+  // batch adopts a genre and draws in it, and the posture has to hold for
+  // the drawing made in the same breath.
+  const adopted = [...ops].reverse().find((o): o is UseGenre => o.op === "use_genre" && genreOf(o.genre) !== null);
+  const profile: GenreProfile | null = adopted ? genreOf(adopted.genre) : genreOf(graph.genre);
+  const posture = profile?.posture ?? "map";
 
   const write: Required<Pick<SceneWrite, "shapes" | "symbols" | "arrows" | "frames" | "patches" | "remove">> = {
     shapes: [],
@@ -350,61 +399,149 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // Strokes the palette paired with kinds defined in this batch (D77): drawn
   // on the kind's first components, and carried on by the house style after.
   const kindStrokes = new Map<string, string>();
+  /**
+   * A kind's rule in the legend, chosen by the palette (D77): the body of
+   * `define_kind`, standing on its own so a genre seeds its vocabulary
+   * down exactly the path an agent's own call takes (D87). `announce` is
+   * off while a genre seeds — the genre says in one line what it seeded,
+   * rather than a line per kind.
+   */
+  const defineKind = (op: DefineKind, at: string, announce = true): void => {
+    const kind = clean(op.kind);
+    if (!kind) {
+      problems.push(`${at}: kind is empty`);
+      return;
+    }
+    if (legend.some((r) => r.key === "kind" && r.meaning === kind)) {
+      if (announce) notes.push(`${kind} is already in the legend — kept as is`);
+      return;
+    }
+    // A kind may BE a library symbol (D84): the rule matches on the
+    // symbol, the drawn legend shows the icon beside the meaning, and
+    // no colour is picked — the brand chose that already.
+    if (op.symbol) {
+      const wanted = clean(op.symbol).toLowerCase();
+      const entry = symbolEntry(wanted);
+      if (!entry) {
+        problems.push(`${at}: unknown symbol ${op.symbol} — find_symbol first`);
+        return;
+      }
+      legend = [...legend, { attr: "symbol", value: entry.symbol, key: "kind", meaning: kind }];
+      legendChanged = true;
+      if (announce) notes.push(`legend: ${kind} → symbol ${entry.symbol} (${entry.name})`);
+      return;
+    }
+    // Colour means something (D77): a tone or a role picks the hue the
+    // reader already knows, and without either the fill that stands
+    // furthest from every kind the legend draws — with a second channel
+    // once hue alone has stopped separating. A raw style still wins,
+    // field by field, as it always has (D59).
+    const picked = pickKindLook({ kind, tone: op.tone, role: op.role, taken: legend, shape: op.shape });
+    const fill = op.style?.backgroundColor ?? picked.backgroundColor;
+    const shape = op.shape ?? picked.shape;
+    const strokeColor = op.style?.strokeColor ?? picked.strokeColor;
+    const strokeStyle = op.style?.strokeStyle ?? picked.strokeStyle;
+    const fillStyle = op.style?.fillStyle ?? picked.fillStyle;
+    const rule: LegendRule = { attr: "backgroundColor", value: fill, key: "kind", meaning: kind };
+    const also: { attr: LegendRule["attr"]; value: string }[] = [];
+    if (shape) also.push({ attr: "shape", value: shape });
+    // A kind is its fill and shape; the stroke is the tags' channel (D77).
+    // The palette's matching stroke is drawn, not required — only a stroke
+    // the caller named becomes a condition of the match.
+    if (op.style?.strokeColor) also.push({ attr: "strokeColor", value: op.style.strokeColor });
+    else if (strokeColor) kindStrokes.set(kind, strokeColor);
+    if (strokeStyle) also.push({ attr: "strokeStyle", value: strokeStyle });
+    if (fillStyle) also.push({ attr: "fillStyle", value: fillStyle });
+    if (op.style?.strokeWidth) also.push({ attr: "strokeWidth", value: String(op.style.strokeWidth) });
+    if (also.length) rule.also = also;
+    legend = [...legend, rule];
+    legendChanged = true;
+    const chosen = `legend: ${kind} → ${shape ?? "any shape"} with ${fill === "transparent" ? "no fill" : `fill ${fill}`}`;
+    if (announce) notes.push(op.style ? chosen : `${chosen} — ${picked.why}`);
+  };
   for (const [i, op] of ops.entries()) {
     const at = `op ${i + 1} (${op.op})`;
     switch (op.op) {
       case "define_kind": {
-        const kind = clean(op.kind);
-        if (!kind) {
-          problems.push(`${at}: kind is empty`);
+        defineKind(op, at);
+        break;
+      }
+      case "use_genre": {
+        // A genre is a set of conventions, and the legend is where
+        // conventions live (D87): record it beside the rules, and seed the
+        // vocabulary the legend does not already hold. Never delete —
+        // switching genre leaves what was drawn readable.
+        const wanted = genreOf(op.genre);
+        if (!wanted) {
+          problems.push(`${at}: unknown genre "${op.genre}" — one of ${GENRE_IDS.join(", ")}`);
           break;
         }
-        if (legend.some((r) => r.key === "kind" && r.meaning === kind)) {
-          notes.push(`${kind} is already in the legend — kept as is`);
-          break;
+        const inForce = genre === wanted.id;
+        if (!inForce) {
+          genre = wanted.id;
+          genreChanged = true;
         }
-        // A kind may BE a library symbol (D84): the rule matches on the
-        // symbol, the drawn legend shows the icon beside the meaning, and
-        // no colour is picked — the brand chose that already.
-        if (op.symbol) {
-          const wanted = clean(op.symbol).toLowerCase();
-          const entry = symbolEntry(wanted);
-          if (!entry) {
-            problems.push(`${at}: unknown symbol ${op.symbol} — find_symbol first`);
-            break;
+        const seeded: string[] = [];
+        const held: string[] = [];
+        for (const kind of wanted.kinds) {
+          if (legend.some((r) => r.key === "kind" && r.meaning === kind.kind)) {
+            held.push(kind.kind);
+            continue;
           }
-          legend = [...legend, { attr: "symbol", value: entry.symbol, key: "kind", meaning: kind }];
-          legendChanged = true;
-          notes.push(`legend: ${kind} → symbol ${entry.symbol} (${entry.name})`);
+          defineKind({ op: "define_kind", kind: kind.kind, tone: kind.tone, role: kind.role, shape: kind.shape }, at, false);
+          seeded.push(kind.kind);
+        }
+        const said: string[] = [];
+        if (seeded.length) said.push(`seeded ${seeded.join(", ")}`);
+        if (held.length) said.push(`${held.join(", ")} already in the legend`);
+        notes.push(`genre: ${wanted.name}${inForce ? " is already in force" : ""}${said.length ? ` — ${said.join("; ")}` : ""}`);
+        break;
+      }
+      case "define_scenario": {
+        // A scenario is a path of edges (D89) — the map already says what
+        // the components are; the story is which arrows it travels.
+        const name = clean(op.name);
+        if (!name) {
+          problems.push(`${at}: name is empty`);
           break;
         }
-        // Colour means something (D77): a tone or a role picks the hue the
-        // reader already knows, and without either the fill that stands
-        // furthest from every kind the legend draws — with a second channel
-        // once hue alone has stopped separating. A raw style still wins,
-        // field by field, as it always has (D59).
-        const picked = pickKindLook({ kind, tone: op.tone, role: op.role, taken: legend, shape: op.shape });
-        const fill = op.style?.backgroundColor ?? picked.backgroundColor;
-        const shape = op.shape ?? picked.shape;
-        const strokeColor = op.style?.strokeColor ?? picked.strokeColor;
-        const strokeStyle = op.style?.strokeStyle ?? picked.strokeStyle;
-        const fillStyle = op.style?.fillStyle ?? picked.fillStyle;
-        const rule: LegendRule = { attr: "backgroundColor", value: fill, key: "kind", meaning: kind };
-        const also: { attr: LegendRule["attr"]; value: string }[] = [];
-        if (shape) also.push({ attr: "shape", value: shape });
-        // A kind is its fill and shape; the stroke is the tags' channel (D77).
-        // The palette's matching stroke is drawn, not required — only a stroke
-        // the caller named becomes a condition of the match.
-        if (op.style?.strokeColor) also.push({ attr: "strokeColor", value: op.style.strokeColor });
-        else if (strokeColor) kindStrokes.set(kind, strokeColor);
-        if (strokeStyle) also.push({ attr: "strokeStyle", value: strokeStyle });
-        if (fillStyle) also.push({ attr: "fillStyle", value: fillStyle });
-        if (op.style?.strokeWidth) also.push({ attr: "strokeWidth", value: String(op.style.strokeWidth) });
-        if (also.length) rule.also = also;
-        legend = [...legend, rule];
-        legendChanged = true;
-        const chosen = `legend: ${kind} → ${shape ?? "any shape"} with ${fill === "transparent" ? "no fill" : `fill ${fill}`}`;
-        notes.push(op.style ? chosen : `${chosen} — ${picked.why}`);
+        if (!op.path?.length) {
+          problems.push(`${at}: path is empty — a scenario is the edges the request takes, in order`);
+          break;
+        }
+        const path: string[] = [];
+        op.path.forEach((step, n) => {
+          const where = `${at}: step ${n + 1}`;
+          const found = step.startsWith("$")
+            ? ids[step]
+              ? { sourceId: ids[step], kind: createdFrames.has(ids[step]) ? "frame" : created.get(ids[step])?.type === "arrow" ? "edge" : "node" }
+              : null
+            : sourceOf(graph, step);
+          if (!found) {
+            problems.push(`${where}: unknown id ${step} — use ids from get_scene_graph or refs from this batch`);
+            return;
+          }
+          if (found.kind !== "edge") {
+            problems.push(`${where}: ${step} is a ${found.kind} — a scenario is a path of edges, so name the arrows the request travels, in order`);
+            return;
+          }
+          if (removed.has(found.sourceId)) {
+            problems.push(`${where}: ${step} is removed earlier in this batch`);
+            return;
+          }
+          path.push(found.sourceId);
+        });
+        if (path.length !== op.path.length) break;
+        const scenario: Scenario = op.description ? { name, description: clean(op.description), path } : { name, path };
+        const existing = scenarios.findIndex((s) => s.name === name);
+        if (existing >= 0) {
+          scenarios = scenarios.map((s, k) => (k === existing ? scenario : s));
+          notes.push(`scenario "${name}" replaced (${path.length} step${path.length === 1 ? "" : "s"})`);
+        } else {
+          scenarios = [...scenarios, scenario];
+          notes.push(`scenario "${name}" defined (${path.length} step${path.length === 1 ? "" : "s"})`);
+        }
+        scenariosChanged = true;
         break;
       }
       case "add_frame": {
@@ -766,6 +903,15 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
             write.remove.push(id);
           }
         }
+        // A scenario is a path of edges by id (D89): taking one of them out
+        // leaves a step pointing at nothing. Said, never refused — the
+        // author may be redrawing that leg (D60, I5).
+        for (const scenario of scenarios) {
+          for (const step of new Set(scenario.path.filter((s) => toRemove.has(s)))) {
+            const label = clean(graph.edges.find((e) => e.sourceId === step)?.label) || step;
+            notes.push(`"${label}": scenario "${scenario.name}" steps through it — the scenario will flag until re-pointed`);
+          }
+        }
         notes.push(`${op.id}: ${toRemove.size} element${toRemove.size === 1 ? "" : "s"} removed`);
         break;
       }
@@ -799,7 +945,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           const text = el?.boundElements.find((b) => b.type === "text");
           return (text ? elements.get(text.id)?.look.fontSize : null) ?? house.shape.fontSize;
         };
-        const boxes = layeredLayout(members, graph.edges, sizes, origin, {
+        const options: LayoutOptions = {
           labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
           kindOf: (id) => kinds.get(id) ?? null,
           labelOf: (id) => {
@@ -811,7 +957,20 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           },
           // Components already on the canvas are authored in the order they
           // read: position order, which is what the layout defaults to (D79).
-        });
+          ...(posture === "straight" ? { posture: "straight" as const } : {}),
+        };
+        // The genre's posture on the same pipeline (D90). A lanes genre
+        // laid one scope out at a time has one lane in front of it — this
+        // frame, or the unframed components, which name none — and lanes
+        // never fold, which is the discipline that matters here.
+        const boxes =
+          posture === "lanes"
+            ? laneLayout(members, graph.edges, sizes, origin, {
+                ...options,
+                lanes: frameSource ? [frameSource] : [],
+                laneOf: () => frameSource,
+              })
+            : layeredLayout(members, graph.edges, sizes, origin, options);
         for (const n of members) {
           relaid.add(n.sourceId);
           const box = boxes.get(n.id);
@@ -862,6 +1021,87 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // the order a cycle in it is ranked by (D79).
   const createdAt = new Map([...created.keys()].map((id, i) => [id, i] as const));
   const shapeById = new Map(write.shapes.map((sh) => [sh.id, sh]));
+  // The label and the peer-width a laid-out component is given, whichever
+  // posture lays it out (D74, D80).
+  const laidOutLabel = (id: string) => {
+    const sh = shapeById.get(id);
+    return sh?.label ? { text: sh.label, fontSize: sh.style.fontSize, shape: sh.type } : null;
+  };
+  // The lanes posture (D90): every tier-1 frame the batch built is one
+  // lane of ONE layout, because rank is time and time has to line up
+  // across the contexts — which a frame-at-a-time pass cannot do. Detail
+  // layers (tier ≥ 2) are maps of a mechanism and keep the map's fold.
+  const laneFrames =
+    posture === "lanes"
+      ? [...createdFrames.keys()].filter((id) => framesToLayOut.has(id) && (createdFrames.get(id)!.tier ?? 1) === 1)
+      : [];
+  const laneMembers = laneFrames.length
+    ? [...created.entries()].filter(([, c]) => c.type !== "arrow" && c.frameId !== null && laneFrames.includes(c.frameId))
+    : [];
+  if (laneMembers.length > 1) {
+    for (const id of laneFrames) framesToLayOut.delete(id);
+    // Lanes in the order the batch declared its frames — the first is the
+    // top row. An empty frame is no lane at all.
+    const lanes = laneFrames.filter((id) => laneMembers.some(([, c]) => c.frameId === id));
+    const memberIds = new Set(laneMembers.map(([id]) => id));
+    const nodes = laneMembers.map(([id, c]) => ({ id, bounds: { x: c.x, y: c.y, width: c.width, height: c.height } })) as unknown as GraphNode[];
+    // Edges across lanes rank as edges within one do: a command in one
+    // context and the event it causes in another are one step apart.
+    const edges = write.arrows
+      .filter((a) => memberIds.has(a.from) && memberIds.has(a.to))
+      .map((a) => ({ id: a.id, from: a.from, to: a.to, label: a.label })) as unknown as GraphEdge[];
+    const sizes = new Map(laneMembers.map(([id, c]) => [id, { width: c.width, height: c.height }]));
+    const first = grownFrames.get(lanes[0]) ?? frameBox(lanes[0])!;
+    const boxes = laneLayout(nodes, edges, sizes, { x: first.x + FRAME_PAD, y: first.y + FRAME_HEAD + FRAME_PAD }, {
+      labelSize: (e) => edgeLabelSize(e.label, house.arrow.style.fontSize),
+      kindOf: (id) => created.get(id)?.kind ?? null,
+      labelOf: laidOutLabel,
+      order: (id) => createdAt.get(id) ?? 0,
+      lanes,
+      laneOf: (id) => created.get(id)?.frameId ?? null,
+    });
+    for (const [id, c] of laneMembers) {
+      const box = boxes.get(id);
+      if (!box) continue;
+      if (c.symbol) {
+        // A symbol keeps its native size (D85) and moves whole (D83).
+        const dx = box.x + Math.round((box.width - c.width) / 2) - c.x;
+        const dy = box.y + Math.round((box.height - c.height) / 2) - c.y;
+        c.x += dx;
+        c.y += dy;
+        if (c.port) c.port = { ...c.port, x: c.port.x + dx, y: c.port.y + dy };
+        const symbol = write.symbols.find((sym) => sym.id === id);
+        if (symbol) {
+          symbol.x += dx;
+          symbol.y += dy;
+          symbol.icon = { ...symbol.icon, x: symbol.icon.x + dx, y: symbol.icon.y + dy };
+          symbol.labelBox = { ...symbol.labelBox, x: symbol.labelBox.x + dx, y: symbol.labelBox.y + dy };
+        }
+        continue;
+      }
+      c.x = box.x;
+      c.y = box.y;
+      c.width = box.width;
+      c.height = box.height;
+      const shape = write.shapes.find((sh) => sh.id === id);
+      if (shape) Object.assign(shape, { x: box.x, y: box.y, width: box.width, height: box.height });
+    }
+    // Every lane spans the whole time axis, so the frames read as bands of
+    // one diagram rather than boxes of their own. LANE_GAP left the room
+    // between them, so D86 finds nothing to part.
+    const placed = laneMembers.map(([, c]) => ({ x: c.x, y: c.y, width: c.width, height: c.height }));
+    const left = Math.min(...placed.map((b) => b.x)) - FRAME_PAD;
+    const right = Math.max(...placed.map((b) => b.x + b.width)) + FRAME_PAD;
+    for (const frameId of lanes) {
+      const own = laneMembers.filter(([, c]) => c.frameId === frameId).map(([, c]) => ({ x: c.x, y: c.y, width: c.width, height: c.height }));
+      const grown = growFrame({ x: left, y: Math.min(...own.map((b) => b.y)), width: right - left, height: 0 }, own);
+      Object.assign(createdFrames.get(frameId)!, { x: grown.x, y: grown.y, width: Math.max(grown.width, 300), height: Math.max(grown.height, 200) });
+      // What the frame grew by while its members were being placed is
+      // stale now: every one of them has just been re-placed.
+      grownFrames.delete(frameId);
+    }
+    notes.push(`${profile!.name}: ${laneMembers.length} components in ${lanes.length} lane${lanes.length === 1 ? "" : "s"}, time left to right`);
+  }
   for (const frameId of framesToLayOut) {
     const members = [...created.entries()].filter(([, c]) => c.frameId === frameId && c.type !== "arrow");
     if (members.length < 2) continue;
@@ -877,11 +1117,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       // The batch said what each component is, so peers share a width (D74, D80).
       kindOf: (id) => created.get(id)?.kind ?? null,
       // And what each label says, so a long one wraps taller (D80).
-      labelOf: (id) => {
-        const sh = shapeById.get(id);
-        return sh?.label ? { text: sh.label, fontSize: sh.style.fontSize, shape: sh.type } : null;
-      },
+      labelOf: laidOutLabel,
       order: (id) => createdAt.get(id) ?? 0,
+      // The genre's posture, on the one pipeline (D90).
+      ...(posture === "straight" ? { posture: "straight" as const } : {}),
     });
     // Start the frame from its own origin again: what grew it is being re-placed.
     let grown: Box = fb ? { x: fb.x, y: fb.y, width: 0, height: 0 } : { x: 0, y: 0, width: 0, height: 0 };
@@ -1287,7 +1526,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   if (routed) notes.push(`${routed} edge${routed === 1 ? "" : "s"} routed around components`);
 
   if (problems.length) throw new PlanError(problems);
-  const result: SceneWrite = {};
+  const result: MeaningWrite = {};
   if (write.shapes.length) result.shapes = write.shapes;
   if (write.symbols.length) result.symbols = write.symbols;
   if (write.arrows.length) result.arrows = write.arrows;
@@ -1295,6 +1534,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   if (write.patches.length) result.patches = write.patches;
   if (write.remove.length) result.remove = write.remove;
   if (legendChanged) result.legend = legend;
+  // The genre and the scenarios ride to the same carrier the rules do
+  // (D87, D89) — one home for the scene's conventions.
+  if (genreChanged && genre) result.genre = genre;
+  if (scenariosChanged) result.scenarios = scenarios;
   return { write: result, ids, notes, touched };
 }
 
@@ -1305,7 +1548,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
-  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, legendSample: false, refine: null, composite: {}, symbol: null };
+  return { detailFrameId: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], legendSample: false, refine: null, composite: {}, symbol: null };
 }
 
 function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
@@ -1352,7 +1595,7 @@ function blank(id: string, type: string, box: Box, style: WriteStyle, frameId: s
 }
 
 /** The snapshot after a write — enough for the graph, the diff, and the lint. */
-export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnapshot {
+export function simulate(snapshot: SceneSnapshot, write: MeaningWrite): SceneSnapshot {
   const removing = new Set(write.remove ?? []);
   for (const el of snapshot.elements) {
     if (el.containerId && removing.has(el.containerId)) removing.add(el.id);
@@ -1488,14 +1731,24 @@ export function simulate(snapshot: SceneSnapshot, write: SceneWrite): SceneSnaps
     // a re-route that came out straight gets the house curvature back.
     el.look = { ...el.look, roundness: patch.via.length ? null : (el.look.roundness ?? 2) };
   }
-  if (write.legend) {
+  // The rules, the genre and the scenarios all live on the one carrier
+  // (D9, D87, D89): whichever of them a write carries goes there, and a
+  // scene with no legend yet has the carrier made for it — the empty rule
+  // list is what marks the element as the carrier.
+  if (write.legend || write.genre !== undefined || write.scenarios !== undefined) {
+    const recorded = (base: SnapshotElement["docent"]): SnapshotElement["docent"] => ({
+      ...base,
+      ...(write.legend ? { legend: write.legend } : {}),
+      ...(write.genre !== undefined ? { genre: write.genre } : {}),
+      ...(write.scenarios !== undefined ? { scenarios: write.scenarios } : {}),
+    });
     const carrier = out.find((el) => el.docent.legend !== null);
-    if (carrier) carrier.docent = { ...carrier.docent, legend: write.legend };
+    if (carrier) carrier.docent = recorded(carrier.docent);
     else {
       const el = blank("__legend", "text", { x: 0, y: -80, width: 200, height: 40 }, DEFAULT_STYLE, null);
       el.text = "Legend";
       el.locked = true;
-      el.docent = { ...emptyDocent(), legend: write.legend };
+      el.docent = recorded({ ...emptyDocent(), legend: write.legend ?? [] });
       out.push(el);
     }
   }
@@ -1582,6 +1835,11 @@ export function lint(snapshot: SceneSnapshot): LintReport {
   const loose = graph.nodes.filter((n) => n.frameId === null);
   const looseCrossings = countCrossings(loose, graph.edges);
   if (looseCrossings) findings.push({ level: "warn", about: null, message: `Layer 1 has ${looseCrossings} arrow crossing${looseCrossings === 1 ? "" : "s"} among unframed components` });
+  // The genre's own grammar, in the genre's name (D88) — advice, never a
+  // veto. A scene that adopted no genre still has its scenarios read
+  // back, since one can be named without one (D89).
+  const profile = genreOf(graph.genre);
+  findings.push(...(profile ? genreFindings(graph, profile) : scenarioFindings(graph)));
   // The number, and one line of it among the findings, so a reader who only
   // sees the list still sees the score (D76).
   const score = craftScore(snapshot, graph);
