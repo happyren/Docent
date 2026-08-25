@@ -9,9 +9,10 @@
  * (read from the drawing). `declared` and `inferred` facts are always
  * listed per entity.
  */
+import { genreOf } from "../authoring/genre";
 import type { SceneGraph } from "../scene/graph";
 import { applyLegend, legendToRecord } from "./legend";
-import { orderFrames } from "./mermaid";
+import { orderFrames, scenarioSteps } from "./mermaid";
 
 type Json = string | number | boolean | null | Json[] | { [k: string]: Json };
 
@@ -158,10 +159,39 @@ export function exportSidecar(graph: SceneGraph): string {
     return entity;
   });
 
+  // The scene's conventions ride beside the legend, as they do on the
+  // carrier (D87, D89): the genre by the name it is called, and each
+  // scenario as its story, its path in ids, and its steps in the author's
+  // words. Both are the author's own statements (I4).
+  const genre = genreOf(graph.genre);
+  const scenarios: Json[] = graph.scenarios.map((scenario) => {
+    const entity: { [k: string]: Json } = { name: scenario.name };
+    const provenance: { [k: string]: Json } = { name: "declared", steps: "declared" };
+    if (scenario.description !== undefined) {
+      entity.description = scenario.description;
+      provenance.description = "declared";
+    }
+    // Stored by element id (I6), answered in the ids agents address (I5).
+    entity.path = scenario.path.map(
+      (step) => graph.edges.find((e) => e.sourceId === step)?.id ?? step,
+    );
+    entity.steps = scenarioSteps(graph, scenario);
+    entity.provenance = provenance;
+    return entity;
+  });
+
   const chunks: string[] = [
     ` "docent": 1`,
     ` "provenanceDefault": "explicit"`,
   ];
+  if (genre) {
+    chunks.push(
+      ` "genre": ${stableStringify({ id: genre.id, name: genre.name, provenance: "declared" })}`,
+    );
+  }
+  if (scenarios.length) {
+    chunks.push(` "scenarios": ${stableStringify(scenarios)}`);
+  }
   if (Object.keys(legendRecord).length) {
     chunks.push(` "legend": ${stableStringify(legendRecord)}`);
   }

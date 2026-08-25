@@ -30,7 +30,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement, ExcalidrawTextElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
-import type { LegendRule, SceneSnapshot } from "./snapshot";
+import type { LegendRule, Scenario, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
 import { symbolEntry } from "../authoring/symbols";
@@ -257,6 +257,14 @@ export interface SceneWrite {
   remove?: string[];
   /** Replace the legend in the same step (the carrier is rewritten). */
   legend?: LegendRule[];
+  /**
+   * The scene's genre (D87) — recorded on the legend's carrier, because a
+   * category of diagram is a set of conventions and the legend is where
+   * conventions live. Absent leaves what the scene already records.
+   */
+  genre?: string;
+  /** The scene's scenarios (D89), whole and in order, on the same carrier. */
+  scenarios?: Scenario[];
 }
 
 export interface DocentCanvasHandle {
@@ -630,6 +638,9 @@ type DocentData = {
   logic?: unknown;
   narrative?: unknown;
   legend?: unknown;
+  /** The conventions that ride with the legend on its carrier (D87, D89). */
+  genre?: unknown;
+  scenarios?: unknown;
 };
 
 function docentDataOf(element: ExcalidrawElement): DocentData {
@@ -1095,8 +1106,14 @@ function legendWrite(
     (el as { index?: unknown }).index = undefined;
   }
   const [title, ...rest] = made;
+  // The carrier holds more than the rules (D87, D89): the scene's genre and
+  // its scenarios live here too. A legend rewrite replaces the rules and
+  // carries everything else across — it owns `legend`, nothing else.
   const nextCarrier = newElementWith(title, {
-    customData: { docent: { legend: rules } },
+    customData: {
+      ...(carrier?.customData ?? {}),
+      docent: { ...(carrier ? docentDataOf(carrier) : {}), legend: rules },
+    },
   });
   return {
     elements: [
@@ -1215,7 +1232,12 @@ function toFrameInfo(frame: ExcalidrawElement): FrameInfo {
   };
 }
 
-function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
+/**
+ * The typed surface over one live Excalidraw API (B1). Exported so the
+ * write path can be driven against an API stand-in — what lands in
+ * `customData` is a promise the canvas keeps, and it is testable.
+ */
+export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
   const frames = () =>
     liveElements(api).filter((el) => el.type === "frame").map(toFrameInfo);
 
@@ -1977,6 +1999,29 @@ function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
       let elements: ExcalidrawElement[] = [...next, ...createdBound, ...symbolElements, ...arrowElements];
       if (write.legend) elements = legendWrite(elements, write.legend, legendSamples).elements;
+      // The genre and the scenarios ride to the same carrier the rules do
+      // (D87, D89), merged into what it already holds. A write may record
+      // them without touching the legend — and a scene that has no legend
+      // yet gets the empty one, which is what marks an element as carrier.
+      if (write.genre !== undefined || write.scenarios !== undefined) {
+        let carrier = elements.find(
+          (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
+        );
+        if (!carrier) {
+          const made = legendWrite(elements, [], legendSamples);
+          elements = made.elements;
+          carrier = made.carrier;
+        }
+        const recorded = carrier;
+        elements = elements.map((el) =>
+          el === recorded
+            ? withDocentPatch(el, {
+                ...(write.genre !== undefined ? { genre: write.genre } : {}),
+                ...(write.scenarios !== undefined ? { scenarios: write.scenarios } : {}),
+              })
+            : el,
+        );
+      }
       api.updateScene({
         elements,
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,

@@ -3,6 +3,8 @@
  * scene graph + legend (B5); deterministic: stable ordering by id, no
  * timestamps, no randomness (I3).
  */
+import type { Scenario } from "../adapter/snapshot";
+import { genreOf } from "../authoring/genre";
 import type { GraphFrame, SceneGraph } from "../scene/graph";
 import { applyLegend } from "./legend";
 
@@ -36,8 +38,40 @@ export function orderFrames(frames: readonly GraphFrame[]): GraphFrame[] {
   });
 }
 
+/**
+ * A scenario's steps in the author's own words (D89, I4): the components'
+ * labels and the edge's, in the order the story runs — "1. Checkout page →
+ * Orders (place order)". A step the export cannot see — removed, or outside
+ * a frame-scoped copy — is said as such and keeps its number: the hole in
+ * the story is the news (I5).
+ */
+export function scenarioSteps(graph: SceneGraph, scenario: Scenario): string[] {
+  const endName = (id: string | null): string => {
+    const node = id ? graph.nodes.find((n) => n.id === id) : undefined;
+    return node ? escapeLabel(node.label ?? node.id) : "nothing";
+  };
+  return scenario.path.map((step, i) => {
+    const edge = graph.edges.find((e) => e.sourceId === step);
+    if (!edge) return `${i + 1}. an edge this view does not hold`;
+    const label = escapeLabel(edge.label ?? "");
+    return `${i + 1}. ${endName(edge.from)} → ${endName(edge.to)}${label ? ` (${label})` : ""}`;
+  });
+}
+
 export function exportMermaid(graph: SceneGraph): string {
   const lines: string[] = ["flowchart LR"];
+
+  // The conventions the diagram was drawn under (D87, D89) — the author's
+  // declarations, so they travel with the drawing (I4). Mermaid has no
+  // place for them but its comments: every reader gets them, no renderer
+  // draws them.
+  const profile = genreOf(graph.genre);
+  if (profile) lines.push(`  %% genre (declared): ${profile.name}`);
+  for (const scenario of graph.scenarios) {
+    const description = scenario.description ? ` — ${escapeLabel(scenario.description)}` : "";
+    lines.push(`  %% scenario (declared): ${escapeLabel(scenario.name)}${description}`);
+    for (const step of scenarioSteps(graph, scenario)) lines.push(`  %%   ${step}`);
+  }
 
   const nodeLine = (nodeId: string): string => {
     const node = graph.nodes.find((n) => n.id === nodeId)!;

@@ -6,11 +6,13 @@
  * narration, presentation, drill, and scene opening are navigation.
  */
 import type { CommandAPI } from "../command/api";
+import type { Scenario } from "../adapter/snapshot";
 import type { HighlightStyle } from "../overlay/state";
 import type { TourStep } from "../command/api";
 import { detailBadges } from "../scene/detailBadges";
 import { computeTiers } from "../scene/tiers";
 import { scriptTour } from "./script";
+import { GENRE_IDS, genreOf, type GenreProfile } from "../authoring/genre";
 import type { Op } from "../authoring/ops";
 import type { TidyScope } from "../authoring/tidy";
 import type { SceneGraph } from "../scene/graph";
@@ -30,13 +32,20 @@ export const WALL_THRESHOLD = 150;
 let catalog: SymbolCatalog | null = null;
 const symbolCatalog = (): SymbolCatalog => (catalog ??= loadCatalog(catalogJson));
 
+/** What the outline says of a paragraph: its first sentence, capped (D45). */
+const opener = (text: string | null | undefined) =>
+  (text ?? "").split(/(?<=[.!?])\s/)[0].slice(0, 140);
+
 /**
  * The table of contents (D45): tiers, frames with their tier and parentage,
- * narrative openers, component counts, and which components go deeper.
+ * narrative openers, component counts, and which components go deeper — and
+ * the conventions the scene was drawn under, its genre and its scenarios
+ * (D87, D89), which are as much a part of reading it as the frames are.
  */
 export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
   const snapshot = commands.getSceneSnapshot();
   const tiers = computeTiers(snapshot);
+  const profile = genreOf(graph.genre);
   const frameGraphId = (sourceId: string | null) =>
     sourceId ? (graph.frames.find((f) => f.sourceId === sourceId)?.id ?? null) : null;
   const nodeBySource = new Map(graph.nodes.map((n) => [n.sourceId, n]));
@@ -45,7 +54,7 @@ export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
       const members = graph.nodes.filter((n) => n.frameId === frame.id);
       const parent = tiers.detailParent.get(frame.sourceId);
       const via = parent ? nodeBySource.get(parent.elementId) : undefined;
-      const opener = (frame.narrative ?? "").split(/(?<=[.!?])\s/)[0].slice(0, 140);
+      const narrative = opener(frame.narrative);
       return {
         id: frame.id,
         name: frame.name,
@@ -56,7 +65,7 @@ export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
               via: via ? { id: via.id, label: via.label } : null,
             }
           : {}),
-        ...(opener ? { narrative: opener } : {}),
+        ...(narrative ? { narrative } : {}),
         components: members.length,
         deeper: members
           .filter((n) => n.detailFrameId !== null)
@@ -66,9 +75,19 @@ export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
     .sort((a, b) => a.tier - b.tier || a.name.localeCompare(b.name));
   return {
     tiers: tiers.maxTier,
+    // The genre by the name it is called, not its id: the outline is read.
+    ...(profile ? { genre: profile.name } : {}),
     components: graph.nodes.length,
     edges: graph.edges.length,
     frameless: graph.nodes.filter((n) => n.frameId === null).length,
+    ...(graph.scenarios.length
+      ? {
+          scenarios: graph.scenarios.map((s) => {
+            const description = opener(s.description);
+            return { name: s.name, steps: s.path.length, ...(description ? { description } : {}) };
+          }),
+        }
+      : {}),
     frames,
   };
 }
@@ -76,7 +95,9 @@ export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
 /** Field weights for find (D45): the author's words outrank heuristics. */
 const FIND_WEIGHTS: Record<string, number> = {
   label: 5,
+  scenario: 5,
   intents: 4,
+  description: 4,
   note: 4,
   tags: 3,
   name: 3,
@@ -133,12 +154,14 @@ export function findInDiagram(commands: CommandAPI, graph: SceneGraph, query: st
   };
   const hits: {
     id: string;
-    type: "node" | "edge" | "frame";
+    type: "node" | "edge" | "frame" | "scenario";
     label: string | null;
     frame: string | null;
     trail: { id: string; name: string }[];
     score: number;
     matched: string[];
+    /** Scenarios only (D89): how many edges the story steps through. */
+    steps?: number;
   }[] = [];
   for (const node of graph.nodes) {
     const facts = applyLegend(node.style, node.shape, graph.legend, node.symbol);
@@ -201,6 +224,27 @@ export function findInDiagram(commands: CommandAPI, graph: SceneGraph, query: st
         matched,
       });
     }
+  }
+  // A scenario is meaning the map carries (D89), so it is findable like any
+  // other: the hit answers with the story's name, how long it runs, and the
+  // edge it starts on — enough to focus or flow it without a second call.
+  for (const scenario of graph.scenarios) {
+    const { total, matched } = score({
+      scenario: [scenario.name],
+      description: [scenario.description ?? ""],
+    });
+    if (total === 0) continue;
+    const first = graph.edges.find((e) => e.sourceId === scenario.path[0]);
+    hits.push({
+      id: first?.id ?? scenario.path[0],
+      type: "scenario",
+      label: scenario.name,
+      frame: first?.frameId ?? null,
+      trail: trailOf(first?.frameId ?? null),
+      score: total,
+      matched,
+      steps: scenario.path.length,
+    });
   }
   hits.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
   return { hits: hits.slice(0, 25) };
@@ -280,6 +324,22 @@ function tidyScopeFrom(params: Record<string, unknown>): TidyScope {
   const selection = params.selection;
   if (!Array.isArray(selection) || !selection.length) throw new Error("tidy({selection}) needs a non-empty list of ids");
   return { selection: selection.map(String) };
+}
+
+/**
+ * The scenario a tool named (D89): matched on the author's own name, case
+ * and padding aside. An unknown name says which stories the scene does
+ * carry — a replay that quietly pulsed nothing would teach nothing (I5).
+ */
+function scenarioOf(graph: SceneGraph, name: string): Scenario {
+  const wanted = name.trim().toLowerCase();
+  const found = graph.scenarios.find((s) => s.name.toLowerCase() === wanted);
+  if (found) return found;
+  throw new Error(
+    graph.scenarios.length
+      ? `Unknown scenario: ${name} — this scene has ${graph.scenarios.map((s) => `"${s.name}"`).join(", ")}`
+      : `Unknown scenario: ${name} — this scene has none; define_scenario({name, path}) names one`,
+  );
 }
 
 /**
@@ -479,12 +539,32 @@ export async function execute(
       return { highlighted: p.ids, next: "narrate what is lit, or highlight({ids:[]}) to clear" };
     }
     case "flow": {
-      const p = params as { path: string[]; speed?: number; loop?: boolean; interrupt?: boolean };
+      const p = params as { path?: string[]; scenario?: string; speed?: number; loop?: boolean; interrupt?: boolean };
+      const named = typeof p.scenario === "string" && p.scenario.trim() !== "";
+      if (named && p.path) {
+        throw new Error("flow takes a path of edge ids or a scenario, never both — flow({scenario:'Checkout'}) replays the one the author named");
+      }
+      if (!named && !p.path) {
+        throw new Error("flow needs a path of edge ids or a scenario — flow({path:['e_req','e_charge']}) or flow({scenario:'Checkout'})");
+      }
+      // Replay is the machinery that already exists (D89): the same pulse,
+      // over the path the author named, with its steps numbered on the
+      // overlay for as long as it runs (I2).
+      let scenario: Scenario | null = null;
+      let path = p.path ?? [];
+      if (named) {
+        const graph = commands.getSceneGraph();
+        scenario = scenarioOf(graph, p.scenario!);
+        // Scenarios are stored by element id (I6); agents live in graph ids.
+        path = scenario.path.map((step) => graph.edges.find((e) => e.sourceId === step)?.id ?? step);
+      }
       await commands.awaitSpeech(p.interrupt === true);
-      if (p.path.length) await commands.frameTargets(p.path);
+      if (path.length) await commands.frameTargets(path);
       sayOnArrival(commands, params);
-      await commands.flow(p);
-      return { pulsed: p.path };
+      await commands.flow({ path, speed: p.speed, loop: p.loop, steps: scenario !== null });
+      return scenario
+        ? { pulsed: path, scenario: scenario.name, steps: path.length }
+        : { pulsed: path };
     }
     case "narrate": {
       // Returns as soon as the voice has started (D57): the camera is what
@@ -500,10 +580,13 @@ export async function execute(
       return { stepsCompleted: completed };
     }
     case "script_tour": {
-      // Derived, never authored (D58): the diagram's own order and words.
+      // Derived, never authored (D58): the diagram's own order and words —
+      // or, for a scenario, the path the author named and the words on it.
       const graph = commands.getSceneGraph();
+      const named = typeof params.scenario === "string" && params.scenario.trim() !== "";
       const script = scriptTour(graph, commands.getSceneSnapshot(), {
         frame: (params.frame as string | undefined) ?? null,
+        scenario: named ? scenarioOf(graph, params.scenario as string) : null,
       });
       return {
         ...script,
@@ -531,6 +614,40 @@ export async function execute(
       if (!Array.isArray(ops) || !ops.length) throw new Error("edit needs a non-empty ops list");
       return withNext(await commands.edit(ops));
     }
+    // The conventions (D87, D89) go down the same path as any other edit —
+    // one validated batch, one undo step, the changelog — and answer with
+    // what the caller needs next rather than with the lint's warnings.
+    case "use_genre": {
+      const asked = String(params.genre ?? "");
+      const result = await commands.edit([{ op: "use_genre", genre: asked }]);
+      // The op refuses an unknown genre, so by here the profile is there.
+      const profile = genreOf(asked)!;
+      return {
+        ...result,
+        genre: profile.id,
+        // The recipe arrives when it is ordered (D91) — the menu stays short.
+        guidance: profile.guidance,
+        next: "draw with the seeded kinds — a kind and an intent on every component — then validate() and tidy()",
+      };
+    }
+    case "define_scenario": {
+      const name = String(params.name ?? "");
+      const path = (params.path as string[] | undefined) ?? [];
+      const result = await commands.edit([
+        {
+          op: "define_scenario",
+          name,
+          path,
+          ...(params.description !== undefined ? { description: String(params.description) } : {}),
+        },
+      ]);
+      return {
+        ...result,
+        scenario: name,
+        steps: path.length,
+        next: `replay it: flow({scenario:'${name}'}) pulses the path with numbered steps, script_tour({scenario:'${name}'}) walks and speaks it`,
+      };
+    }
     // The formatter (D73): the same write path as edit, and a meaning
     // changelog that comes back empty or the whole thing is put back.
     case "tidy":
@@ -555,9 +672,27 @@ export async function execute(
         throw new Error("The canvas has unsaved changes — ask the person to save or discard them first");
       }
       const { project, scene } = params as { project: string; scene: string };
+      // A genre is checked before the scene is made (D87): a typo must not
+      // leave an empty scene behind to explain.
+      const asked = params.genre === undefined || params.genre === null ? null : String(params.genre);
+      const profile: GenreProfile | null = asked ? genreOf(asked) : null;
+      if (asked && !profile) throw new Error(`Unknown genre "${asked}" — one of ${GENRE_IDS.join(", ")}`);
       await commands.awaitSpeech(params.interrupt === true);
       await shell.authoring.createScene(project, scene);
-      return { created: { project, scene }, next: "define_kind for the kinds you will use, add_frame, then edit in batches" };
+      if (!profile) {
+        return { created: { project, scene }, next: "define_kind for the kinds you will use, add_frame, then edit in batches" };
+      }
+      // The genre seeds the new scene down the same op an agent would call
+      // itself, and answers with the recipe (D87, D91).
+      const seeded = await commands.edit([{ op: "use_genre", genre: profile.id }]);
+      return {
+        created: { project, scene },
+        genre: profile.id,
+        changelog: seeded.changelog,
+        notes: seeded.notes,
+        guidance: profile.guidance,
+        next: "add_frame, then draw with the seeded kinds in batches — validate() and tidy() as you go",
+      };
     }
     case "create_branch": {
       if (!shell.authoring) throw new Error("Branches are not available here");

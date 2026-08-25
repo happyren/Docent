@@ -8,9 +8,50 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { encode } from "gpt-tokenizer";
-import { snapshotFromSceneJSON } from "../src/adapter/snapshot";
+
+// The adapter is the one module that may import Excalidraw (B1), and its
+// published bundle will not load in a node test. Standing in for the few
+// upstream calls the write path makes lets the round trip below run
+// against the REAL adapter — what lands in `customData` is a promise the
+// canvas keeps, so it is tested, not assumed.
+vi.mock("@excalidraw/excalidraw", () => ({
+  CaptureUpdateAction: { IMMEDIATELY: "immediately", NEVER: "never" },
+  Excalidraw: () => null,
+  FONT_FAMILY: { Excalifont: 5, Nunito: 6, "Comic Shanns": 7 },
+  MainMenu: Object.assign(() => null, { DefaultItems: {} }),
+  convertToExcalidrawElements: (skeletons: Record<string, unknown>[]) =>
+    skeletons.map((skeleton, i) => ({
+      width: 100,
+      height: 20,
+      angle: 0,
+      strokeColor: "#1e1e1e",
+      backgroundColor: "transparent",
+      strokeStyle: "solid",
+      fillStyle: "solid",
+      strokeWidth: 2,
+      opacity: 100,
+      groupIds: [],
+      frameId: null,
+      isDeleted: false,
+      ...skeleton,
+      id: (skeleton.id as string) ?? `made_${i}`,
+    })),
+  elementsOverlappingBBox: () => [],
+  getCommonBounds: () => [0, 0, 0, 0],
+  hashElementsVersion: () => 0,
+  exportToCanvas: async () => null,
+  loadFromBlob: async () => ({ elements: [], appState: {} }),
+  newElementWith: (el: object, patch: object) => ({ ...el, ...patch }),
+  restoreElements: (els: unknown) => els,
+  serializeAsJSON: () => "{}",
+  viewportCoordsToSceneCoords: () => ({ x: 0, y: 0 }),
+}));
+
+import { snapshotFromRawElements, snapshotFromSceneJSON } from "../src/adapter/snapshot";
+import { makeHandle } from "../src/adapter/excalidraw";
+import { plan } from "../src/authoring/ops";
 import { buildSceneGraph } from "../src/scene/graph";
 import { exportScene, applyLegend, legendToRecord } from "../src/export";
 import type { LegendRule } from "../src/adapter/snapshot";
@@ -123,6 +164,141 @@ describe("provenance (I4) on the demo fixture", () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// the conventions travel with the drawing (A21: D87, D89, I4)
+// ---------------------------------------------------------------------------
+
+/** The demo fixture with a genre and a story recorded on its carrier. */
+function demoWithStory() {
+  const parsed = JSON.parse(demoJSON);
+  const carrier = parsed.elements.find((el: { id: string }) => el.id === "legend_carrier");
+  carrier.customData = {
+    docent: {
+      ...carrier.customData.docent,
+      genre: "request",
+      scenarios: [
+        {
+          name: "Checkout",
+          description: "A customer places an order and the card is charged.",
+          path: ["e_req", "e_verify"],
+        },
+      ],
+    },
+  };
+  return snapshotFromSceneJSON(JSON.stringify(parsed));
+}
+
+describe("genre and scenarios in the exports (D87, D89, I4)", () => {
+  it("Mermaid says them in the author's words, where no renderer draws them", () => {
+    const { mermaid } = exportScene(demoWithStory());
+    expect(mermaid.split("\n").slice(0, 5)).toEqual([
+      "flowchart LR",
+      "  %% genre (declared): Life of a request",
+      "  %% scenario (declared): Checkout — A customer places an order and the card is charged.",
+      "  %%   1. Client → API Gateway (HTTPS)",
+      "  %%   2. API Gateway → Auth Service (verify JWT)",
+    ]);
+    // The drawing itself is untouched by the declaration.
+    const plain = exportScene(snapshotFromSceneJSON(demoJSON)).mermaid;
+    expect(plain).not.toContain("%%");
+    expect(mermaid.replace(/^ *%%.*\n/gm, "")).toBe(plain);
+  });
+
+  it("the sidecar carries both as declared facts, addressable in graph ids", () => {
+    const { sidecar } = exportScene(demoWithStory());
+    const parsed = JSON.parse(sidecar);
+    expect(parsed.genre).toEqual({ id: "request", name: "Life of a request", provenance: "declared" });
+    expect(parsed.scenarios).toEqual([
+      {
+        name: "Checkout",
+        description: "A customer places an order and the card is charged.",
+        path: ["e_req", "e_verify"],
+        steps: ["1. Client → API Gateway (HTTPS)", "2. API Gateway → Auth Service (verify JWT)"],
+        provenance: { name: "declared", description: "declared", steps: "declared" },
+      },
+    ]);
+    // A scene that declares neither says neither — the goldens do not move.
+    const plain = JSON.parse(exportScene(snapshotFromSceneJSON(demoJSON)).sidecar);
+    expect(plain.genre).toBeUndefined();
+    expect(plain.scenarios).toBeUndefined();
+  });
+
+  it("stays deterministic with them (I3)", () => {
+    const a = exportScene(demoWithStory());
+    const b = exportScene(demoWithStory());
+    expect(a.mermaid).toBe(b.mermaid);
+    expect(a.sidecar).toBe(b.sidecar);
+  });
+});
+
+describe("the carrier keeps the conventions across a write (D87, D89)", () => {
+  const base = {
+    angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
+    fillStyle: "solid", strokeWidth: 2, opacity: 100, groupIds: [], frameId: null,
+    isDeleted: false, locked: false, boundElements: [],
+  };
+  const raw = () => [
+    { ...base, id: "a", type: "rectangle", x: 0, y: 0, width: 160, height: 80 },
+    { ...base, id: "b", type: "rectangle", x: 400, y: 0, width: 160, height: 80 },
+    {
+      ...base, id: "e1", type: "arrow", x: 160, y: 40, width: 240, height: 0,
+      points: [[0, 0], [240, 0]],
+      startBinding: { elementId: "a" }, endBinding: { elementId: "b" },
+    },
+  ];
+  /** A canvas that really applies writes, through the real adapter. */
+  const canvas = (initial: Record<string, unknown>[]) => {
+    let elements = initial;
+    return makeHandle({
+      getSceneElementsIncludingDeleted: () => elements,
+      updateScene: ({ elements: next }: { elements: Record<string, unknown>[] }) => {
+        elements = next;
+      },
+    } as never);
+  };
+
+  it("round-trips a genre and a scenario through applyWrite", async () => {
+    const handle = canvas(raw());
+    const written = plan(
+      [
+        { op: "use_genre", genre: "request" },
+        { op: "define_scenario", name: "Checkout", path: ["e1"], description: "A customer places an order." },
+      ],
+      snapshotFromRawElements(raw()),
+    );
+    await handle.applyWrite(written.write);
+    const graph = buildSceneGraph(handle.getSceneSnapshot());
+    expect(graph.genre).toBe("request");
+    expect(graph.scenarios).toEqual([
+      { name: "Checkout", description: "A customer places an order.", path: ["e1"] },
+    ]);
+    expect(graph.legend.some((r) => r.meaning === "service")).toBe(true);
+
+    // The regression: a later legend write rewrites the carrier, and the
+    // rules are the only thing it owns.
+    const later = plan([{ op: "define_kind", kind: "gateway" }], handle.getSceneSnapshot());
+    await handle.applyWrite(later.write);
+    const after = buildSceneGraph(handle.getSceneSnapshot());
+    expect(after.genre).toBe("request");
+    expect(after.scenarios.map((s) => s.name)).toEqual(["Checkout"]);
+    expect(after.legend.some((r) => r.meaning === "gateway")).toBe(true);
+  });
+
+  it("makes the carrier for a scene that has no legend at all", async () => {
+    const handle = canvas(raw());
+    const written = plan(
+      [{ op: "define_scenario", name: "Checkout", path: ["e1"] }],
+      snapshotFromRawElements(raw()),
+    );
+    // Nothing about the legend is in this write — the carrier still has to exist.
+    expect(written.write.legend).toBeUndefined();
+    await handle.applyWrite(written.write);
+    const graph = buildSceneGraph(handle.getSceneSnapshot());
+    expect(graph.scenarios).toEqual([{ name: "Checkout", path: ["e1"] }]);
+    expect(graph.genre).toBeNull();
+  });
+});
 
 describe("composite legend rules (D9 extension)", () => {
   const style = {

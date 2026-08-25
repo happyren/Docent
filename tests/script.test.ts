@@ -77,3 +77,74 @@ describe("scriptTour", () => {
     expect(JSON.stringify(scriptTour(graph, snapshot))).toBe(JSON.stringify(scriptTour(graph, snapshot)));
   });
 });
+
+// ---------------------------------------------------------------------------
+// scenarios (D89): the same derivation, along the path the author named
+// ---------------------------------------------------------------------------
+
+const labelled = (id: string, from: string, to: string, text: string, extra: Record<string, unknown> = {}) => [
+  { ...arrow(id, from, to), boundElements: [{ id: `${id}_t`, type: "text" }], ...extra },
+  { ...base, id: `${id}_t`, type: "text", x: 0, y: 0, width: 80, height: 20, text, containerId: id, frameId: "F" },
+];
+const storyRaw = [
+  frame,
+  ...box("gateway", 40, 100, "API Gateway"),
+  ...box("orders", 340, 100, "Orders"),
+  ...box("payments", 640, 100, "Payments"),
+  ...labelled("e1", "gateway", "orders", "hand off", {
+    customData: { docent: { note: "only signed requests" } },
+  }),
+  arrow("e2", "orders", "payments"),
+];
+const storySnapshot = snapshotFromRawElements(storyRaw as never);
+const storyGraph = buildSceneGraph(storySnapshot);
+const checkout = {
+  name: "Checkout",
+  description: "A customer places an order.",
+  path: ["e1", "e2"],
+};
+
+describe("scriptTour({scenario})", () => {
+  it("opens with the author's words, then walks a stop per step", () => {
+    const script = scriptTour(storyGraph, storySnapshot, { scenario: checkout });
+    expect(script.frame).toBeNull();
+    expect(script.scenario).toEqual({ name: "Checkout", description: "A customer places an order." });
+    const [intro, first, second] = script.steps;
+    expect(script.steps).toHaveLength(3);
+    // The introduction is declared: the name and the description are the
+    // author's, and the whole path is lit behind them.
+    expect(intro.narrate).toBe("Checkout. A customer places an order.");
+    expect(intro.provenance).toBe("declared");
+    expect(intro.highlight).toEqual(["e1", "e2"]);
+    expect(intro.focus).toBeUndefined();
+    // Each step focuses its edge and pulses it, said in the edge's own words.
+    expect(first).toMatchObject({ focus: "e1", about: "e1", flow: ["e1"], provenance: "declared" });
+    expect(first.narrate).toBe("Step 1. hand off: API Gateway to Orders. only signed requests.");
+    // An edge with nothing declared gets the plain factual line, marked.
+    expect(second).toMatchObject({ focus: "e2", flow: ["e2"], provenance: "inferred" });
+    expect(second.narrate).toBe("Step 2. Orders to Payments.");
+    expect(script.declared).toBe(2);
+  });
+
+  it("says the story without a description, and says a hole where one is", () => {
+    const bare = scriptTour(storyGraph, storySnapshot, {
+      scenario: { name: "Checkout", path: ["e1", "gone"] },
+    });
+    expect(bare.scenario).toEqual({ name: "Checkout", description: null });
+    // Nothing of the author's beyond the name, so the opener is inferred.
+    expect(bare.steps[0].narrate).toBe("Checkout: 2 steps through the diagram.");
+    expect(bare.steps[0].provenance).toBe("inferred");
+    expect(bare.steps[0].highlight).toEqual(["e1"]);
+    // A step whose edge has gone keeps its number and says so (I5).
+    expect(bare.steps[2]).toMatchObject({ about: "gone", provenance: "inferred" });
+    expect(bare.steps[2].narrate).toBe("Step 2 points at an edge that is gone.");
+    expect(bare.steps[2].focus).toBeUndefined();
+  });
+
+  it("walks a frame or a scenario, never both, and stays deterministic", () => {
+    expect(() => scriptTour(storyGraph, storySnapshot, { frame: "F", scenario: checkout })).toThrow(/never both/);
+    expect(JSON.stringify(scriptTour(storyGraph, storySnapshot, { scenario: checkout }))).toBe(
+      JSON.stringify(scriptTour(storyGraph, storySnapshot, { scenario: checkout })),
+    );
+  });
+});

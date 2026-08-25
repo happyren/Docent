@@ -19,7 +19,7 @@ import type {
 import type { CameraEngine } from "../camera/engine";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
-import type { HighlightStyle, OverlayStore } from "../overlay/state";
+import type { HighlightStyle, OverlayStore, StepBadge } from "../overlay/state";
 import type { SceneWrite } from "../adapter/excalidraw";
 import { idSource, lint, plan, PlanError, simulate, type LintReport, type Op } from "../authoring/ops";
 import { tidyTargets, type TidyScope } from "../authoring/tidy";
@@ -115,6 +115,35 @@ function withCeiling(framed: SceneBounds, subject: SceneBounds): SceneBounds {
     height: minH,
   };
   return unionOf(framed, floor);
+}
+
+/**
+ * The middle of a drawn edge in scene coordinates: half the arc length
+ * along the same absolute polyline the overlay pulses (D4). Where a
+ * scenario's step number sits (D89) — on the stroke, not at its ends,
+ * so the badge never lands under the components it joins.
+ */
+function edgeMidpoint(geometry: EdgeGeometry): { x: number; y: number } {
+  const points = geometry.points.map(
+    ([px, py]) => [geometry.x + px, geometry.y + py] as [number, number],
+  );
+  if (points.length < 2) return { x: points[0]?.[0] ?? geometry.x, y: points[0]?.[1] ?? geometry.y };
+  const spans = points.slice(1).map((p, i) => Math.hypot(p[0] - points[i][0], p[1] - points[i][1]));
+  const half = spans.reduce((a, b) => a + b, 0) / 2;
+  let walked = 0;
+  for (let i = 0; i < spans.length; i++) {
+    if (walked + spans[i] < half) {
+      walked += spans[i];
+      continue;
+    }
+    const t = spans[i] === 0 ? 0 : (half - walked) / spans[i];
+    return {
+      x: points[i][0] + (points[i + 1][0] - points[i][0]) * t,
+      y: points[i][1] + (points[i + 1][1] - points[i][1]) * t,
+    };
+  }
+  const last = points[points.length - 1];
+  return { x: last[0], y: last[1] };
 }
 
 /**
@@ -716,6 +745,11 @@ export class CommandAPI {
     path: string[];
     speed?: number;
     loop?: boolean;
+    /**
+     * Number the hops on the overlay while the pulse runs (D89) — what a
+     * scenario replay asks for, so the viewer can count the steps.
+     */
+    steps?: boolean;
   }): Promise<void> {
     if (!params.path.length) {
       this.overlay.setFlow([], 1, false);
@@ -725,7 +759,8 @@ export class CommandAPI {
     const speed = params.speed ?? 1;
     if (!(speed > 0)) throw new Error(`Invalid speed: ${params.speed}`);
     let totalLength = 0;
-    const sourceIds = params.path.map((id) => {
+    const badges: StepBadge[] = [];
+    const sourceIds = params.path.map((id, step) => {
       let sourceId: string;
       try {
         sourceId = this.resolveSourceId(graph, id, ["edge"]);
@@ -743,9 +778,10 @@ export class CommandAPI {
           geometry.points[i][1] - geometry.points[i - 1][1],
         );
       }
+      if (params.steps) badges.push({ ...edgeMidpoint(geometry), n: step + 1 });
       return sourceId;
     });
-    this.overlay.setFlow(sourceIds, speed, params.loop ?? false);
+    this.overlay.setFlow(sourceIds, speed, params.loop ?? false, badges);
     const ms = (totalLength / (FLOW_UNITS_PER_SECOND * speed)) * 1000;
     await new Promise((resolve) => setTimeout(resolve, Math.min(ms + 200, 60_000)));
   }
