@@ -6,7 +6,7 @@
  * opening either file. Pure and deterministic (I3): same inputs, same
  * words, same order.
  */
-import type { SceneSnapshot } from "../adapter/snapshot";
+import type { SceneLink, SceneSnapshot } from "../adapter/snapshot";
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphNode, type SceneGraph } from "./graph";
 
@@ -22,18 +22,21 @@ export type NodeChange =
   | { kind: "tags"; added: string[]; removed: string[] }
   | { kind: "intents"; added: string[]; removed: string[] }
   | { kind: "logic"; from: string | null; to: string | null }
-  | { kind: "detail"; from: string | null; to: string | null };
+  | { kind: "detail"; from: string | null; to: string | null }
+  | { kind: "link"; from: SceneLink | null; to: SceneLink | null };
 
 export type EdgeChange =
   | { kind: "rewired"; from: { from: string | null; to: string | null }; to: { from: string | null; to: string | null } }
   | { kind: "label"; from: string | null; to: string | null }
   | { kind: "intents"; added: string[]; removed: string[] }
   | { kind: "logic"; from: string | null; to: string | null }
-  | { kind: "refined"; from: { to: string | null; from: string | null }; to: { to: string | null; from: string | null } };
+  | { kind: "refined"; from: { to: string | null; from: string | null }; to: { to: string | null; from: string | null } }
+  | { kind: "link"; from: SceneLink | null; to: SceneLink | null };
 
 export type FrameChange =
   | { kind: "renamed"; from: string; to: string }
-  | { kind: "narrative"; from: string | null; to: string | null };
+  | { kind: "narrative"; from: string | null; to: string | null }
+  | { kind: "link"; from: SceneLink | null; to: SceneLink | null };
 
 export interface SceneDiff {
   nodes: {
@@ -62,6 +65,15 @@ function setDiff(before: string[], after: string[]): { added: string[]; removed:
     added: after.filter((x) => !b.has(x)),
     removed: before.filter((x) => !a.has(x)),
   };
+}
+
+/**
+ * A link said as one string (D95) — the project it names, the path, and the
+ * component it arrives on. Two links are the same link when this is.
+ */
+function linkText(link: SceneLink | null): string | null {
+  if (link === null) return null;
+  return `${link.project ? `${link.project}/` : ""}${link.scene}${link.at ? `#${link.at}` : ""}`;
 }
 
 function movedOrResized(a: GraphNode["bounds"], b: GraphNode["bounds"]): { moved: boolean; resized: boolean } {
@@ -110,6 +122,9 @@ export function diffGraphs(before: SceneGraph, after: SceneGraph): SceneDiff {
     if (prev.detailFrameId !== node.detailFrameId) {
       changes.push({ kind: "detail", from: prev.detailFrameId, to: node.detailFrameId });
     }
+    if (linkText(prev.link) !== linkText(node.link)) {
+      changes.push({ kind: "link", from: prev.link, to: node.link });
+    }
     if (changes.length) nodes.changed.push({ before: prev, after: node, changes });
   }
   for (const node of before.nodes) {
@@ -144,6 +159,9 @@ export function diffGraphs(before: SceneGraph, after: SceneGraph): SceneDiff {
         to: { to: edge.toRefined, from: edge.fromRefined },
       });
     }
+    if (linkText(prev.link) !== linkText(edge.link)) {
+      changes.push({ kind: "link", from: prev.link, to: edge.link });
+    }
     if (changes.length) edges.changed.push({ before: prev, after: edge, changes });
   }
   for (const edge of before.edges) {
@@ -163,6 +181,9 @@ export function diffGraphs(before: SceneGraph, after: SceneGraph): SceneDiff {
     if (prev.name !== frame.name) changes.push({ kind: "renamed", from: prev.name, to: frame.name });
     if (prev.narrative !== frame.narrative) {
       changes.push({ kind: "narrative", from: prev.narrative, to: frame.narrative });
+    }
+    if (linkText(prev.link) !== linkText(frame.link)) {
+      changes.push({ kind: "link", from: prev.link, to: frame.link });
     }
     if (changes.length) frames.changed.push({ before: prev, after: frame, changes });
   }
@@ -185,6 +206,18 @@ const q = (s: string | null) => (s === null ? "—" : `'${s.replace(/\s+/g, " ")
 
 function nameOf(node: { label: string | null; id: string }): string {
   return node.label ? node.label.replace(/\s+/g, " ").trim() : node.id;
+}
+
+/**
+ * A link changing is the element pointing somewhere else (D95) — said as
+ * the target, because the path is what a reviewer checks.
+ */
+function describeLinkChange(change: { from: SceneLink | null; to: SceneLink | null }): string {
+  const from = linkText(change.from);
+  const to = linkText(change.to);
+  if (to === null) return `link → ${from} removed`;
+  if (from === null) return `link → ${to} added`;
+  return `link → ${from} → ${to}`;
 }
 
 function describeNodeChange(change: NodeChange): string {
@@ -213,6 +246,8 @@ function describeNodeChange(change: NodeChange): string {
       return change.to === null ? "logic removed" : change.from === null ? "logic added" : "logic changed";
     case "detail":
       return change.to === null ? "detail layer unlinked" : change.from === null ? "detail layer linked" : "detail layer relinked";
+    case "link":
+      return describeLinkChange(change);
   }
 }
 
@@ -231,6 +266,19 @@ function describeEdgeChange(change: EdgeChange, names: (id: string | null) => st
       return change.to === null ? "logic removed" : change.from === null ? "logic added" : "logic changed";
     case "refined":
       return "refinement changed";
+    case "link":
+      return describeLinkChange(change);
+  }
+}
+
+function describeFrameChange(change: FrameChange): string {
+  switch (change.kind) {
+    case "renamed":
+      return `frame renamed from ${q(change.from)}`;
+    case "narrative":
+      return change.to === null ? "narrative removed" : "narrative changed";
+    case "link":
+      return describeLinkChange(change);
   }
 }
 
@@ -277,16 +325,7 @@ export function changelog(diff: SceneDiff, after: SceneGraph, before: SceneGraph
   for (const frame of diff.frames.added) push(frame.name, "frame added");
   for (const frame of diff.frames.removed) push(frame.name, "frame removed");
   for (const { after: frame, changes } of diff.frames.changed) {
-    for (const change of changes) {
-      push(
-        frame.name,
-        change.kind === "renamed"
-          ? `frame renamed from ${q(change.from)}`
-          : change.to === null
-            ? "narrative removed"
-            : "narrative changed",
-      );
-    }
+    for (const change of changes) push(frame.name, describeFrameChange(change));
   }
   return [...byFrame.entries()]
     .map(([frame, items]) => `${frame}: ${items.join("; ")}`)
@@ -309,7 +348,7 @@ export function describeChange(beforeSnapshot: SceneSnapshot, afterSnapshot: Sce
  * changed how the diagram is drawn, not what it says. Everything else this
  * file reports — a component or edge or frame added, removed, relabelled,
  * rewired, re-kinded, re-tagged, re-intented, its logic, its narrative, its
- * detail link, its frame — is meaning.
+ * detail link, its scene link, its frame — is meaning.
  */
 const GEOMETRY = new Set<NodeChange["kind"]>(["moved", "resized"]);
 

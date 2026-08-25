@@ -3,10 +3,32 @@
  * scene graph + legend (B5); deterministic: stable ordering by id, no
  * timestamps, no randomness (I3).
  */
-import type { Scenario } from "../adapter/snapshot";
+import type { Scenario, SceneLink } from "../adapter/snapshot";
 import { genreOf } from "../authoring/genre";
 import type { GraphFrame, SceneGraph } from "../scene/graph";
 import { applyLegend } from "./legend";
+
+/**
+ * What the export knows about where it is being made from (D95): a link
+ * that names no project means the scene's own, and only the caller knows
+ * which project that is. Without it such a link keeps an empty authority —
+ * "whatever project this drawing lives in" — rather than naming a wrong one.
+ */
+export interface ExportContext {
+  project?: string;
+}
+
+/** A scene link as a URL (D95): `docent://<project>/<path>#<component>`. */
+export function sceneLinkUrl(link: SceneLink, context?: ExportContext): string {
+  const at = link.at ? `#${link.at}` : "";
+  return `docent://${link.project ?? context?.project ?? ""}/${link.scene}${at}`;
+}
+
+/** The same target as a reader says it — no scheme, no empty authority. */
+function linkText(link: SceneLink, context?: ExportContext): string {
+  const project = link.project ?? context?.project;
+  return `${project ? `${project}/` : ""}${link.scene}${link.at ? `#${link.at}` : ""}`;
+}
 
 function escapeLabel(label: string): string {
   return label.replace(/"/g, "'").replace(/\s+/g, " ").trim();
@@ -58,7 +80,7 @@ export function scenarioSteps(graph: SceneGraph, scenario: Scenario): string[] {
   });
 }
 
-export function exportMermaid(graph: SceneGraph): string {
+export function exportMermaid(graph: SceneGraph, context?: ExportContext): string {
   const lines: string[] = ["flowchart LR"];
 
   // The conventions the diagram was drawn under (D87, D89) — the author's
@@ -84,6 +106,9 @@ export function exportMermaid(graph: SceneGraph): string {
     const members = graph.nodes.filter((n) => n.frameId === frame.id);
     if (!members.length) continue;
     lines.push(`  subgraph ${frame.id}["${escapeLabel(frame.name || frame.id)}"]`);
+    // A frame's own scene link (D95): Mermaid clicks nodes, not subgraphs,
+    // so the declaration travels as a comment, the way the conventions do.
+    if (frame.link) lines.push(`    %% link (declared): ${sceneLinkUrl(frame.link, context)}`);
     for (const node of members) {
       lines.push(`    ${nodeLine(node.id)}`);
     }
@@ -91,6 +116,16 @@ export function exportMermaid(graph: SceneGraph): string {
   }
   for (const node of graph.nodes.filter((n) => n.frameId === null)) {
     lines.push(`  ${nodeLine(node.id)}`);
+  }
+
+  // A scene link is meaning Mermaid has a place of its own for (D95, I4):
+  // its native click directive, so the rendered diagram goes where the
+  // author said it goes. A scene that declares none emits none.
+  for (const node of graph.nodes) {
+    if (!node.link) continue;
+    lines.push(
+      `  click ${node.id} "${escapeLabel(sceneLinkUrl(node.link, context))}" "scene link (declared): ${escapeLabel(linkText(node.link, context))}"`,
+    );
   }
 
   for (const edge of graph.edges) {
@@ -104,6 +139,8 @@ export function exportMermaid(graph: SceneGraph): string {
         `  ${edge.fromRefined ?? edge.from} -.->${label} ${edge.toRefined ?? edge.to}`,
       );
     }
+    // An edge has no click either — its link rides beside it (D95).
+    if (edge.link) lines.push(`  %% link (declared): ${sceneLinkUrl(edge.link, context)}`);
   }
 
   return `${lines.join("\n")}\n`;

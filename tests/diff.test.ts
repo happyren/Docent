@@ -91,3 +91,46 @@ describe("semantic scene diff (D46)", () => {
     expect(describeChange(before, after).changelog).toBe(describeChange(before, after).changelog);
   });
 });
+
+describe("scene links are meaning too (D95)", () => {
+  const linked = (link: unknown, on = "orders") =>
+    snapshotFromRawElements([
+      frame,
+      ...rect("orders", 40, "Orders", on === "orders" ? { customData: { docent: { link } } } : {}),
+      ...rect("payments", 340, "Payments"),
+      ...rect("legacy", 640, "Legacy sync"),
+      arrow("e1", "orders", "payments", 205, on === "e1" ? { customData: { docent: { link } } } : {}),
+    ]);
+
+  const plain = linked(null);
+
+  it("says a link added, removed, and retargeted", () => {
+    const events = linked({ scene: "payments/events" });
+    expect(describeChange(plain, events).changelog).toBe(
+      "Core Services: Orders: link → payments/events added",
+    );
+    expect(describeChange(events, plain).changelog).toBe(
+      "Core Services: Orders: link → payments/events removed",
+    );
+    expect(describeChange(linked({ scene: "a/b" }), linked({ scene: "c/d" })).changelog).toBe(
+      "Core Services: Orders: link → a/b → c/d",
+    );
+  });
+
+  it("names the project and the arrival point, and stays quiet when neither moved", () => {
+    const here = linked({ scene: "payments/events" });
+    const elsewhere = linked({ scene: "payments/events", project: "Billing", at: "n_hub" });
+    expect(describeChange(here, elsewhere).changelog).toBe(
+      "Core Services: Orders: link → payments/events → Billing/payments/events#n_hub",
+    );
+    expect(diffScenes(elsewhere, elsewhere).empty).toBe(true);
+  });
+
+  it("reports an edge's link on the edge", () => {
+    const before = linked(null, "e1");
+    const after = linked({ scene: "payments/settlement" }, "e1");
+    expect(describeChange(before, after).changelog).toBe(
+      "Core Services: edge Orders → Payments: link → payments/settlement added",
+    );
+  });
+});
