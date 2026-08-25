@@ -2,9 +2,10 @@
 /**
  * Docent portfolio store (S12, D17, D18) — projects of scenes for one
  * deployment. A project is a directory, a scene is a plain `.excalidraw`
- * file: `<DOCENT_DATA>/<project>/<scene>.excalidraw`. No database, no
- * format of its own (D17) — anything this service can do, a file manager
- * can too. Zero runtime dependencies (I7): Node's built-in http/fs/fetch.
+ * file at a **path** inside it (D92): `<DOCENT_DATA>/<project>/<a>/<b>.excalidraw`.
+ * No database, no format of its own (D17) — anything this service can do, a
+ * file manager can too. Zero runtime dependencies (I7): Node's built-in
+ * http/fs/fetch.
  *
  * Served same-origin behind nginx at /api/ (D18); the dev server proxies
  * the same path, so the client never needs CORS.
@@ -43,10 +44,13 @@
  *   POST   /api/projects/:project/pull          → { ok, updated, removed, kept, conflicts }
  *   POST   /api/projects/:project/pull/resolve  → { ok, scene, resolution }
  *   POST   /api/projects/:project/push          → { ok, commit, pushed, removedRemotely }
- *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size }]
+ *   GET    /api/projects/:project/scenes        → [{ name, updatedAt, size }]  (recursive)
  *   GET    /api/projects/:project/scenes/:name  → scene JSON
  *   PUT    /api/projects/:project/scenes/:name  → { ok }            (atomic)
  *   DELETE /api/projects/:project/scenes/:name  → { ok }
+ *
+ * `:name` is a scene path — up to 8 segments, URL-encoded whole into the one
+ * segment (D92), so the routes have the shape they always had.
  */
 import http from "node:http";
 import { createHash } from "node:crypto";
@@ -80,6 +84,15 @@ const SECRETS_FILE = path.resolve(process.env.DOCENT_SECRETS ?? ".docent-secrets
 // and no extension games; the store adds .excalidraw itself.
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,63}$/;
 
+// A scene's name is a path (D92): one to eight of those segments, and the
+// directories are implied by it. Eight is deep enough for any portfolio and
+// shallow enough that a listing stays a listing.
+const MAX_SCENE_DEPTH = 8;
+// Reserved at every level, so the store's own dotfile exception can never be
+// addressed as a folder. NAME_RE already refuses a leading dot; this states
+// the rule the desktop store states, rather than relying on that.
+const RESERVED_SEGMENT = ".docent";
+
 class HttpError extends Error {
   constructor(status, message) {
     super(message);
@@ -97,9 +110,80 @@ const checkName = (name, what) => {
   return name;
 };
 
+/** One segment of a scene path, held to the one name rule (D92). */
+const isSceneSegment = (segment) =>
+  NAME_RE.test(segment) && segment.toLowerCase() !== RESERVED_SEGMENT;
+
+/** A whole scene path: 1–8 such segments. A flat name is a path of one. */
+const isScenePath = (scene) => {
+  if (typeof scene !== "string" || scene === "") return false;
+  const segments = scene.split("/");
+  return segments.length <= MAX_SCENE_DEPTH && segments.every(isSceneSegment);
+};
+
+const SCENE_PATH_ERROR =
+  "invalid scene path — up to 8 folders of letters, digits, spaces, - or _ (max 64 each, no leading symbol)";
+
+const checkScenePath = (scene) => {
+  if (!isScenePath(scene)) throw new HttpError(400, SCENE_PATH_ERROR);
+  return scene;
+};
+
 const projectDir = (project) => path.join(DATA_DIR, checkName(project, "project"));
 const scenePath = (project, scene) =>
-  path.join(projectDir(project), checkName(scene, "scene") + EXT);
+  path.join(projectDir(project), ...checkScenePath(scene).split("/")) + EXT;
+
+/**
+ * A directory exists because scenes live in it (D92): once the last one is
+ * gone the directory is too, ancestor by ancestor, stopping at `root` — the
+ * project directory, which a scene delete never removes. `rmdir` refusing a
+ * non-empty directory *is* the emptiness check, so there is no race between
+ * looking and removing.
+ */
+async function pruneEmptyDirs(root, from) {
+  let dir = from;
+  while (dir !== root && dir.startsWith(root + path.sep)) {
+    try {
+      await fs.rmdir(dir);
+    } catch {
+      return;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+/**
+ * Every scene under a directory, as scene path → file. Depth and segment
+ * rules are the addressing rules (D92): a file this store could not address
+ * round-trip is left out of every listing, count and sync — it stays on disk,
+ * and no verb ever claims to have carried it.
+ */
+async function sceneFiles(dir, prefix = "", depth = 1) {
+  const found = new Map();
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (depth >= MAX_SCENE_DEPTH || !isSceneSegment(entry.name)) continue;
+      const nested = await sceneFiles(
+        path.join(dir, entry.name),
+        `${prefix}${entry.name}/`,
+        depth + 1,
+      );
+      for (const [name, file] of nested) found.set(name, file);
+      continue;
+    }
+    if (!entry.name.endsWith(EXT)) continue;
+    const leaf = entry.name.slice(0, -EXT.length);
+    if (!isSceneSegment(leaf)) continue;
+    found.set(prefix + leaf, path.join(dir, entry.name));
+  }
+  return found;
+}
 
 // ---------------------------------------------------------------------------
 // GitHub bindings (S14, D27) — metadata on disk, tokens somewhere else
@@ -152,10 +236,12 @@ const USER_AGENT = "docent-store";
 const GITHUB_TIMEOUT_MS = 30_000;
 
 /**
- * The If-None-Match cache for the one listing call every sync verb starts
- * with. Deliberately per-process and not persisted: it is an optimization
- * against GitHub's rate limit, never a source of truth — the working copy on
- * disk is that (D29).
+ * The cache for the one listing every sync verb starts with, keyed by the
+ * branch head the listing was read at (D94): a branch that has not moved
+ * cannot have moved a blob, so the whole tree read is skipped and the project
+ * costs the rate limit one ref read. Deliberately per-process and not
+ * persisted: it is an optimization against GitHub's rate limit, never a source
+ * of truth — the working copy on disk is that (D29).
  */
 const listingCache = new Map();
 
@@ -270,12 +356,19 @@ async function writeSync(project, state) {
  * never pushed.
  */
 const baseDir = (project) => path.join(SYNC_DIR, project, "base");
-const basePath = (project, scene) => path.join(baseDir(project), `${scene}${EXT}`);
+const basePath = (project, scene) =>
+  path.join(baseDir(project), ...checkScenePath(scene).split("/")) + EXT;
 async function writeBase(project, scene, text) {
-  await fs.mkdir(baseDir(project), { recursive: true });
-  await fs.writeFile(basePath(project, scene), text, "utf8");
+  const file = basePath(project, scene);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, text, "utf8");
 }
-const removeBase = (project, scene) => fs.rm(basePath(project, scene), { force: true });
+/** Nested like the working copy (D94), and pruned like it. */
+async function removeBase(project, scene) {
+  const file = basePath(project, scene);
+  await fs.rm(file, { force: true });
+  await pruneEmptyDirs(baseDir(project), path.dirname(file));
+}
 async function readBase(project, scene) {
   try {
     return await fs.readFile(basePath(project, scene), "utf8");
@@ -295,18 +388,9 @@ const removeSync = async (project) => {
  * claims to have pushed it.
  */
 async function workingCopy(project) {
-  let files;
-  try {
-    files = await fs.readdir(projectDir(project));
-  } catch {
-    return new Map();
-  }
   const copy = new Map();
-  for (const file of files) {
-    if (!file.endsWith(EXT)) continue;
-    const name = file.slice(0, -EXT.length);
-    if (!NAME_RE.test(name)) continue;
-    copy.set(name, sha256(await fs.readFile(path.join(projectDir(project), file), "utf8")));
+  for (const [name, file] of await sceneFiles(projectDir(project))) {
+    copy.set(name, sha256(await fs.readFile(file, "utf8")));
   }
   return copy;
 }
@@ -323,6 +407,26 @@ function sceneState(hash, base) {
 }
 
 const byName = (a, b) => a.localeCompare(b);
+
+/**
+ * Scene paths, folders first (D92): compared segment by segment, so a
+ * directory's contents stay together, and siblings keep the order flat names
+ * always had. Where the segments agree the deeper path is the folder, and the
+ * folder leads.
+ */
+function byScenePath(a, b) {
+  const left = a.split("/");
+  const right = b.split("/");
+  const shared = Math.min(left.length, right.length);
+  for (let i = 0; i < shared; i += 1) {
+    if (left[i] === right[i]) continue;
+    const leftIsDir = i < left.length - 1;
+    const rightIsDir = i < right.length - 1;
+    if (leftIsDir !== rightIsDir) return leftIsDir ? -1 : 1;
+    return byName(left[i], right[i]);
+  }
+  return right.length - left.length;
+}
 
 /** Every scene the project knows about — on disk, recorded, or both. */
 function sceneNames(...maps) {
@@ -613,14 +717,7 @@ const encodeSegments = (segments) => segments.map(encodeURIComponent).join("/");
 const repoUrl = (binding, rest) =>
   `${binding.apiBase}/repos/${encodeURIComponent(binding.owner)}/${encodeURIComponent(binding.repo)}${rest}`;
 
-const contentsUrl = (binding, leaf) => {
-  const segments = binding.path === "" ? [] : binding.path.split("/");
-  if (leaf !== null) segments.push(leaf);
-  const suffix = segments.length ? `/${encodeSegments(segments)}` : "";
-  return repoUrl(binding, `/contents${suffix}`);
-};
-
-async function github(token, method, url, { body, headers } = {}) {
+async function github(token, method, url, { body } = {}) {
   let res;
   try {
     res = await fetch(url, {
@@ -630,7 +727,6 @@ async function github(token, method, url, { body, headers } = {}) {
         accept: "application/vnd.github+json",
         "user-agent": USER_AGENT,
         ...(body === undefined ? {} : { "content-type": "application/json" }),
-        ...headers,
       },
       body,
       signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
@@ -639,11 +735,7 @@ async function github(token, method, url, { body, headers } = {}) {
     // Unreachable, refused, timed out: the store is fine, the far end is not.
     throw new HttpError(502, `GitHub request failed — ${err?.message ?? err}`);
   }
-  return {
-    status: res.status,
-    etag: res.headers.get("etag"),
-    text: res.status === 304 ? "" : await res.text(),
-  };
+  return { status: res.status, text: await res.text() };
 }
 
 /** Whatever GitHub said, in one line, without ever guessing a status. */
@@ -744,44 +836,51 @@ const parseJson = (text) => {
  */
 const isTooLarge = (status, text) => status === 403 && /too large/i.test(text);
 
+/** What a tree too big for one answer gets: a refusal, never half a sync. */
+const TRUNCATED_ERROR =
+  "the repository tree is too large to list in one request — bind a narrower path";
+
 /**
- * What the bound directory holds on the active branch: scene name → blob sha,
- * in one request. Revalidated with If-None-Match, because every sync verb
- * starts here and a project that has not moved should cost the rate limit
- * nothing.
+ * What the bound subtree holds on the active branch: scene path → blob sha,
+ * recursively (D94). The Git trees API rather than the contents API, because
+ * the contract with the repository was always the subtree and contents only
+ * ever answers one directory. Two requests at most: the branch's head, and —
+ * only when that head has moved since the last listing — the tree itself.
  */
 async function remoteListing(project, binding, token) {
-  const url = `${contentsUrl(binding, null)}?ref=${encodeURIComponent(binding.branch)}`;
+  const head = await githubHeadCommit(binding, token);
   const cached = listingCache.get(project);
-  const res = await github(token, "GET", url, {
-    headers: cached?.etag ? { "if-none-match": cached.etag } : undefined,
-  });
-  if (res.status === 304 && cached) return new Map(cached.entries);
-  // A bound path that does not exist yet is the normal state right after
-  // binding — the first push creates it. Listing it as empty is honest; a
-  // wrong owner/repo shows the same, and then fails loudly on the first push.
-  if (res.status === 404) {
-    listingCache.delete(project);
-    return new Map();
-  }
+  if (cached?.commit === head) return new Map(cached.entries);
+  const tree = await githubCommitTree(binding, token, head);
+  const res = await github(
+    token,
+    "GET",
+    repoUrl(binding, `/git/trees/${encodeURIComponent(tree)}?recursive=1`),
+  );
   if (res.status < 200 || res.status >= 300) throw githubFailure(res.status, res.text);
-  const entries = parseJson(res.text);
-  if (!Array.isArray(entries)) {
-    throw new HttpError(502, "the bound path is a file, not a directory");
+  const body = parseJson(res.text);
+  // GitHub truncates a tree it will not answer whole. Syncing against half a
+  // repository would read as "the remote deleted everything below here", so
+  // this is a refusal rather than a listing.
+  if (body?.truncated === true) throw new HttpError(502, TRUNCATED_ERROR);
+  if (!Array.isArray(body?.tree)) {
+    throw new HttpError(502, "GitHub API error (tree carried no entries)");
   }
-  const listed = entries
-    .filter(
-      (entry) =>
-        entry?.type === "file" &&
-        typeof entry.name === "string" &&
-        entry.name.endsWith(EXT) &&
-        // Only names this store can address round-trip: anything else in the
-        // directory belongs to the repository, not to the portfolio.
-        NAME_RE.test(entry.name.slice(0, -EXT.length)),
-    )
-    .map((entry) => [entry.name.slice(0, -EXT.length), String(entry.sha ?? "")])
-    .sort((a, b) => byName(a[0], b[0]));
-  listingCache.set(project, { etag: res.etag, entries: listed });
+  // A bound path that does not exist yet is the normal state right after
+  // binding — the first push creates it — and answers as no entries at all.
+  const prefix = binding.path === "" ? "" : `${binding.path}/`;
+  const listed = [];
+  for (const entry of body.tree) {
+    if (entry?.type !== "blob" || typeof entry.path !== "string") continue;
+    if (!entry.path.startsWith(prefix) || !entry.path.endsWith(EXT)) continue;
+    const scene = entry.path.slice(prefix.length, -EXT.length);
+    // Only paths this store can address round-trip: anything else under the
+    // bound path belongs to the repository, not to the portfolio.
+    if (!isScenePath(scene)) continue;
+    listed.push([scene, String(entry.sha ?? "")]);
+  }
+  listed.sort((a, b) => byName(a[0], b[0]));
+  listingCache.set(project, { commit: head, entries: listed });
   return new Map(listed);
 }
 
@@ -804,8 +903,8 @@ async function githubBlob(binding, token, sha) {
   return Buffer.from(body.content, "base64").toString("utf8");
 }
 
-/** The branch's head commit and the tree that commit points at. */
-async function githubHead(binding, token) {
+/** The branch's head commit — one request, and the key a listing caches on. */
+async function githubHeadCommit(binding, token) {
   const heads = `/git/ref/heads/${encodeSegments(binding.branch.split("/"))}`;
   const ref = await github(token, "GET", repoUrl(binding, heads));
   if (ref.status === 404) {
@@ -819,6 +918,11 @@ async function githubHead(binding, token) {
   if (typeof commit !== "string" || commit === "") {
     throw new HttpError(502, "GitHub API error (ref carried no sha)");
   }
+  return commit;
+}
+
+/** The tree one commit points at. */
+async function githubCommitTree(binding, token, commit) {
   const res = await github(
     token,
     "GET",
@@ -829,7 +933,13 @@ async function githubHead(binding, token) {
   if (typeof tree !== "string" || tree === "") {
     throw new HttpError(502, "GitHub API error (commit carried no tree)");
   }
-  return { commit, tree };
+  return tree;
+}
+
+/** The branch's head commit and the tree that commit points at. */
+async function githubHead(binding, token) {
+  const commit = await githubHeadCommit(binding, token);
+  return { commit, tree: await githubCommitTree(binding, token, commit) };
 }
 
 /** POST one of the Git Data objects and read the sha back out of the answer. */
@@ -1044,6 +1154,13 @@ async function writeWorkingFile(project, scene, text) {
   await fs.rename(tmp, file);
 }
 
+/** Remove one scene of the working copy, and the folders it emptied (D92). */
+async function removeWorkingFile(project, scene) {
+  const file = scenePath(project, scene);
+  await fs.rm(file, { force: true });
+  await pruneEmptyDirs(projectDir(project), path.dirname(file));
+}
+
 /**
  * Fast-forward the working copy from the branch. Every scene is decided on its
  * own, and the rule never varies: when only one side moved, that side wins;
@@ -1083,7 +1200,7 @@ async function pullProject(project, binding, token) {
     }
     if (state === "clean") {
       if (remoteSha === null) {
-        await fs.rm(scenePath(project, name), { force: true });
+        await removeWorkingFile(project, name);
         await removeBase(project, name);
         bases.delete(name);
         removed.push(name);
@@ -1143,7 +1260,7 @@ async function resolveScene(project, binding, token, body) {
   if (typeof input.scene !== "string") {
     throw bad("body is not a resolution — name the scene to resolve");
   }
-  const scene = checkName(input.scene, "scene");
+  const scene = checkScenePath(input.scene);
   const resolution = input.resolution;
   if (resolution !== "keep-local" && resolution !== "take-remote") {
     throw bad('invalid resolution — use "keep-local" or "take-remote"');
@@ -1167,7 +1284,7 @@ async function resolveScene(project, binding, token, body) {
   } else if (base.conflictSha === "") {
     // The remote deleted it and the author accepts that, so the local file
     // goes too and the scene stops being tracked.
-    await fs.rm(scenePath(project, scene), { force: true });
+    await removeWorkingFile(project, scene);
     await removeBase(project, scene);
     bases.delete(scene);
   } else {
@@ -1483,11 +1600,11 @@ async function listProjects() {
   for (const entry of entries.filter((e) => e.isDirectory())) {
     // The bindings dotfile's own directory is not a project (D27).
     if (entry.name.startsWith(".")) continue;
-    const files = await fs.readdir(path.join(DATA_DIR, entry.name));
-    const scenes = files.filter((f) => f.endsWith(EXT));
+    // Recursively: a scene in a folder is a scene of this project (D92).
+    const scenes = await sceneFiles(path.join(DATA_DIR, entry.name));
     let updatedAt = 0;
-    for (const f of scenes) {
-      const st = await fs.stat(path.join(DATA_DIR, entry.name, f));
+    for (const file of scenes.values()) {
+      const st = await fs.stat(file);
       updatedAt = Math.max(updatedAt, st.mtimeMs);
     }
     // A bound project counts its working copy exactly like any other (D29):
@@ -1499,7 +1616,7 @@ async function listProjects() {
     const canWrite = binding?.canWrite;
     projects.push({
       id: entry.name,
-      scenes: scenes.length,
+      scenes: scenes.size,
       updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
       ...(binding ? { bound: true } : {}),
       ...(binding && typeof canWrite === "boolean" ? { canWrite } : {}),
@@ -1509,28 +1626,27 @@ async function listProjects() {
 }
 
 /**
- * A project's scenes: the files in its directory, bound or not. A binding
- * changes where those files came from and where they will go, never how they
- * are read (D29).
+ * A project's scenes: every scene under its directory, at the path it lives
+ * at (D92), folders first. A binding changes where those files came from and
+ * where they will go, never how they are read (D29).
  */
 async function listScenes(project) {
   const dir = projectDir(project);
-  let files;
   try {
-    files = await fs.readdir(dir);
+    await fs.readdir(dir);
   } catch {
     throw new HttpError(404, `no such project: ${project}`);
   }
   const scenes = [];
-  for (const f of files.filter((f) => f.endsWith(EXT))) {
-    const st = await fs.stat(path.join(dir, f));
+  for (const [name, file] of await sceneFiles(dir)) {
+    const st = await fs.stat(file);
     scenes.push({
-      name: f.slice(0, -EXT.length),
+      name,
       updatedAt: new Date(st.mtimeMs).toISOString(),
       size: st.size,
     });
   }
-  return scenes.sort((a, b) => a.name.localeCompare(b.name));
+  return scenes.sort((a, b) => byScenePath(a.name, b.name));
 }
 
 async function readBody(req) {
@@ -1548,6 +1664,8 @@ async function handle(req, res) {
   const url = new URL(req.url, "http://localhost");
   const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   // parts: ["api", "projects", :project?, ("scenes"|"binding"|…)?, :scene?]
+  // …where :scene is the whole scene path, URL-encoded into one segment, so
+  // decoding hands it back with its slashes intact (D92).
   if (parts[0] !== "api") throw new HttpError(404, "not found");
 
   if (parts[1] === "health" && req.method === "GET") {
@@ -1664,7 +1782,7 @@ async function handle(req, res) {
   // The "before" copy of a scene (D47): what the recorded base sha says.
   if (parts.length === 6 && parts[3] === "scenes" && parts[5] === "base" && req.method === "GET") {
     const project = checkName(parts[2], "project");
-    const scene = checkName(parts[4], "scene");
+    const scene = checkScenePath(parts[4]);
     const text = await readBase(project, scene);
     if (text === null) {
       throw new HttpError(404, `no base copy yet for ${project}/${scene} — pull or push first`);
@@ -1707,6 +1825,8 @@ async function handle(req, res) {
       } catch {
         throw new HttpError(404, `no such project: ${project}`);
       }
+      // The folders in a scene's path exist because the scene does (D92).
+      await fs.mkdir(path.dirname(file), { recursive: true });
       // Atomic: a crash mid-write must never truncate an existing scene.
       const tmp = file + ".tmp";
       await fs.writeFile(tmp, body, "utf8");
@@ -1719,6 +1839,8 @@ async function handle(req, res) {
       } catch {
         throw new HttpError(404, `no such scene: ${project}/${scene}`);
       }
+      // The folders it was the last scene in go with it — never the project.
+      await pruneEmptyDirs(projectDir(project), path.dirname(file));
       return { ok: true };
     }
   }
