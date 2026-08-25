@@ -9,6 +9,7 @@
  */
 import type {
   LegendRule,
+  Scenario,
   SceneSnapshot,
   SnapshotElement,
 } from "../adapter/snapshot";
@@ -97,6 +98,14 @@ export interface SceneGraph {
   frames: GraphFrame[];
   groups: GraphGroup[];
   legend: LegendRule[];
+  /**
+   * The genre the scene was drawn in (D87), off the same carrier the
+   * legend comes from — what turns on a genre's lint and its posture.
+   * Null when the author has adopted none.
+   */
+  genre: string | null;
+  /** The scene's scenarios (D89), in the order they were authored. */
+  scenarios: Scenario[];
 }
 
 const NODE_TYPES = new Set([
@@ -262,8 +271,13 @@ function nodeAtPoint(
 export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
   const byId = new Map(snapshot.elements.map((el) => [el.id, el]));
 
-  const legend =
-    snapshot.elements.find((el) => isLegendCarrier(el))?.docent.legend ?? [];
+  // The legend's carrier carries the scene's conventions whole (D87,
+  // D89): the rules, the genre, and the scenarios come off the one
+  // element, so they cannot drift apart.
+  const carrier = snapshot.elements.find((el) => isLegendCarrier(el));
+  const legend = carrier?.docent.legend ?? [];
+  const genre = carrier?.docent.genre ?? null;
+  const scenarios = carrier?.docent.scenarios ?? [];
 
   const frameElements = snapshot.elements.filter((el) => el.type === "frame");
   const edgeElements = snapshot.elements.filter((el) => el.type === "arrow" && !isLegendCarrier(el));
@@ -522,5 +536,5 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     .map(([id, members]) => ({ id, members: members.sort() }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
-  return { nodes, edges, frames, groups, legend };
+  return { nodes, edges, frames, groups, legend, genre, scenarios };
 }

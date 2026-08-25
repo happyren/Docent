@@ -34,6 +34,18 @@ export interface LegendRule {
   meaning: string;
 }
 
+/**
+ * A named, ordered path of edges through the diagram (D89) — one request's
+ * story told over the map it already has. Steps are element ids, so a
+ * scenario survives every move the layout makes (I6).
+ */
+export interface Scenario {
+  name: string;
+  description?: string;
+  /** The edges the story takes, in order — element ids. */
+  path: string[];
+}
+
 export interface DocentElementData {
   detailFrameId: string | null;
   tags: string[];
@@ -51,6 +63,14 @@ export interface DocentElementData {
   order: number | null;
   /** Present only on the legend carrier element. */
   legend: LegendRule[] | null;
+  /**
+   * The scene's genre (D87), recorded beside the legend on the carrier —
+   * a category of diagram is a set of conventions, and the legend is
+   * where conventions already live. Null on every other element.
+   */
+  genre: string | null;
+  /** The scene's scenarios (D89), on the carrier with the genre. */
+  scenarios: Scenario[];
   /**
    * A drawn legend sample or its label (D69): part of the legend's picture,
    * never a component or an edge.
@@ -177,6 +197,36 @@ export function parseLegendRules(v: unknown): LegendRule[] | null {
   return rules;
 }
 
+/** Whitespace collapsed and trimmed; the empty string reads as nothing. */
+function cleaned(v: unknown): string | null {
+  const s = asString(v);
+  if (s === null) return null;
+  const trimmed = s.replace(/\s+/g, " ").trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * The scenarios on the carrier (D89). A malformed entry — no name, no
+ * path, a step that is not an id — is dropped rather than repaired: what
+ * comes back is what can be replayed.
+ */
+export function parseScenarios(v: unknown): Scenario[] {
+  if (!Array.isArray(v)) return [];
+  const out: Scenario[] = [];
+  for (const raw of v) {
+    if (typeof raw !== "object" || raw === null) continue;
+    const r = raw as Record<string, unknown>;
+    const name = cleaned(r.name);
+    if (!name) continue;
+    if (!Array.isArray(r.path)) continue;
+    const path = r.path.filter((step): step is string => typeof step === "string" && step !== "");
+    if (!path.length) continue;
+    const description = cleaned(r.description);
+    out.push(description ? { name, description, path } : { name, path });
+  }
+  return out;
+}
+
 function parseCompositeFlags(v: unknown): Record<string, boolean> {
   if (typeof v !== "object" || v === null) return {};
   const out: Record<string, boolean> = {};
@@ -196,6 +246,8 @@ function parseDocent(customData: unknown): DocentElementData {
     narrative: null,
     order: null,
     legend: null,
+    genre: null,
+    scenarios: [],
     legendSample: false,
     refine: null,
     composite: {},
@@ -239,6 +291,10 @@ function parseDocent(customData: unknown): DocentElementData {
     order:
       typeof d.order === "number" && Number.isFinite(d.order) ? d.order : null,
     legend: parseLegendRules(d.legend),
+    // The genre and the scenarios ride with the legend on its carrier
+    // (D87, D89): one home for the scene's conventions.
+    genre: cleaned(d.genre),
+    scenarios: parseScenarios(d.scenarios),
     legendSample: d.legendSample === true,
   };
 }
