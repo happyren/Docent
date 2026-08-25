@@ -227,8 +227,9 @@ export interface LabelDraw {
  * two runs of one diagram give one picture (I3). The gap between two
  * columns is at least the widest edge label that sits in it (D70), and a
  * flow of more than `TURN_AFTER` ranks folds into bands that alternate
- * direction (D71). Returns new boxes at the frame's origin; the caller
- * grows the frame.
+ * direction (D71) — the map posture's fold, which a straight posture
+ * skips (D90). Returns new boxes at the frame's origin; the caller grows
+ * the frame.
  */
 export interface LayoutOptions {
   /** The room an edge's label takes; nothing when absent. */
@@ -253,6 +254,14 @@ export interface LayoutOptions {
    * then id) when the caller cannot say.
    */
   order?: (id: string) => number;
+  /**
+   * The posture the genre asks for (D90). "map" — the default — folds a
+   * long flow into bands (D71); "straight" never folds, so a flow of any
+   * length stays one left-to-right line of ranks, because a time axis
+   * must not turn back on itself. One option on one pipeline, never a
+   * second engine (I3, I7).
+   */
+  posture?: "map" | "straight";
 }
 
 /**
@@ -765,28 +774,26 @@ function sharedSizes(
   return out;
 }
 
-export function layeredLayout(
-  nodes: readonly GraphNode[],
+/**
+ * Longest-path ranks over the DAG left when the returns are taken out
+ * (D74, D79): a component sits one rank past the furthest thing that
+ * feeds it, walked in authored order so two runs rank one graph alike
+ * (I3). Every posture ranks this way — lanes change the rows, never the
+ * columns (D90).
+ */
+function longestPathRanks(
+  byOrder: readonly GraphNode[],
   edges: readonly GraphEdge[],
-  sizes: ReadonlyMap<string, Size>,
-  origin: { x: number; y: number },
-  options: LayoutOptions = {},
-): Map<string, Box> {
-  const ids = new Set(nodes.map((n) => n.id));
-  // The order the flow was written in decides which edge of a cycle is the
-  // return (D79); it also breaks every tie below, so one diagram gives one
-  // picture (I3).
-  const order = authoredOrder(nodes, options.order);
-  const byOrder = [...nodes].sort((a, b) => order.get(a.id)! - order.get(b.id)!);
-  const back = backEdges(nodes, edges, options.order);
-  const inn = new Map<string, string[]>(nodes.map((n) => [n.id, []]));
+  ids: ReadonlySet<string>,
+  back: ReadonlySet<string>,
+): Map<string, number> {
+  const inn = new Map<string, string[]>(byOrder.map((n) => [n.id, []]));
   for (const e of edges) {
     if (!e.from || !e.to || !ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
     // A return takes no part in ranking (D79) — what is left is a DAG.
     if (back.has(e.id)) continue;
     inn.get(e.to)!.push(e.from);
   }
-  // Longest-path ranks over that DAG.
   const rank = new Map<string, number>();
   const visiting = new Set<string>();
   const rankOf = (id: string): number => {
@@ -801,6 +808,67 @@ export function layeredLayout(
     return r;
   };
   for (const n of byOrder) rankOf(n.id);
+  return rank;
+}
+
+/**
+ * The edges a layout lays out, in one canonical order: everything between
+ * two members that is neither a self-loop nor a return (D79), read
+ * feeder-first by authored order — so the dummies they leave, and every
+ * tie those dummies break, are the same whatever order they came in (I3).
+ */
+function forwardFlows(
+  edges: readonly GraphEdge[],
+  ids: ReadonlySet<string>,
+  back: ReadonlySet<string>,
+  order: ReadonlyMap<string, number>,
+): GraphEdge[] {
+  return edges
+    .filter((e) => e.from && e.to && ids.has(e.from) && ids.has(e.to) && e.from !== e.to && !back.has(e.id))
+    .sort(
+      (a, b) =>
+        order.get(a.from!)! - order.get(b.from!)! ||
+        order.get(a.to!)! - order.get(b.to!)! ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
+}
+
+/**
+ * The label room each column gap must leave (D70), keyed by the rank the
+ * gap follows: an edge one rank long puts its label in the gap it spans;
+ * a longer one carries its label on a dummy instead.
+ */
+function labelGaps(
+  flows: readonly GraphEdge[],
+  rank: ReadonlyMap<string, number>,
+  labelOf: (edge: GraphEdge) => Size,
+): Map<number, number> {
+  const gaps = new Map<number, number>();
+  for (const e of flows) {
+    const from = rank.get(e.from!)!;
+    const to = rank.get(e.to!)!;
+    if (Math.abs(to - from) !== 1) continue;
+    const low = Math.min(from, to);
+    gaps.set(low, Math.max(gaps.get(low) ?? 0, labelOf(e).width));
+  }
+  return gaps;
+}
+
+export function layeredLayout(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  sizes: ReadonlyMap<string, Size>,
+  origin: { x: number; y: number },
+  options: LayoutOptions = {},
+): Map<string, Box> {
+  const ids = new Set(nodes.map((n) => n.id));
+  // The order the flow was written in decides which edge of a cycle is the
+  // return (D79); it also breaks every tie below, so one diagram gives one
+  // picture (I3).
+  const order = authoredOrder(nodes, options.order);
+  const byOrder = [...nodes].sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+  const back = backEdges(nodes, edges, options.order);
+  const rank = longestPathRanks(byOrder, edges, ids, back);
   // A kind's shared width, a rank's shared height (D74, D80) — only when
   // the caller can name a kind, since nothing else knows what a peer is.
   const drawn = options.kindOf ? sharedSizes(byOrder, rank, sizes, options.kindOf, options.labelOf) : null;
@@ -820,20 +888,9 @@ export function layeredLayout(
     push(r, { id: n.id, dummy: false, size: sizeOf(n.id), tie: order.get(n.id)!, up: [], down: [], index: 0 });
   }
   let dummies = 0;
-  // The label room each column gap must leave (D70): an edge one rank long
-  // puts its label in the gap it spans; a longer one puts it on its dummy.
-  const gapAfter = new Map<number, number>();
   const labelOf = (e: GraphEdge): Size => options.labelSize?.(e) ?? { width: 0, height: 0 };
-  // Edges are read in one canonical order, so the dummies they leave — and
-  // every tie those dummies break — are the same whatever order they came in.
-  const flows = edges
-    .filter((e) => e.from && e.to && ids.has(e.from) && ids.has(e.to) && e.from !== e.to && !back.has(e.id))
-    .sort(
-      (a, b) =>
-        order.get(a.from!)! - order.get(b.from!)! ||
-        order.get(a.to!)! - order.get(b.to!)! ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-    );
+  const flows = forwardFlows(edges, ids, back, order);
+  const gapAfter = labelGaps(flows, rank, labelOf);
   flows.forEach((e, at) => {
     const rf = rank.get(e.from!)!;
     const rt = rank.get(e.to!)!;
@@ -841,7 +898,6 @@ export function layeredLayout(
     // Every flow left runs forward — the returns were taken out (D79).
     const [low, high] = rt > rf ? [rf, rt] : [rt, rf];
     const label = labelOf(e);
-    if (high === low + 1) gapAfter.set(low, Math.max(gapAfter.get(low) ?? 0, label.width));
     let previous = slotOf.get(rt > rf ? e.from! : e.to!)!;
     for (let r = low + 1; r < high; r++) {
       const slot: Slot = {
@@ -873,8 +929,11 @@ export function layeredLayout(
     width: Math.max(0, ...ordered[i].map((slot) => slot.size.width)),
     gap: Math.max(GAP_X, gapAfter.get(r) ?? 0),
   }));
-  // Fold into bands (D71): left to right, then right to left beneath.
-  const perBand = columnsPerBand(columns.length);
+  // Fold into bands (D71): left to right, then right to left beneath. A
+  // straight posture takes them all in one band instead — a time axis must
+  // not turn back on itself (D90).
+  const perBand =
+    options.posture === "straight" ? Math.max(1, columns.length) : columnsPerBand(columns.length);
   const result = new Map<string, Box>();
   let bandTop = origin.y;
   // Where the previous band's last column stood: the next band starts under it.
@@ -908,6 +967,118 @@ export function layeredLayout(
       .filter((e) => e.from && e.to && !back.has(e.id) && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
       .reduce((h, e) => Math.max(h, labelOf(e).height), 0);
     bandTop += bottom - top + Math.max(GAP_Y * 2, turnLabel + 40);
+  }
+  return result;
+}
+
+/**
+ * The room between two lanes (D90): the caller wraps each lane in a frame,
+ * and a frame reaches FRAME_HEAD + FRAME_PAD above what it holds and
+ * FRAME_PAD below, so this leaves the two frames 24 of clear air (D86).
+ */
+export const LANE_GAP = FRAME_HEAD + 2 * FRAME_PAD + 24;
+
+/**
+ * What the lanes posture needs beyond a layered layout (D90). The rest of
+ * `LayoutOptions` means what it always did; `posture` alone plays no part,
+ * since lanes are the posture and lanes never fold.
+ */
+export interface LaneLayoutOptions extends LayoutOptions {
+  /** The lane a component belongs to; null when it names none. */
+  laneOf: (id: string) => string | null;
+  /** The lanes in declared order — the first is the top row. */
+  lanes: readonly string[];
+}
+
+/**
+ * The lanes posture (D90): the same pipeline read sideways. Rank still
+ * runs left to right — the map's ranks, longest-path over the DAG the
+ * returns leave behind (D74, D79) — but a component's row is its lane,
+ * not what the crossing sweeps chose, so an event flow reads command →
+ * event → read model with every context keeping its own row. Columns
+ * never fold: this axis is time, and D71's turn is for maps. The column
+ * discipline is unchanged — components of one kind share a width (D74,
+ * D80), and a gap is at least the widest edge label sitting in it (D70).
+ * Components sharing a (lane, rank) cell stack in authored order.
+ * Deterministic (I3): there is no sweep to run, since the lane fixes
+ * every row.
+ */
+export function laneLayout(
+  nodes: readonly GraphNode[],
+  edges: readonly GraphEdge[],
+  sizes: ReadonlyMap<string, Size>,
+  origin: { x: number; y: number },
+  options: LaneLayoutOptions,
+): Map<string, Box> {
+  const ids = new Set(nodes.map((n) => n.id));
+  const order = authoredOrder(nodes, options.order);
+  const byOrder = [...nodes].sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+  const back = backEdges(nodes, edges, options.order);
+  const rank = longestPathRanks(byOrder, edges, ids, back);
+  const drawn = options.kindOf ? sharedSizes(byOrder, rank, sizes, options.kindOf, options.labelOf) : null;
+  const sizeOf = (id: string): Size => drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
+  const labelOf = (e: GraphEdge): Size => options.labelSize?.(e) ?? { width: 0, height: 0 };
+  const gapAfter = labelGaps(forwardFlows(edges, ids, back, order), rank, labelOf);
+  // A component whose lane was never declared — or which names none — is
+  // neither dropped nor filed under a context it is not in: one extra row
+  // beneath the declared lanes holds it, where the author can see it.
+  const spare = options.lanes.length;
+  const declared = new Map(options.lanes.map((name, i) => [name, i]));
+  const laneOf = (id: string): number => {
+    const name = options.laneOf(id);
+    return (name === null ? undefined : declared.get(name)) ?? spare;
+  };
+  // Columns are the ranks, in order; every one of them is drawn.
+  const columns = [...new Set(byOrder.map((n) => rank.get(n.id)!))].sort((a, b) => a - b);
+  const columnWidth = new Map<number, number>();
+  for (const n of byOrder) {
+    const r = rank.get(n.id)!;
+    columnWidth.set(r, Math.max(columnWidth.get(r) ?? 0, sizeOf(n.id).width));
+  }
+  const columnLeft = new Map<number, number>();
+  let x = origin.x;
+  for (const r of columns) {
+    columnLeft.set(r, x);
+    x += columnWidth.get(r)! + Math.max(GAP_X, gapAfter.get(r) ?? 0);
+  }
+  // What sits in one (lane, rank) cell, in authored order — `byOrder` is
+  // already in it, so a stack needs no tie-break of its own.
+  const cellKey = (lane: number, r: number): string => `${lane} ${r}`;
+  const cells = new Map<string, string[]>();
+  for (const n of byOrder) {
+    const key = cellKey(laneOf(n.id), rank.get(n.id)!);
+    const members = cells.get(key);
+    if (members) members.push(n.id);
+    else cells.set(key, [n.id]);
+  }
+  const stackHeight = (members: readonly string[]): number =>
+    members.reduce((h, id, i) => h + sizeOf(id).height + (i ? GAP_Y : 0), 0);
+  // A lane is as tall as its tallest stack; between two lanes goes the room
+  // their frames need.
+  const laneCount = spare + 1;
+  const laneHeight = Array.from({ length: laneCount }, (_, lane) =>
+    Math.max(0, ...columns.map((r) => stackHeight(cells.get(cellKey(lane, r)) ?? []))),
+  );
+  const laneTop: number[] = [];
+  let y = origin.y;
+  for (let lane = 0; lane < laneCount; lane++) {
+    laneTop.push(y);
+    y += laneHeight[lane] + LANE_GAP;
+  }
+  const result = new Map<string, Box>();
+  for (let lane = 0; lane < laneCount; lane++) {
+    for (const r of columns) {
+      const members = cells.get(cellKey(lane, r));
+      if (!members) continue;
+      // The stack sits in the middle of its lane, so one component per
+      // cell keeps a straight line along the lane however others stack.
+      let top = laneTop[lane] + Math.round((laneHeight[lane] - stackHeight(members)) / 2);
+      for (const id of members) {
+        const size = sizeOf(id);
+        result.set(id, { x: columnLeft.get(r)!, y: top, ...size });
+        top += size.height + GAP_Y;
+      }
+    }
   }
   return result;
 }
