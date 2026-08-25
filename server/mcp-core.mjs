@@ -256,7 +256,7 @@ export const TOOLS = [
   {
     name: "open_scene",
     description:
-      "Open a portfolio scene onto the canvas (read-only navigation — the document itself is never modified). Refused while the canvas holds unsaved changes: the user decides what happens to their work, never an agent.\nExample: open_scene({project:'work', scene:'payments-platform'}) then get_scene_graph() to read what opened.",
+      "Open a portfolio scene onto the canvas (read-only navigation — the document itself is never modified). Refused while the canvas holds unsaved changes: the user decides what happens to their work, never an agent. `scene` is the path list_projects answered with: a plain name, or folders and a name.\nExample: open_scene({project:'work', scene:'payments/flows/checkout'}) then get_scene_graph() to read what opened.",
     inputSchema: {
       type: "object",
       properties: {
@@ -627,7 +627,7 @@ export const TOOLS = [
   {
     name: "create_scene",
     description:
-      "Create an empty scene in a portfolio project and open it (refused while the canvas holds unsaved changes). With `genre`, the new scene adopts it at birth — the genre's kinds are seeded into the legend and the answer carries that genre's guidance, so you can start drawing from the reply.\nExample: create_scene({project:'work', scene:'payments-platform', genre:'architecture'})",
+      "Create an empty scene in a portfolio project and open it (refused while the canvas holds unsaved changes). `scene` may be a folder path — up to eight segments of letters, digits, spaces, - or _ — and the folders come into being with it; a plain name puts the scene at the project's root. With `genre`, the new scene adopts it at birth — the genre's kinds are seeded into the legend and the answer carries that genre's guidance, so you can start drawing from the reply.\nExample: create_scene({project:'work', scene:'payments/flows/checkout', genre:'architecture'})",
     inputSchema: {
       type: "object",
       properties: {

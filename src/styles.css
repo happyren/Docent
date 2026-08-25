@@ -263,6 +263,7 @@ body {
 .docent-field textarea,
 .docent-legend-row input,
 .docent-portfolio-new input,
+.docent-portfolio-new select,
 .docent-legend-row select {
   background: #26262c;
   color: var(--docent-fg);
@@ -796,15 +797,116 @@ body {
   line-height: 1.5;
 }
 
-.docent-portfolio-grid {
+/* The scene tree (D93). One scroller for the whole tree — a folder's own
+   scenes are a grid inside it, so the cards look exactly as they always did
+   and only their context is new. */
+.docent-portfolio-tree {
   flex: 1;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-content: start;
+  max-height: 64vh;
+  padding-right: 4px;
+}
+
+.docent-portfolio-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
   align-content: start;
-  max-height: 64vh;
-  padding-right: 4px;
+}
+
+.docent-portfolio-folder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The folder row itself: a chevron, the name, what is under it, and the
+   actions that are about the folder rather than any one scene. */
+.docent-portfolio-folder-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.docent-portfolio-folder-head:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Staging (D93): nothing is stored under it yet, so it reads as a sketch of
+   a folder rather than one. */
+.docent-portfolio-folder-head.is-staged {
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  padding: 3px 7px;
+}
+
+.docent-portfolio-folder-head button {
+  background: #2a2a30;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.docent-portfolio-folder-head .docent-portfolio-delete {
+  background: none;
+  border: none;
+  font-size: 13px;
+}
+
+.docent-portfolio-chevron {
+  width: 12px;
+  color: var(--docent-muted);
+  font-size: 11px;
+}
+
+/* Depth is a left rule: the tree indents, the cards do not shrink. */
+.docent-portfolio-folder-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 0;
+}
+
+/* Move (D93) sits with the delete cross in the caption: the same muted
+   affordance, a word instead of a mark because it asks a question. It waits
+   for the pointer, so a resting card reads exactly as it always did — the
+   snapshot, the name, when it changed. */
+.docent-portfolio-move {
+  display: none;
+  background: none;
+  border: none;
+  color: var(--docent-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.docent-scene-card:hover .docent-portfolio-move,
+.docent-portfolio-move:focus {
+  display: inline-block;
+}
+
+.docent-portfolio-move:hover {
+  color: var(--docent-fg);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .docent-scene-card {
