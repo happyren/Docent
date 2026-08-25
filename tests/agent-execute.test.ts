@@ -504,7 +504,10 @@ describe("genres at the surface (D87, D91)", () => {
     const log: string[] = [];
     const { shell } = fakeShell();
     shell.authoring = {
-      saveScene: async () => ({ project: "work", scene: "s" }),
+      saveScene: async () => {
+        log.push("save");
+        return { project: "work", scene: "s" };
+      },
       createScene: async (project, scene) => {
         log.push(`create:${project}/${scene}`);
       },
@@ -518,7 +521,9 @@ describe("genres at the surface (D87, D91)", () => {
       guidance: string;
       changelog: string;
     };
-    expect(log).toEqual(["create:work/orders"]);
+    // The seeding is saved as part of the creation — an unsaved genre would
+    // evaporate on the next open and leave a dirty canvas behind.
+    expect(log).toEqual(["create:work/orders", "save"]);
     expect(batches).toEqual([[{ op: "use_genre", genre: "request" }]]);
     expect(answer.genre).toBe("request");
     expect(answer.guidance).toBe(GENRES.request.guidance);
@@ -527,7 +532,7 @@ describe("genres at the surface (D87, D91)", () => {
     await expect(
       execute(commands, shell, "create_scene", { project: "work", scene: "nope", genre: "uml" }),
     ).rejects.toThrow(/Unknown genre "uml" — one of architecture, request/);
-    expect(log).toEqual(["create:work/orders"]);
+    expect(log).toEqual(["create:work/orders", "save"]);
     // And without one, nothing changed: no batch, the old way forward.
     const plain = (await execute(commands, shell, "create_scene", { project: "work", scene: "plain" })) as { next: string; genre?: string };
     expect(plain.genre).toBeUndefined();

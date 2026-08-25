@@ -685,6 +685,10 @@ export async function execute(
       // The genre seeds the new scene down the same op an agent would call
       // itself, and answers with the recipe (D87, D91).
       const seeded = await commands.edit([{ op: "use_genre", genre: profile.id }]);
+      // The seeding is part of the creation, so it is saved as part of it:
+      // an unsaved genre would evaporate on the next open, and the dirty
+      // canvas would block the next create_scene besides.
+      await shell.authoring.saveScene();
       return {
         created: { project, scene },
         genre: profile.id,

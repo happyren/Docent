@@ -2198,13 +2198,23 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
  * Right after mount Excalidraw hasn't measured its container yet
  * (appState.width/height are 0), and a fit-to-content computed against a
  * zero-sized viewport collapses zoom to the minimum. Wait, bounded, until
- * the canvas reports a real size.
+ * the canvas reports a real size. The bound is a clock, not a frame
+ * count: on a hidden tab rAF never fires — an agent driving a
+ * backgrounded canvas must get its answer, not a wedge — so each wait
+ * races a timer and the whole loop gives up after a second.
  */
 async function waitForCanvasSize(api: ExcalidrawImperativeAPI): Promise<void> {
-  for (let i = 0; i < 60; i++) {
+  const start = performance.now();
+  while (performance.now() - start < 1000) {
     const { width, height } = api.getAppState();
     if (width > 0 && height > 0) return;
-    await new Promise(requestAnimationFrame);
+    await new Promise<void>((resolve) => {
+      const timer = window.setTimeout(resolve, 50);
+      requestAnimationFrame(() => {
+        window.clearTimeout(timer);
+        resolve();
+      });
+    });
   }
 }
 
