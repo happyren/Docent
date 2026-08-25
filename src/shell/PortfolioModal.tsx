@@ -18,6 +18,12 @@
  * onto the base when the drafting is done. Below it the sync row (D29) is the
  * synchronization itself: where this copy stands, pull, push, and the
  * per-scene questions a pull could not answer on its own.
+ *
+ * A scene's name is a path (D92), so the grid is a tree (D93): folders that
+ * open and close, scenes created into them or moved between them, and a
+ * folder deleted with the scenes in it. A folder is nothing but the prefix
+ * its scenes share — the store keeps no empty directory — so a folder made
+ * here is staging until its first scene lands, and says so.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -30,6 +36,7 @@ import {
   listBranches,
   listProjects,
   listScenes,
+  loadScene,
   openPullRequest,
   pull,
   push,
@@ -47,6 +54,21 @@ import {
   type SceneSyncState,
   type SyncStatus,
 } from "../portfolio/client";
+import {
+  buildSceneTree,
+  displayPath,
+  folderOf,
+  folderPaths,
+  isFolderPath,
+  isScenePath,
+  joinPath,
+  leafOf,
+  normalizeScenePath,
+  scenesUnder,
+  SCENE_PATH_ERROR,
+  type FolderNode,
+  type SceneNode,
+} from "../portfolio/tree";
 import {
   beginSync,
   endSync,
@@ -68,6 +90,9 @@ import {
 import { alertDialog, confirmDialog } from "./dialogs";
 import { ReviewPanel, type ReviewJump } from "./ReviewPanel";
 import { portfolioThumbnail } from "./sceneThumbnails";
+
+const fmtTime = (iso: string | null) =>
+  iso ? new Date(iso).toLocaleString() : "—";
 
 /** A brand-new scene is just an empty `.excalidraw` file (D17). */
 export const EMPTY_SCENE = JSON.stringify({
@@ -113,6 +138,200 @@ function SceneThumb({
   }
   return (
     <img className="docent-scene-thumb" src={src} alt={`${scene.name} preview`} />
+  );
+}
+
+/**
+ * What the tree's rows need from the modal (D93). One object rather than a
+ * dozen props: the rows recurse, and every level asks for the same things.
+ */
+interface TreeHandlers {
+  project: string;
+  busy: boolean;
+  revision: number;
+  isOpen: (folder: string) => boolean;
+  toggle: (folder: string) => void;
+  badgeOf: (scene: string) => SceneSyncState | null;
+  openScene: (scene: string) => void;
+  removeScene: (scene: string) => void;
+  /** Ask where this scene is going — the row below the tree answers. */
+  moveScene: (scene: string) => void;
+  /** Aim the name field at a folder, with the path already typed. */
+  newSceneIn: (folder: string) => void;
+  newFolderIn: (folder: string) => void;
+  removeFolder: (folder: FolderNode) => void;
+}
+
+/**
+ * One scene, drawn the way the flat grid always drew it: the snapshot is the
+ * point, and the name is the last segment because the folder above it is the
+ * context (D93).
+ */
+function SceneCard({ node, tree }: { node: SceneNode; tree: TreeHandlers }) {
+  const badge = tree.badgeOf(node.path);
+  return (
+    <div
+      className="docent-scene-card"
+      onClick={() => !tree.busy && tree.openScene(node.path)}
+      title={`Open ${tree.project}/${node.path}`}
+    >
+      <SceneThumb
+        project={tree.project}
+        scene={node.info}
+        revision={tree.revision}
+      />
+      <div className="docent-scene-caption">
+        <span className="docent-portfolio-name">{node.name}</span>
+        {/* What this scene did since the last sync (D29) — shown only when
+            it did something. */}
+        {badge && (
+          <span
+            className={
+              "docent-scene-tag" + (badge === "conflicted" ? " is-conflicted" : "")
+            }
+            title={
+              badge === "conflicted"
+                ? "Changed here and on the branch — answer it in the sync row below"
+                : "Not on the branch yet — Push commits it"
+            }
+          >
+            {badge}
+          </span>
+        )}
+        <span className="docent-portfolio-meta">{fmtTime(node.info.updatedAt)}</span>
+        <button
+          className="docent-portfolio-move"
+          title="Move this scene to another folder"
+          disabled={tree.busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            tree.moveScene(node.path);
+          }}
+        >
+          Move…
+        </button>
+        <button
+          className="docent-portfolio-delete"
+          title="Delete scene"
+          disabled={tree.busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            tree.removeScene(node.path);
+          }}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One level of the tree: its folders, then its own scenes as the card grid.
+ * The children arrive folders-first from the tree builder, so rendering them
+ * in two passes keeps the store's order inside each group.
+ */
+function TreeLevel({ node, tree }: { node: FolderNode; tree: TreeHandlers }) {
+  const scenes = node.children.filter(
+    (child): child is SceneNode => child.kind === "scene",
+  );
+  return (
+    <>
+      {node.children.map((child) =>
+        child.kind === "folder" ? (
+          <FolderRow key={`folder:${child.path}`} node={child} tree={tree} />
+        ) : null,
+      )}
+      {scenes.length > 0 && (
+        <div className="docent-portfolio-grid">
+          {scenes.map((child) => (
+            <SceneCard key={child.path} node={child} tree={tree} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * One folder (D93): a chevron that remembers, how many scenes are under it
+ * however deep, and the actions that are about the folder rather than any one
+ * scene. A folder holding nothing is staging — the store keeps no empty
+ * directory (D92) — and says so where its scenes would be.
+ */
+function FolderRow({ node, tree }: { node: FolderNode; tree: TreeHandlers }) {
+  const open = tree.isOpen(node.path);
+  return (
+    <div className="docent-portfolio-folder">
+      <div
+        className={
+          "docent-portfolio-folder-head" + (node.staged ? " is-staged" : "")
+        }
+        title={open ? "Collapse" : "Expand"}
+        onClick={() => tree.toggle(node.path)}
+      >
+        <span className="docent-portfolio-chevron">{open ? "▾" : "▸"}</span>
+        <span className="docent-portfolio-name">{node.name}</span>
+        <span className="docent-portfolio-meta">
+          {node.scenes} scene{node.scenes === 1 ? "" : "s"}
+        </span>
+        {node.staged && (
+          <span
+            className="docent-scene-tag"
+            title="Nothing is stored yet — the folder appears for real once a scene lands in it"
+          >
+            staging
+          </span>
+        )}
+        <button
+          title={`Create a scene in ${node.path}`}
+          disabled={tree.busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            tree.newSceneIn(node.path);
+          }}
+        >
+          ＋ Scene
+        </button>
+        <button
+          title={`Add a folder inside ${node.path}`}
+          disabled={tree.busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            tree.newFolderIn(node.path);
+          }}
+        >
+          ＋ Folder
+        </button>
+        <button
+          className="docent-portfolio-delete"
+          title={
+            node.staged
+              ? "Drop this folder — nothing is stored in it"
+              : `Delete ${node.path} and the ${node.scenes} scene${node.scenes === 1 ? "" : "s"} in it`
+          }
+          disabled={tree.busy}
+          onClick={(e) => {
+            e.stopPropagation();
+            tree.removeFolder(node);
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      {open && (
+        <div className="docent-portfolio-folder-body">
+          {node.staged && (
+            <p className="docent-modal-hint">
+              Empty — this folder becomes real when its first scene lands in
+              it. Docent stores no folder of its own, exactly as Git keeps no
+              empty directory.
+            </p>
+          )}
+          <TreeLevel node={node} tree={tree} />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -852,10 +1071,13 @@ export interface PortfolioModalProps {
    * there is no canvas to fly in.
    */
   onShowChange?: (project: string, jump: ReviewJump) => Promise<void>;
+  /**
+   * A scene moved (D93). The shell re-points whatever it records about the
+   * open scene, so the canvas follows its scene rather than saving back to
+   * the path it just left.
+   */
+  onSceneMoved?: (project: string, from: string, to: string) => void;
 }
-
-const fmtTime = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleString() : "—";
 
 export function PortfolioModal({
   onOpenScene,
@@ -864,6 +1086,7 @@ export function PortfolioModal({
   intent = "browse",
   onClose,
   onShowChange,
+  onSceneMoved,
 }: PortfolioModalProps) {
   const [available, setAvailable] = useState<boolean | null>(null);
   // The Review view (D48) stands in for the body while it is open.
@@ -882,6 +1105,23 @@ export function PortfolioModal({
   // are cached per scene revision, and "the same name at the same timestamp on
   // a different branch" is the one case a timestamp cannot tell apart.
   const [thumbRevision, setThumbRevision] = useState(0);
+  // The folder tree (D93). A folder is open unless it was closed — a listing
+  // should not start hidden — and the set lives as long as the modal does.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  // Folders made here that hold no scene yet: the store keeps no empty
+  // directory (D92), so they exist here until their first scene lands, and
+  // go without ceremony when the modal closes.
+  const [staged, setStaged] = useState<string[]>([]);
+  // The row under the tree asks one thing at a time: a scene's name, a new
+  // folder's name, or where a scene is moving to.
+  const [foldering, setFoldering] = useState<string | null>(null);
+  const [folderName, setFolderName] = useState("");
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveFolder, setMoveFolder] = useState("");
+  const [moveTyped, setMoveTyped] = useState("");
+  // Bumped when a folder row prefills the name field, to put the caret after
+  // the path it just typed for you.
+  const [prefill, setPrefill] = useState(0);
   const saveNameRef = useRef<HTMLInputElement | null>(null);
 
   // Async now that the box may be a native one the shell raises, but used the
@@ -934,6 +1174,12 @@ export function PortfolioModal({
   }, []);
 
   useEffect(() => {
+    // Staged folders and open state belong to the project on screen (D93):
+    // another project's tree is another tree.
+    setStaged([]);
+    setCollapsed(new Set());
+    setFoldering(null);
+    setMoving(null);
     if (!selected) {
       setScenes([]);
       setSync(null);
@@ -942,6 +1188,9 @@ export function PortfolioModal({
     refreshScenes(selected).catch(fail);
     void refreshSync(selected);
   }, [selected, refreshScenes, refreshSync]);
+
+  /** The listing as the tree it already is (D92), staging folders included. */
+  const tree = useMemo(() => buildSceneTree(scenes, staged), [scenes, staged]);
 
   /**
    * What every binding, branch and sync action ends with. Binding, unbinding,
@@ -978,6 +1227,16 @@ export function PortfolioModal({
     input.focus();
     input.select();
   }, [intent, available, selected]);
+
+  // "＋ Scene" on a folder row typed the folder for you; the caret goes after
+  // it, where the scene's own name goes.
+  useEffect(() => {
+    if (prefill === 0) return;
+    const input = saveNameRef.current;
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }, [prefill]);
 
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
@@ -1048,11 +1307,161 @@ export function PortfolioModal({
     });
   };
 
+  // ---- the tree (D93) ------------------------------------------------------
+
+  const isOpen = (folder: string) => !collapsed.has(folder);
+
+  const toggle = (folder: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (!next.delete(folder)) next.add(folder);
+      return next;
+    });
+
+  /** Open a folder and everything it is nested in, so it is on screen. */
+  const reveal = (folder: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      for (let at = folder; at !== ""; at = folderOf(at)) next.delete(at);
+      return next;
+    });
+
+  /** Aim the name field at a folder: the path is typed, the name is yours. */
+  const newSceneIn = (folder: string) => {
+    setMoving(null);
+    setFoldering(null);
+    setSaveName(folder ? `${folder}/` : "");
+    setPrefill((count) => count + 1);
+  };
+
+  const newFolderIn = (folder: string) => {
+    setMoving(null);
+    setFolderName("");
+    setFoldering(folder);
+  };
+
+  /**
+   * A new folder is staging (D93): it exists in this tree and nowhere else
+   * until a scene lands in it, because an empty directory is not something
+   * the store keeps (D92). So there is nothing to write here — and the name
+   * field opens on it, which is how the first scene gets there.
+   */
+  const addFolder = () => {
+    const name = normalizeScenePath(folderName);
+    if (!name) return;
+    const path = joinPath(foldering ?? "", name);
+    void (async () => {
+      // A folder is a scene path one segment short — the scene's own name is
+      // the segment that still has to fit.
+      if (!isFolderPath(path)) {
+        await alertDialog(SCENE_PATH_ERROR);
+        return;
+      }
+      setStaged((current) =>
+        current.includes(path) ? current : [...current, path],
+      );
+      reveal(path);
+      setFoldering(null);
+      setFolderName("");
+      newSceneIn(path);
+    })();
+  };
+
+  /**
+   * Delete a folder with everything under it, after one question naming the
+   * count. The deletions run scene by scene through the same route a single
+   * delete takes; the store prunes the directory as the last one leaves.
+   */
+  const removeFolder = (folder: FolderNode) => {
+    if (!selected) return;
+    const prune = (current: string[]) =>
+      current.filter(
+        (path) => path !== folder.path && !path.startsWith(`${folder.path}/`),
+      );
+    // Nothing in it: it was never on disk, so it goes without a word.
+    if (folder.scenes === 0) {
+      setStaged(prune);
+      return;
+    }
+    const doomed = scenesUnder(folder);
+    void (async () => {
+      const confirmed = await confirmDialog(
+        `Delete "${folder.path}" and the ${doomed.length} scene${
+          doomed.length === 1 ? "" : "s"
+        } in it? This cannot be undone.`,
+      );
+      if (!confirmed) return;
+      await run(async () => {
+        for (const scene of doomed) await deleteScene(selected, scene.path);
+        setStaged(prune);
+        setScenes(await listScenes(selected));
+        await refreshProjects();
+        await refreshSync(selected);
+      });
+    })();
+  };
+
+  const startMove = (scene: string) => {
+    setFoldering(null);
+    setMoveFolder(folderOf(scene));
+    setMoveTyped("");
+    setMoving(scene);
+  };
+
+  /**
+   * The contract move (D93): the body lands at the new path, and only then
+   * does the old one go — through the same save and delete every other write
+   * here uses, so on a bound project the next push shows it the way Git shows
+   * any move. A PUT that fails leaves the scene exactly where it was.
+   */
+  const doMove = () => {
+    const from = moving;
+    if (!selected || from === null) return;
+    void run(async () => {
+      const folder = normalizeScenePath(moveTyped) || moveFolder;
+      const to = joinPath(folder, leafOf(from));
+      if (!isFolderPath(folder) || !isScenePath(to)) {
+        await alertDialog(SCENE_PATH_ERROR);
+        return;
+      }
+      if (to === from) {
+        setMoving(null);
+        return;
+      }
+      if (scenes.some((s) => s.name === to)) {
+        await alertDialog(
+          `Scene "${selected}/${to}" already exists — move this one somewhere else, or delete that one first.`,
+        );
+        return;
+      }
+      await saveScene(selected, to, await loadScene(selected, from));
+      await deleteScene(selected, from);
+      setMoving(null);
+      reveal(folder);
+      // The open canvas follows its scene: the shell re-points what it saves
+      // back to, so the next Save cannot resurrect the path just left.
+      onSceneMoved?.(selected, from, to);
+      setScenes(await listScenes(selected));
+      await refreshProjects();
+      // A move is a deletion and a creation to a bound project — the sync
+      // line has just changed twice.
+      await refreshSync(selected);
+    });
+  };
+
+  // ---- creating and saving -------------------------------------------------
+
   const newScene = () => {
     if (!selected) return;
     void run(async () => {
-      const name = saveName.trim().replace(/\.excalidraw$/i, "");
+      // A typed path is a path (D92): folders and all, checked here so the
+      // refusal reads the same before the round trip as after it.
+      const name = normalizeScenePath(saveName);
       if (!name) return;
+      if (!isScenePath(name)) {
+        await alertDialog(SCENE_PATH_ERROR);
+        return;
+      }
       if (scenes.some((s) => s.name === name)) {
         await alertDialog(
           `Scene "${selected}/${name}" already exists — pick another name, or use "Save current scene here" to overwrite it.`,
@@ -1068,8 +1477,12 @@ export function PortfolioModal({
   const saveHere = () => {
     if (!selected) return;
     void run(async () => {
-      const name = saveName.trim().replace(/\.excalidraw$/i, "");
+      const name = normalizeScenePath(saveName);
       if (!name) return;
+      if (!isScenePath(name)) {
+        await alertDialog(SCENE_PATH_ERROR);
+        return;
+      }
       const exists = scenes.some((s) => s.name === name);
       if (exists && !(await confirmDialog(`Overwrite scene "${selected}/${name}"?`))) {
         return;
@@ -1079,6 +1492,22 @@ export function PortfolioModal({
       await refreshProjects();
       await refreshSync(selected);
     });
+  };
+
+  /** What the tree's rows call back into, rebuilt with every render. */
+  const treeHandlers: TreeHandlers = {
+    project: selected ?? "",
+    busy,
+    revision: thumbRevision,
+    isOpen,
+    toggle,
+    badgeOf,
+    openScene,
+    removeScene,
+    moveScene: startMove,
+    newSceneIn,
+    newFolderIn,
+    removeFolder,
   };
 
   return (
@@ -1190,89 +1619,121 @@ export function PortfolioModal({
               )}
               {selected && (
                 <>
-                  <div className="docent-portfolio-grid">
-                    {scenes.length === 0 && (
+                  {/* The tree (D93) scrolls as one thing: a folder's scenes
+                      are a grid inside it, never a pane of their own. */}
+                  <div className="docent-portfolio-tree">
+                    {scenes.length === 0 && staged.length === 0 && (
                       <p className="docent-modal-hint">
                         No scenes in {selected} yet — create one below, or
                         save the current canvas into it.
                       </p>
                     )}
-                    {scenes.map((s) => (
-                      <div
-                        key={s.name}
-                        className="docent-scene-card"
-                        onClick={() => !busy && openScene(s.name)}
-                        title={`Open ${selected}/${s.name}`}
+                    <TreeLevel node={tree} tree={treeHandlers} />
+                  </div>
+                  {/* One row under the tree, asking one thing at a time:
+                      where a scene goes, what a folder is called, or the
+                      name of the scene about to exist. */}
+                  {moving !== null ? (
+                    <div className="docent-portfolio-new">
+                      <span className="docent-portfolio-github-label">Move</span>
+                      <span className="docent-portfolio-sync-summary">
+                        {displayPath(moving)} →
+                      </span>
+                      <select
+                        value={moveFolder}
+                        disabled={busy}
+                        title="Where the scene lands"
+                        onChange={(e) => setMoveFolder(e.target.value)}
                       >
-                        <SceneThumb
-                          project={selected}
-                          scene={s}
-                          revision={thumbRevision}
-                        />
-                        <div className="docent-scene-caption">
-                          <span className="docent-portfolio-name">{s.name}</span>
-                          {/* What this scene did since the last sync (D29) —
-                              shown only when it did something. */}
-                          {badgeOf(s.name) && (
-                            <span
-                              className={
-                                "docent-scene-tag" +
-                                (badgeOf(s.name) === "conflicted"
-                                  ? " is-conflicted"
-                                  : "")
-                              }
-                              title={
-                                badgeOf(s.name) === "conflicted"
-                                  ? "Changed here and on the branch — answer it in the sync row below"
-                                  : "Not on the branch yet — Push commits it"
-                              }
-                            >
-                              {badgeOf(s.name)}
-                            </span>
-                          )}
-                          <span className="docent-portfolio-meta">
-                            {fmtTime(s.updatedAt)}
-                          </span>
-                          <button
-                            className="docent-portfolio-delete"
-                            title="Delete scene"
-                            disabled={busy}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeScene(s.name);
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="docent-portfolio-new">
-                    <input
-                      ref={saveNameRef}
-                      placeholder="Scene name…"
-                      value={saveName}
-                      disabled={busy}
-                      autoFocus={intent === "save"}
-                      onChange={(e) => setSaveName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && newScene()}
-                    />
-                    <button
-                      disabled={busy || !saveName.trim()}
-                      onClick={newScene}
-                      title={`Create a blank scene in ${selected} and open it`}
-                    >
-                      ＋ New scene
-                    </button>
-                    <button
-                      disabled={busy || !saveName.trim()}
-                      onClick={saveHere}
-                      title={`Save the current canvas into ${selected}`}
-                    >
-                      Save current scene here
-                    </button>
-                  </div>
+                        <option value="">{selected} (no folder)</option>
+                        {folderPaths(tree).map((path) => (
+                          <option key={path} value={path}>
+                            {displayPath(path)}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        autoFocus
+                        placeholder="…or type a folder path"
+                        value={moveTyped}
+                        disabled={busy}
+                        onChange={(e) => setMoveTyped(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") doMove();
+                          if (e.key === "Escape") setMoving(null);
+                        }}
+                      />
+                      <button
+                        className="docent-primary"
+                        disabled={busy}
+                        onClick={doMove}
+                      >
+                        Move
+                      </button>
+                      <button disabled={busy} onClick={() => setMoving(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : foldering !== null ? (
+                    <div className="docent-portfolio-new">
+                      <input
+                        autoFocus
+                        placeholder={`New folder in ${
+                          foldering ? displayPath(foldering) : selected
+                        }…`}
+                        value={folderName}
+                        disabled={busy}
+                        onChange={(e) => setFolderName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") addFolder();
+                          if (e.key === "Escape") setFoldering(null);
+                        }}
+                      />
+                      <button
+                        disabled={busy || !folderName.trim()}
+                        onClick={addFolder}
+                        title="A folder is made by the scenes in it — this one appears for real with its first"
+                      >
+                        ＋ Create folder
+                      </button>
+                      <button disabled={busy} onClick={() => setFoldering(null)}>
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="docent-portfolio-new">
+                      <input
+                        ref={saveNameRef}
+                        placeholder="Scene name, or folder/name…"
+                        value={saveName}
+                        disabled={busy}
+                        autoFocus={intent === "save"}
+                        onChange={(e) => setSaveName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && newScene()}
+                      />
+                      <button
+                        disabled={busy || !saveName.trim()}
+                        onClick={newScene}
+                        title={`Create a blank scene in ${selected} and open it`}
+                      >
+                        ＋ New scene
+                      </button>
+                      <button
+                        disabled={busy || !saveName.trim()}
+                        onClick={saveHere}
+                        title={`Save the current canvas into ${selected}`}
+                      >
+                        Save current scene here
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => newFolderIn("")}
+                        title={`Add a folder to ${selected}`}
+                      >
+                        ＋ Folder
+                      </button>
+                    </div>
+                  )}
                   <GitHubPanel
                     project={selected}
                     sync={sync}

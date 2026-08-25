@@ -582,6 +582,22 @@ export function App() {
     },
     [markClean, prepareSceneForSave, syncSceneUrl],
   );
+  /**
+   * The portfolio moved a scene (D93). Nothing about the canvas changed —
+   * only where it came from — so the source, the URL and the name follow it
+   * and the dirty flag is left exactly as it was: Save must land at the new
+   * path, and must not resurrect the one just vacated.
+   */
+  const notePortfolioMove = useCallback(
+    (project: string, from: string, to: string) => {
+      const source = portfolioSourceRef.current;
+      if (!source || source.project !== project || source.scene !== from) return;
+      portfolioSourceRef.current = { project, scene: to };
+      syncSceneUrl({ project, scene: to });
+      setFileName(`${project}/${to}`);
+    },
+    [syncSceneUrl],
+  );
 
   // What the agent surface may borrow from the shell (S15, D35): navigation,
   // never mutation. Rebuilt every render like the menu handlers; the facade
@@ -984,7 +1000,9 @@ export function App() {
   }, [canvas]);
 
   useEffect(() => {
-    const name = fileName ?? "untitled";
+    // A portfolio scene is "<project>/<path>" and its name is a path (D92),
+    // so the title spaces the separators: a trail to read, not a file name.
+    const name = (fileName ?? "untitled").split("/").join(" / ");
     document.title = `${dirty ? "● " : ""}${name} — Docent`;
   }, [fileName, dirty]);
 
@@ -1263,14 +1281,17 @@ export function App() {
           </div>
         )}
       </main>
+      {/* Only the project comes off the front of the suggestion: what is left
+          is the scene's own path (D92), which is what the name field takes. */}
       {portfolioOpen && canvas && (
         <PortfolioModal
           onOpenScene={openPortfolioScene}
           onSaveScene={savePortfolioSceneAs}
-          suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^.*\//, "")}
+          suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^[^/]*\//, "")}
           intent={portfolioIntent}
           onClose={() => setPortfolioOpen(false)}
           onShowChange={showPortfolioChange}
+          onSceneMoved={notePortfolioMove}
         />
       )}
       {pluginsOpen && hasPlugins() && (
