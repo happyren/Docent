@@ -360,3 +360,49 @@ describe("CommandAPI.tidy (D73)", () => {
     expect(canvas.reports).toEqual([]);
   });
 });
+
+describe("tidy hugs the frame (D101)", () => {
+  /** The hand-drawn fixture with its frame drawn far too roomy. */
+  const roomy = snapshotFromRawElements(
+    raw.map((el) => (el.id === "F" ? { ...el, width: 2400, height: 1600 } : el)) as never,
+  );
+
+  it("a tidy shrinks an oversized frame to its members plus the standard room", () => {
+    const write = plan(tidyOps(roomy, { frame: "F" }), roomy, idSource(3)).write;
+    const framePatch = write.patches?.find((p) => p.id === "F");
+    expect(framePatch).toBeDefined();
+    expect(framePatch!.width).toBeLessThan(2400);
+    expect(framePatch!.height).toBeLessThan(1600);
+    // Grid-true (D99), and still wrapping every member after the re-flow.
+    expect(framePatch!.width! % 8).toBe(0);
+    expect(framePatch!.height! % 8).toBe(0);
+    const after = simulate(roomy, write);
+    const graph = buildSceneGraph(after);
+    const frame = graph.frames.find((f) => f.sourceId === "F")!;
+    for (const n of graph.nodes) {
+      expect(n.bounds.x).toBeGreaterThanOrEqual(frame.bounds.x);
+      expect(n.bounds.x + n.bounds.width).toBeLessThanOrEqual(frame.bounds.x + frame.bounds.width);
+      expect(n.bounds.y).toBeGreaterThanOrEqual(frame.bounds.y);
+      expect(n.bounds.y + n.bounds.height).toBeLessThanOrEqual(frame.bounds.y + frame.bounds.height);
+    }
+    // Still a formatter: the semantic changelog is empty (D73).
+    expect(describeMeaningChange(roomy, after).changelog).toBe("");
+  });
+
+  it("an empty frame keeps its drawn size — a plan, not a mistake", () => {
+    const empty = snapshotFromRawElements([
+      { ...base, id: "E", type: "frame", name: "Planned", x: 0, y: 0, width: 1200, height: 800 },
+    ] as never);
+    const write = plan(tidyOps(empty, { frame: "E" }), empty, idSource(3)).write;
+    expect(write.patches?.find((p) => p.id === "E")).toBeUndefined();
+  });
+
+  it("a plain write into a roomy frame still only grows it (D60)", () => {
+    const write = plan([{ op: "add_node", label: "Newcomer", frame: "F" }], roomy, idSource(3)).write;
+    const framePatch = write.patches?.find((p) => p.id === "F");
+    if (framePatch) {
+      expect(framePatch.width ?? 2400).toBeGreaterThanOrEqual(2400);
+      expect(framePatch.height ?? 1600).toBeGreaterThanOrEqual(1600);
+    }
+  });
+});

@@ -220,6 +220,21 @@ export function growFrame(frame: Box, contents: readonly Box[]): Box {
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
 
+/**
+ * The frame a tidy answers (D101): its members' bounds plus the standard
+ * room — the head for the name, the pad around — grid-true (D99), with no
+ * memory of the border it had. Null for an empty frame: a person's empty
+ * frame is a plan, not a mistake.
+ */
+export function hugFrame(contents: readonly Box[]): Box | null {
+  if (!contents.length) return null;
+  const minX = snapDown(Math.min(...contents.map((b) => b.x - FRAME_PAD)));
+  const minY = snapDown(Math.min(...contents.map((b) => b.y - FRAME_HEAD - FRAME_PAD)));
+  const maxX = snapUp(Math.max(...contents.map((b) => b.x + b.width + FRAME_PAD)));
+  const maxY = snapUp(Math.max(...contents.map((b) => b.y + b.height + FRAME_PAD)));
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
 /** The room a new frame leaves under the tier it joins — a grid multiple (D99). */
 const FRAME_DROP = 144;
 

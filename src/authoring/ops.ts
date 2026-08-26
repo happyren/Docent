@@ -14,7 +14,7 @@ import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type 
 import { computeTiers } from "../scene/tiers";
 import { isScenePath, SCENE_PATH_ERROR, segmentsOf } from "../portfolio/tree";
 import { GENRE_IDS, genreFindings, genreOf, scenarioFindings, type GenreProfile } from "./genre";
-import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, laneLayout, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement, type LayoutOptions } from "./layout";
+import { countCrossings, edgeLabelSize, FRAME_HEAD, FRAME_PAD, growFrame, hugFrame, laneLayout, layeredLayout, legendBox, memberBoxes, placeFrame, placeInFrame, separateFrames, sizeForLabel, type Box, type FramePlacement, type LayoutOptions } from "./layout";
 import {
   absolutePoints,
   arcCorners,
@@ -1036,6 +1036,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
                 laneOf: () => frameSource,
               })
             : layeredLayout(members, graph.edges, sizes, origin, options);
+        const laidBoxes: Box[] = [];
         for (const n of members) {
           relaid.add(n.sourceId);
           const box = boxes.get(n.id);
@@ -1052,7 +1053,9 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
               write.patches.push({ id: n.sourceId, x: carrier.x + dx, y: carrier.y + dy });
               touched.push(n.sourceId);
             }
-            noteGrow(frameSource, { x: n.bounds.x + dx, y: n.bounds.y + dy, width: n.bounds.width, height: n.bounds.height });
+            const kept = { x: n.bounds.x + dx, y: n.bounds.y + dy, width: n.bounds.width, height: n.bounds.height };
+            noteGrow(frameSource, kept);
+            laidBoxes.push(kept);
             continue;
           }
           const sized = box.width !== n.bounds.width || box.height !== n.bounds.height;
@@ -1066,6 +1069,15 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
             touched.push(n.sourceId);
           }
           noteGrow(frameSource, box);
+          laidBoxes.push(box);
+        }
+        // Tidy hugs the frame (D101): the border comes back at the members'
+        // bounds plus the standard room, with no memory of the acreage a
+        // write had grown — the asking includes the border. An empty frame
+        // keeps its size.
+        if (frameSource) {
+          const hugged = hugFrame(laidBoxes);
+          if (hugged) grownFrames.set(frameSource, hugged);
         }
         notes.push(`layout: ${members.length} components re-flowed${op.frame ? ` in ${op.frame}` : ""}`);
         break;
