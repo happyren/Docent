@@ -1252,20 +1252,310 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     write.frames.push({ id: frame.id, name: frame.name, x: frame.x, y: frame.y, width: frame.width, height: frame.height, meaning: frame.meaning });
   }
 
+  // The tier each frame sits on and the author's own order of them: what
+  // D86's separation is judged by, and what D100's arrangement ranks by.
+  // Read once, since both passes below want them.
+  const tierOfFrame = computeTiers(snapshot).frameTier;
+  const declared = [...graph.frames].sort((a, b) => {
+    const ao = a.order ?? Number.POSITIVE_INFINITY;
+    const bo = b.order ?? Number.POSITIVE_INFINITY;
+    if (ao !== bo) return ao - bo;
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) return byName;
+    return a.id < b.id ? -1 : 1;
+  });
+
+  /**
+   * A frame moves and takes everything with it (D86): its own bounds, the
+   * components in it — the ones this batch put there and the ones that were
+   * there already — and their bound labels, which follow their containers
+   * in the adapter. The separation pass has always carried a frame this
+   * way; D100's arrangement carries one the same way, which is why the
+   * carrying stands here on its own rather than inside either of them.
+   */
+  const carryFrame = (frameId: string, dx: number, dy: number): void => {
+    if (dx === 0 && dy === 0) return;
+    const made = createdFrames.get(frameId);
+    if (made) {
+      made.x += dx;
+      made.y += dy;
+      const pushed = write.frames.find((f) => f.id === frameId);
+      if (pushed) {
+        pushed.x += dx;
+        pushed.y += dy;
+      }
+    } else {
+      const el = elements.get(frameId);
+      if (!el) return;
+      const framePatch = write.patches.find((pp) => pp.id === frameId);
+      if (framePatch) {
+        framePatch.x = (framePatch.x ?? el.x) + dx;
+        framePatch.y = (framePatch.y ?? el.y) + dy;
+      } else {
+        write.patches.push({ id: frameId, x: el.x + dx, y: el.y + dy });
+      }
+      if (!touched.includes(frameId)) touched.push(frameId);
+    }
+    // What this batch put in the frame: a symbol moves whole, icon and
+    // caption together (D83).
+    for (const [memberId, c] of created) {
+      if (c.frameId !== frameId || c.type === "arrow") continue;
+      c.x += dx;
+      c.y += dy;
+      if (c.port) c.port = { ...c.port, x: c.port.x + dx, y: c.port.y + dy };
+      const sh = write.shapes.find((s) => s.id === memberId);
+      if (sh) {
+        sh.x += dx;
+        sh.y += dy;
+      }
+      const sy = write.symbols.find((s) => s.id === memberId);
+      if (sy) {
+        sy.x += dx;
+        sy.y += dy;
+        sy.icon = { ...sy.icon, x: sy.icon.x + dx, y: sy.icon.y + dy };
+        sy.labelBox = { ...sy.labelBox, x: sy.labelBox.x + dx, y: sy.labelBox.y + dy };
+      }
+    }
+    // And what was in it before. A component this batch moved OUT to
+    // another frame is that frame's business now, not this one's.
+    for (const member of snapshot.elements) {
+      if (member.frameId !== frameId || removed.has(member.id) || member.containerId) continue;
+      const memberPatch = write.patches.find((pp) => pp.id === member.id);
+      if (memberPatch?.frameId !== undefined && memberPatch.frameId !== frameId) continue;
+      if (memberPatch) {
+        memberPatch.x = (memberPatch.x ?? member.x) + dx;
+        memberPatch.y = (memberPatch.y ?? member.y) + dy;
+      } else {
+        write.patches.push({ id: member.id, x: member.x + dx, y: member.y + dy });
+      }
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Layer 1 is arranged whole (D100)
+  // -------------------------------------------------------------------------
+  // The picture the pipeline never composed is the outermost one: today the
+  // members inside each frame are ranked, and the unframed components are
+  // placed beside them, so an external ends up in a row in the sky with a
+  // long diagonal down to the frame it feeds. Ranking the tier as ONE graph
+  // is the same algorithm one level up — each tier-1 frame a box of its
+  // drawn size, each unframed component a box of its own, every edge from a
+  // loose component to a frame MEMBER projected onto the frame, and member
+  // edges that cross two frames projected the same way. An edge inside one
+  // frame is internal and takes no part. Sources take the columns before
+  // what they feed and sinks the columns after, because that is what the
+  // layered pipeline does (D74); the boxes are only MOVED, never resized —
+  // a frame's size is its members' business and a component's is its
+  // label's (D80, D99).
+  {
+    /** A frame handle a `layout` op named, as a source id. */
+    const frameSourceOf = (handle: string): string | null =>
+      handle.startsWith("$") ? (ids[handle] ?? null) : (sourceOf(graph, handle)?.sourceId ?? null);
+    /** The frame a component sits in as this batch leaves it. */
+    const frameOfNode = (sourceId: string): string | null => {
+      const madeHere = created.get(sourceId);
+      if (madeHere) return madeHere.frameId;
+      const patch = write.patches.find((p) => p.id === sourceId && p.frameId !== undefined);
+      if (patch) return patch.frameId ?? null;
+      return elements.get(sourceId)?.frameId ?? null;
+    };
+    const tierOf = (frameId: string): number => createdFrames.get(frameId)?.tier ?? tierOfFrame.get(frameId) ?? 1;
+    /** A tier-1 frame's box as the passes above left it. */
+    const frameNow = (frameId: string): Box => {
+      const made = createdFrames.get(frameId);
+      if (made) return { x: made.x, y: made.y, width: made.width, height: made.height };
+      const el = elements.get(frameId)!;
+      const patch = write.patches.find((p) => p.id === frameId);
+      return { x: patch?.x ?? el.x, y: patch?.y ?? el.y, width: patch?.width ?? el.width, height: patch?.height ?? el.height };
+    };
+    /** An unframed component's box as the passes above left it (D83: icon ∪ label). */
+    const looseNow = (sourceId: string): Box => {
+      const made = created.get(sourceId);
+      if (made) return { x: made.x, y: made.y, width: made.width, height: made.height };
+      const n = graph.nodes.find((x) => x.sourceId === sourceId)!;
+      const patch = write.patches.find((p) => p.id === sourceId);
+      if (n.symbol) {
+        const carrier = elements.get(sourceId);
+        const dx = carrier ? (patch?.x ?? carrier.x) - carrier.x : 0;
+        const dy = carrier ? (patch?.y ?? carrier.y) - carrier.y : 0;
+        return { x: n.bounds.x + dx, y: n.bounds.y + dy, width: n.bounds.width, height: n.bounds.height };
+      }
+      return {
+        x: patch?.x ?? n.bounds.x,
+        y: patch?.y ?? n.bounds.y,
+        width: patch?.width ?? n.bounds.width,
+        height: patch?.height ?? n.bounds.height,
+      };
+    };
+    /** An unframed component takes its new box; a symbol moves whole (D83). */
+    const placeLoose = (sourceId: string, dx: number, dy: number): void => {
+      const made = created.get(sourceId);
+      if (made) {
+        made.x += dx;
+        made.y += dy;
+        if (made.port) made.port = { ...made.port, x: made.port.x + dx, y: made.port.y + dy };
+        const sh = write.shapes.find((s) => s.id === sourceId);
+        if (sh) {
+          sh.x += dx;
+          sh.y += dy;
+        }
+        const sy = write.symbols.find((s) => s.id === sourceId);
+        if (sy) {
+          sy.x += dx;
+          sy.y += dy;
+          sy.icon = { ...sy.icon, x: sy.icon.x + dx, y: sy.icon.y + dy };
+          sy.labelBox = { ...sy.labelBox, x: sy.labelBox.x + dx, y: sy.labelBox.y + dy };
+        }
+        return;
+      }
+      const el = elements.get(sourceId);
+      if (!el) return;
+      const patch = write.patches.find((p) => p.id === sourceId);
+      if (patch) {
+        patch.x = (patch.x ?? el.x) + dx;
+        patch.y = (patch.y ?? el.y) + dy;
+      } else {
+        write.patches.push({ id: sourceId, x: el.x + dx, y: el.y + dy });
+      }
+      if (!touched.includes(sourceId)) touched.push(sourceId);
+    };
+
+    // The boxes of the tier, in the author's own order (D79): frames as
+    // declared — the order D86 parts them by — then the ones this batch
+    // built, then the loose components in the order they read.
+    const tier1 = [
+      ...declared.filter((f) => !removed.has(f.sourceId) && elements.has(f.sourceId) && tierOf(f.sourceId) === 1).map((f) => f.sourceId),
+      ...[...createdFrames.values()].filter((f) => (f.tier ?? 1) === 1).map((f) => f.id),
+    ];
+    const looseIds = [
+      ...graph.nodes
+        .filter((n) => !removed.has(n.sourceId) && frameOfNode(n.sourceId) === null)
+        .map((n) => n.sourceId)
+        .sort((a, b) => {
+          const A = looseNow(a);
+          const B = looseNow(b);
+          return A.x + A.width / 2 - (B.x + B.width / 2) || A.y + A.height / 2 - (B.y + B.height / 2) || (a < b ? -1 : 1);
+        }),
+      ...[...created.entries()].filter(([, c]) => c.type !== "arrow" && c.frameId === null).map(([id]) => id),
+    ];
+
+    // A meta-node: a set of frames that move together, or one loose
+    // component. In a lanes genre every tier-1 frame is a LANE (D90) — the
+    // lanes pass has already said where they go and what they span, and
+    // this pass must not fight it — so they enter as ONE block that moves
+    // as one, and what is left to rank around it is the loose components.
+    type Meta = { id: string; box: Box; frames: string[]; node: string | null };
+    const spanning = (boxes: readonly Box[]): Box => {
+      const x = Math.min(...boxes.map((b) => b.x));
+      const y = Math.min(...boxes.map((b) => b.y));
+      return { x, y, width: Math.max(...boxes.map((b) => b.x + b.width)) - x, height: Math.max(...boxes.map((b) => b.y + b.height)) - y };
+    };
+    const metas: Meta[] = [];
+    if (posture === "lanes" && tier1.length) {
+      metas.push({ id: "__lanes", box: spanning(tier1.map(frameNow)), frames: tier1, node: null });
+    } else {
+      for (const frameId of tier1) metas.push({ id: frameId, box: frameNow(frameId), frames: [frameId], node: null });
+    }
+    for (const sourceId of looseIds) metas.push({ id: sourceId, box: looseNow(sourceId), frames: [], node: sourceId });
+
+    // Which box each component belongs to — the projection: a member speaks
+    // for its frame, a loose component for itself, and a member of a deeper
+    // tier speaks for nothing on Layer 1.
+    const metaOfNode = new Map<string, string>();
+    for (const meta of metas) {
+      if (meta.node) metaOfNode.set(meta.node, meta.id);
+      for (const frameId of meta.frames) {
+        for (const n of graph.nodes) if (!removed.has(n.sourceId) && frameOfNode(n.sourceId) === frameId) metaOfNode.set(n.sourceId, meta.id);
+        for (const [id, c] of created) if (c.type !== "arrow" && c.frameId === frameId) metaOfNode.set(id, meta.id);
+      }
+    }
+    const arrowFont = house.arrow.style.fontSize;
+    // One projection per pair, wearing the widest of the labels that ride
+    // it, so the column gap still holds the words (D70).
+    const projected = new Map<string, { id: string; from: string; to: string; label: string | null }>();
+    const project = (from: string, to: string, label: string | null) => {
+      const a = metaOfNode.get(from);
+      const b = metaOfNode.get(to);
+      // Both ends inside one box is an internal edge: the frame's own
+      // layout drew it, and Layer 1 knows nothing about it.
+      if (!a || !b || a === b) return;
+      const key = `${a} ${b}`;
+      const have = projected.get(key);
+      if (!have) projected.set(key, { id: `__meta${projected.size}`, from: a, to: b, label });
+      else if (edgeLabelSize(label, arrowFont).width > edgeLabelSize(have.label, arrowFont).width) have.label = label;
+    };
+    for (const e of graph.edges) {
+      if (!e.from || !e.to || removed.has(e.sourceId)) continue;
+      const from = graph.nodes.find((n) => n.id === e.from)?.sourceId;
+      const to = graph.nodes.find((n) => n.id === e.to)?.sourceId;
+      if (from && to) project(from, to, e.label);
+    }
+    for (const a of write.arrows) project(a.from, a.to, a.label);
+
+    // Hand-placed arrangements move only when asked (D60). The asking is
+    // `layout({frame:null})` — which is what tidy of the whole diagram, of
+    // tier 1, and of the unframed bucket all compile to (D73) — or a tidy
+    // that names every tier-1 frame there is, on a diagram with nothing
+    // loose to name. A batch that BUILT the tier arranges it too: every
+    // frame and every loose component in it new, which is D66's judgement
+    // one tier up, with no hand placement in it for D60 to guard. A batch
+    // that only edited inside one frame arranges nothing outer.
+    const layoutOps = ops.filter((o): o is Layout => o.op === "layout");
+    const askedLoose = layoutOps.some((o) => o.frame === null);
+    const namedFrames = new Set(
+      layoutOps.map((o) => (o.frame ? frameSourceOf(o.frame) : null)).filter((id): id is string => id !== null),
+    );
+    const holdsMembers = (frameId: string): boolean =>
+      graph.nodes.some((n) => !removed.has(n.sourceId) && frameOfNode(n.sourceId) === frameId) ||
+      [...created.values()].some((c) => c.type !== "arrow" && c.frameId === frameId);
+    const withMembers = tier1.filter(holdsMembers);
+    const askedEveryFrame = !looseIds.length && withMembers.length >= 2 && withMembers.every((f) => namedFrames.has(f));
+    const builtWhole = tier1.every((f) => createdFrames.has(f)) && looseIds.every((n) => created.has(n));
+    const compose = tier1.length > 0 && metas.length > 1 && (askedLoose || askedEveryFrame || builtWhole);
+
+    if (compose) {
+      const origin = {
+        x: Math.min(...metas.map((m) => m.box.x)),
+        // Nothing is drawn over the legend (D69), on Layer 1 least of all.
+        y: Math.max(Math.min(...metas.map((m) => m.box.y)), legendArea ? legendArea.y + legendArea.height : Number.NEGATIVE_INFINITY),
+      };
+      const at = new Map(metas.map((m, i) => [m.id, i]));
+      const placed = layeredLayout(
+        metas.map((m) => ({ id: m.id, bounds: m.box })) as unknown as GraphNode[],
+        [...projected.values()] as unknown as GraphEdge[],
+        new Map(metas.map((m) => [m.id, { width: m.box.width, height: m.box.height }])),
+        origin,
+        {
+          labelSize: (e) => edgeLabelSize(e.label, arrowFont),
+          // No kinds up here: a frame is one of a kind, and nothing on
+          // Layer 1 shares a size with anything else (D80).
+          order: (id) => at.get(id) ?? 0,
+          // The genre's posture rides the same one pipeline (D90).
+          ...(posture === "straight" ? { posture: "straight" as const } : {}),
+        },
+      );
+      let arranged = false;
+      for (const meta of metas) {
+        const box = placed.get(meta.id);
+        if (!box) continue;
+        const dx = box.x - meta.box.x;
+        const dy = box.y - meta.box.y;
+        if (dx === 0 && dy === 0) continue;
+        arranged = true;
+        for (const frameId of meta.frames) carryFrame(frameId, dx, dy);
+        if (meta.node) placeLoose(meta.node, dx, dy);
+      }
+      // One line for the whole tier, not one per frame: what moved is the
+      // outer picture, and it moved for one reason.
+      if (arranged) notes.push("Layer 1: arranged whole — sources lead, sinks follow (D100)");
+    }
+  }
+
   // Frames keep their distance (D86): no write leaves two frames
   // overlapping, or a frame over the legend. Overlaps are parted in the
   // declared order, members carried along, and the edges that touch them
   // are re-routed by the pass below.
   {
-    const tierOfFrame = computeTiers(snapshot).frameTier;
-    const declared = [...graph.frames].sort((a, b) => {
-      const ao = a.order ?? Number.POSITIVE_INFINITY;
-      const bo = b.order ?? Number.POSITIVE_INFINITY;
-      if (ao !== bo) return ao - bo;
-      const byName = a.name.localeCompare(b.name);
-      if (byName !== 0) return byName;
-      return a.id < b.id ? -1 : 1;
-    });
     const placements: FramePlacement[] = [];
     declared.forEach((f, i) => {
       if (removed.has(f.sourceId)) return;
@@ -1285,56 +1575,10 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
     }
     const parted = separateFrames(placements, legendArea);
     for (const [frameId, d] of parted) {
-      const made = createdFrames.get(frameId);
-      if (made) {
-        made.x += d.dx;
-        made.y += d.dy;
-        const pushed = write.frames.find((f) => f.id === frameId);
-        if (pushed) {
-          pushed.x += d.dx;
-          pushed.y += d.dy;
-        }
-        for (const memberId of made.members) {
-          const c = created.get(memberId);
-          if (c) {
-            c.x += d.dx;
-            c.y += d.dy;
-          }
-          const sh = write.shapes.find((x) => x.id === memberId);
-          if (sh) {
-            sh.x += d.dx;
-            sh.y += d.dy;
-          }
-          const sy = (write.symbols ?? []).find((x) => x.id === memberId);
-          if (sy) {
-            sy.x += d.dx;
-            sy.y += d.dy;
-            sy.icon = { ...sy.icon, x: sy.icon.x + d.dx, y: sy.icon.y + d.dy };
-          }
-        }
-        continue;
-      }
-      const framePatch = write.patches.find((pp) => pp.id === frameId);
-      const el = elements.get(frameId)!;
-      if (framePatch) {
-        framePatch.x = (framePatch.x ?? el.x) + d.dx;
-        framePatch.y = (framePatch.y ?? el.y) + d.dy;
-      } else {
-        write.patches.push({ id: frameId, x: el.x + d.dx, y: el.y + d.dy });
-      }
-      if (!touched.includes(frameId)) touched.push(frameId);
-      for (const member of snapshot.elements) {
-        // Bound labels follow their containers in the adapter; everything
-        // else in the frame moves by the frame's own delta.
-        if (member.frameId !== frameId || removed.has(member.id) || member.containerId) continue;
-        const memberPatch = write.patches.find((pp) => pp.id === member.id);
-        if (memberPatch) {
-          memberPatch.x = (memberPatch.x ?? member.x) + d.dx;
-          memberPatch.y = (memberPatch.y ?? member.y) + d.dy;
-        } else {
-          write.patches.push({ id: member.id, x: member.x + d.dx, y: member.y + d.dy });
-        }
-      }
+      // Members and their labels carried along, by the one piece of
+      // machinery that carries a frame (D86, D100).
+      carryFrame(frameId, d.dx, d.dy);
+      if (createdFrames.has(frameId)) continue;
       notes.push(`${graph.frames.find((f) => f.sourceId === frameId)?.name ?? frameId}: moved clear of its neighbour (D86)`);
     }
   }

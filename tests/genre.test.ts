@@ -460,6 +460,72 @@ describe("an event flow lays its contexts out as lanes (D90)", () => {
   });
 });
 
+describe("the lanes and the outer picture do not fight (D90, D100)", () => {
+  // The same two contexts, and two components nobody framed: the customer
+  // the flow starts with and the ledger it ends in. The lanes pass places
+  // the frames; the meta-arrangement ranks the loose pair around them.
+  const ops: Op[] = [
+    { op: "use_genre", genre: "event-flow" },
+    { op: "add_frame", ref: "$ordering", name: "Ordering", narrative: "Orders are placed here." },
+    { op: "add_frame", ref: "$billing", name: "Billing", narrative: "Invoices are raised here." },
+    { op: "add_node", ref: "$place", label: "Place order", kind: "command", frame: "$ordering" },
+    { op: "add_node", ref: "$placed", label: "Order placed", kind: "event", frame: "$ordering" },
+    { op: "add_node", ref: "$issue", label: "Issue invoice", kind: "command", frame: "$billing" },
+    { op: "add_node", ref: "$issued", label: "Invoice issued", kind: "event", frame: "$billing" },
+    { op: "add_node", ref: "$customer", label: "Customer", kind: "read model" },
+    { op: "add_node", ref: "$ledger", label: "Ledger", kind: "read model" },
+    { op: "add_edge", from: "$place", to: "$placed", label: "places" },
+    { op: "add_edge", from: "$placed", to: "$issue", label: "bills" },
+    { op: "add_edge", from: "$issue", to: "$issued", label: "issues" },
+    { op: "add_edge", from: "$customer", to: "$place", label: "orders" },
+    { op: "add_edge", from: "$issued", to: "$ledger", label: "posts" },
+  ];
+  const result = plan(ops, empty, idSource(37));
+  const shapeOf = (ref: string) => result.write.shapes!.find((s) => s.id === result.ids[ref])!;
+  const frameOf = (name: string) => result.write.frames!.find((f) => f.name === name)!;
+  const clear = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+    a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+
+  it("leaves the lanes lanes — stacked, aligned, spanning the same time (D90)", () => {
+    const ordering = frameOf("Ordering");
+    const billing = frameOf("Billing");
+    expect(ordering.y + ordering.height).toBeLessThanOrEqual(billing.y);
+    expect(billing.x).toBe(ordering.x);
+    expect(billing.width).toBe(ordering.width);
+    expect(result.notes.join("\n")).toContain("Event flow: 4 components in 2 lanes, time left to right");
+    expect(result.notes.join("\n")).not.toContain("moved clear of its neighbour");
+    // Every member is still in its own band.
+    for (const [ref, name] of [["$place", "Ordering"], ["$placed", "Ordering"], ["$issue", "Billing"], ["$issued", "Billing"]] as const) {
+      const shape = shapeOf(ref);
+      const frame = frameOf(name);
+      expect(shape.x).toBeGreaterThanOrEqual(frame.x);
+      expect(shape.x + shape.width).toBeLessThanOrEqual(frame.x + frame.width);
+      expect(shape.y).toBeGreaterThanOrEqual(frame.y);
+      expect(shape.y + shape.height).toBeLessThanOrEqual(frame.y + frame.height);
+    }
+  });
+
+  it("ranks the loose pair around the lane block, clear of it and of each other (D100)", () => {
+    const ordering = frameOf("Ordering");
+    const billing = frameOf("Billing");
+    const customer = shapeOf("$customer");
+    const ledger = shapeOf("$ledger");
+    // The lanes move as one block, so what feeds into them leads all of
+    // them and what they feed follows all of them.
+    expect(customer.x + customer.width).toBeLessThanOrEqual(Math.min(ordering.x, billing.x));
+    expect(ledger.x).toBeGreaterThanOrEqual(Math.max(ordering.x + ordering.width, billing.x + billing.width));
+    for (const loose of [customer, ledger]) {
+      for (const frame of [ordering, billing]) expect(clear(loose, frame)).toBe(true);
+    }
+    expect(clear(customer, ledger)).toBe(true);
+    expect(result.notes.filter((n) => n === "Layer 1: arranged whole — sources lead, sinks follow (D100)")).toHaveLength(1);
+  });
+
+  it("reads the same twice (I3)", () => {
+    expect(plan(ops, empty, idSource(37)).write).toEqual(result.write);
+  });
+});
+
 describe("one batch gives one write (I3)", () => {
   it("plans a genre, a drawing and a scenario the same way twice", () => {
     const ops: Op[] = [
