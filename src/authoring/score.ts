@@ -1,24 +1,25 @@
 /**
  * The craft score (D76): the lint's number. Pleasing is not computable, but
  * the proxies the evidence ranks are — crossings first, bends next,
- * alignment and the room components leave each other after that, colour
- * distance last — so `validate` can hand an agent a 0–100 with its parts
- * and say what would raise it. Measured per frame and for the diagram
- * whole, from the polylines a reader will actually see (D75's ports,
- * nudges and softened corners included), never from tidy centre lines.
+ * alignment and the room components leave each other after that,
+ * squareness and colour distance last (D99) — so `validate` can hand an
+ * agent a 0–100 with its parts and say what would raise it. Measured per
+ * frame and for the diagram whole, from the polylines a reader will
+ * actually see (D75's ports, nudges and softened corners included), never
+ * from tidy centre lines.
  * Pure and deterministic (I3), and dependency-free: even the colour
  * distance is a dozen lines of arithmetic here (I7).
  */
 import type { LegendRule, SceneSnapshot } from "../adapter/snapshot";
 import { buildSceneGraph, type GraphEdge, type GraphNode, type SceneGraph } from "../scene/graph";
-import { legendBox, type Box } from "./layout";
+import { GRID, legendBox, type Box } from "./layout";
 import { absolutePoints, CORNER_RADIUS, polylineThroughBox, type Point } from "./route";
 
-export type CraftKey = "crossings" | "bends" | "alignment" | "lengths" | "angles" | "overlaps" | "colour";
+export type CraftKey = "crossings" | "bends" | "alignment" | "lengths" | "squareness" | "overlaps" | "colour";
 
 export interface CraftPart {
   key: CraftKey;
-  /** The measure itself: crossings counted, bends per edge, a share, a CV, degrees, ΔE. */
+  /** The measure itself: crossings counted, bends per edge, a share, a CV, ΔE. */
   value: number;
   /** Points lost, 0..weight. */
   penalty: number;
@@ -47,8 +48,9 @@ export interface CraftScore {
  * What each part may cost, as the evidence ranks them (D76): crossings are
  * what a reader has to untangle before reading anything, bends are the next
  * worst, alignment and the room components leave each other come after, and
- * the length spread, the angle at a port and the legend's colour distance
- * are the finish. The weights sum to 100, so the score is what is left of it.
+ * the length spread, the squareness of what was drawn and the legend's
+ * colour distance are the finish. The weights sum to 100, so the score is
+ * what is left of it.
  */
 export const CRAFT_WEIGHTS: Record<CraftKey, number> = {
   crossings: 35,
@@ -56,12 +58,12 @@ export const CRAFT_WEIGHTS: Record<CraftKey, number> = {
   alignment: 15,
   overlaps: 15,
   lengths: 5,
-  angles: 5,
+  squareness: 5,
   colour: 5,
 };
 
 /** The parts in the order they are reported — dearest weight first. */
-const PART_ORDER: CraftKey[] = ["crossings", "bends", "alignment", "overlaps", "lengths", "angles", "colour"];
+const PART_ORDER: CraftKey[] = ["crossings", "bends", "alignment", "overlaps", "lengths", "squareness", "colour"];
 
 /**
  * Every penalty SATURATES: a part costs its whole weight once its measure
@@ -85,10 +87,17 @@ const TURN_EPSILON = 0.5;
  * well past it.
  */
 const AXIS_DEGREES = 12;
+/**
+ * The deviation from an axis a DRAWN segment may keep and still read as
+ * square (D98, D99). Its partner is route.ts's `AXIS_SNAP` — what the
+ * router itself flattens onto the axis; what the router would snap, the
+ * score must not charge for. Mirrored here rather than imported, since
+ * route.ts exports no such constant yet; the two are to be reconciled to
+ * one when it does.
+ */
+const AXIS_SNAP = AXIS_DEGREES;
 /** Centres this close on the cross axis read as lined up. */
 const ALIGN_PX = 2;
-/** Edge ends this close on a component meet there; farther apart are separate ports. */
-const MEETING_PX = 10;
 /**
  * Turns closer together than this along the line are ONE bend: D78 draws a
  * right-angle corner as an arc of the corner radius, which arrives as a
@@ -101,8 +110,13 @@ const SOFT_SPAN = 2 * CORNER_RADIUS;
  * not a diagonal anyone drew, so the alignment share passes over them.
  */
 const SHORT_SEGMENT = 2 * CORNER_RADIUS;
-/** Two edges meeting at a component closer than this are hard to tell apart. */
-const MIN_ANGLE = 30;
+/**
+ * What a box off the grid may cost of the squareness part (D99). A
+ * diagonal is the loud fault — the eye reads it as unfinished — and a box
+ * a few units off a grid line the quiet one, so it takes the smaller
+ * share and a picture of square lines can still lose a little for it.
+ */
+const OFF_GRID_SHARE = 0.25;
 /** Two kind fills closer than this in CIELAB read as one colour (D77). */
 const MIN_DELTA_E = 25;
 /** A frame this crowded is a tiering problem, not a layout one (D63, D76). */
@@ -448,48 +462,46 @@ function lengthsPart(edges: readonly EdgeGeom[]): CraftPart {
   };
 }
 
-/** The tightest angle between two edges meeting at one component (D75). */
-function anglesPart(edges: readonly EdgeGeom[]): CraftPart {
-  // Two edges meet only when they touch the component at the same place;
-  // edges spread along a side by their ports (D75) leave from different
-  // points and are told apart by that, whatever their directions.
-  const atNode = new Map<string, { label: string; angles: number[]; at: Point[] }>();
-  const add = (node: GraphNode, away: Point, at: Point) => {
-    const dx = away[0] - at[0];
-    const dy = away[1] - at[1];
-    if (Math.hypot(dx, dy) < 1e-9) return;
-    const slot = atNode.get(node.id) ?? { label: node.label ?? node.id, angles: [], at: [] };
-    slot.angles.push((Math.atan2(dy, dx) * 180) / Math.PI);
-    slot.at.push(at);
-    atNode.set(node.id, slot);
-  };
+/**
+ * Squared away (D98, D99): a drawn segment is axis-aligned or it turns,
+ * and every box sits on the grid. Two faults in one share — the oblique
+ * segments among those long enough to be a line anyone drew, and the boxes
+ * off the grid — the second weighted lightly, since a diagonal shouts and
+ * four units of drift only murmurs. Measured off what is drawn, so a
+ * picture the router squared costs nothing here.
+ */
+function squarenessPart(nodes: readonly GraphNode[], edges: readonly EdgeGeom[]): CraftPart {
+  let segments = 0;
+  let oblique = 0;
   for (const e of edges) {
-    add(e.from, e.points[1], e.points[0]);
-    add(e.to, e.points[e.points.length - 2], e.points[e.points.length - 1]);
-  }
-  let tightest = 180;
-  let where = "";
-  for (const [, slot] of [...atNode].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
-    for (let i = 0; i < slot.angles.length; i++) {
-      for (let j = i + 1; j < slot.angles.length; j++) {
-        if (Math.hypot(slot.at[i][0] - slot.at[j][0], slot.at[i][1] - slot.at[j][1]) > MEETING_PX) continue;
-        let between = Math.abs(slot.angles[i] - slot.angles[j]);
-        if (between > 180) between = 360 - between;
-        if (between < tightest) {
-          tightest = between;
-          where = slot.label;
-        }
-      }
+    for (let i = 0; i + 1 < e.points.length; i++) {
+      const dx = e.points[i + 1][0] - e.points[i][0];
+      const dy = e.points[i + 1][1] - e.points[i][1];
+      // A leg no longer than a softened corner's own is the softening
+      // (D78), not a diagonal anyone drew.
+      if (Math.hypot(dx, dy) <= SHORT_SEGMENT) continue;
+      segments += 1;
+      const angle = (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180) / Math.PI;
+      if (Math.min(angle, 90 - angle) > AXIS_SNAP) oblique += 1;
     }
   }
-  // Below thirty degrees two edges start to read as one; zero is hopeless.
-  const penalty = saturate(CRAFT_WEIGHTS.angles, MIN_ANGLE - Math.min(tightest, MIN_ANGLE), MIN_ANGLE);
+  const onGrid = (value: number): boolean => value % GRID === 0;
+  const offGrid = nodes.filter((n) => !onGrid(n.bounds.x) || !onGrid(n.bounds.y)).length;
+  const measure =
+    (segments ? oblique / segments : 0) * (1 - OFF_GRID_SHARE) + (nodes.length ? offGrid / nodes.length : 0) * OFF_GRID_SHARE;
+  // A share is already 0..1: every line oblique and every box adrift is the
+  // hopeless case.
+  const penalty = saturate(CRAFT_WEIGHTS.squareness, measure, 1);
+  const said = [
+    oblique ? `${Math.round((oblique / segments) * 100)}% of segments run oblique` : null,
+    offGrid ? `${plural(offGrid, "box", "boxes")} off the ${GRID}-grid` : null,
+  ].filter((s): s is string => s !== null);
   return {
-    key: "angles",
-    value: round2(tightest),
+    key: "squareness",
+    value: round2(measure),
     penalty,
-    weight: CRAFT_WEIGHTS.angles,
-    detail: where && tightest < MIN_ANGLE ? `two edges meet at ${Math.round(tightest)}° at ${where}` : "edges meet at angles a reader can separate",
+    weight: CRAFT_WEIGHTS.squareness,
+    detail: said.length ? said.join(", ") : "every line is square and every box is on the grid",
   };
 }
 
@@ -569,7 +581,7 @@ function partsFor(nodes: readonly GraphNode[], edges: readonly EdgeGeom[], legen
     alignment: alignmentPart(nodes, edges),
     overlaps: overlapsPart(nodes, edges, legendArea),
     lengths: lengthsPart(edges),
-    angles: anglesPart(edges),
+    squareness: squarenessPart(nodes, edges),
     colour,
   };
   return PART_ORDER.map((key) => ({ ...measured[key], penalty: round2(measured[key].penalty) }));
@@ -632,8 +644,8 @@ function adviceFor(
       case "lengths":
         lines.push(`edge lengths cost ${cost} — ${tidy} evens the columns`);
         break;
-      case "angles":
-        lines.push(`angles cost ${cost} — ${tidy} spreads the edges that meet at one component`);
+      case "squareness":
+        lines.push(`squareness costs ${cost} — ${tidy} squares what was drawn on the slant and puts every box on the grid`);
         break;
       case "colour":
         lines.push(
