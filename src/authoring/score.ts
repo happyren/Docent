@@ -313,10 +313,18 @@ function crossingsPart(edges: readonly EdgeGeom[]): CraftPart {
   };
 }
 
-/** Bends per edge, an arc counted as the one bend it draws (D75, D78). */
+/**
+ * Excess bends per edge, an arc counted as the one bend it draws (D75,
+ * D78). Under D98 every edge is axis-aligned or it turns, so the L and
+ * the Z — one and two bends — are the alphabet of orthogonal drawing,
+ * not a defect; what the score charges is the hook: every bend past the
+ * two a Z needs (the A19 complaint, still the complaint).
+ */
 function bendsPart(edges: readonly EdgeGeom[]): CraftPart {
   let bends = 0;
+  let excess = 0;
   for (const e of edges) {
+    let edgeBends = 0;
     // Turns within a corner's length of each other are ONE bend, and their
     // angles ADD: D78 draws a right angle as an arc of several small turns,
     // none of which a reader would name on its own but which together are
@@ -325,7 +333,7 @@ function bendsPart(edges: readonly EdgeGeom[]): CraftPart {
     let turned = 0;
     let along = 0;
     const close = () => {
-      if (turned > TURN_DEGREES) bends += 1;
+      if (turned > TURN_DEGREES) edgeBends += 1;
       turned = 0;
     };
     for (let i = 1; i + 1 < e.points.length; i++) {
@@ -345,17 +353,25 @@ function bendsPart(edges: readonly EdgeGeom[]): CraftPart {
       turned += turn;
     }
     close();
+    bends += edgeBends;
+    excess += Math.max(0, edgeBends - 2);
   }
-  const perEdge = edges.length ? bends / edges.length : 0;
-  // Hopeless at two bends on the average edge: a line that turns twice on
-  // its way is no longer a line the eye follows.
+  const perEdge = edges.length ? excess / edges.length : 0;
+  // Hopeless at two EXCESS bends on the average edge — the average edge a
+  // hook of four turns: a line that winds is no longer a line the eye
+  // follows, but the elbow it needs to stay square costs nothing (D98).
   const penalty = saturate(CRAFT_WEIGHTS.bends, perEdge, 2);
   return {
     key: "bends",
     value: round2(perEdge),
     penalty,
     weight: CRAFT_WEIGHTS.bends,
-    detail: bends ? `${plural(bends, "bend")} over ${plural(edges.length, "edge")} — ${round2(perEdge)} each` : "every edge runs straight",
+    detail:
+      excess > 0
+        ? `${plural(excess, "bend")} beyond the elbows over ${plural(edges.length, "edge")}`
+        : bends
+          ? `${plural(bends, "bend")}, none beyond the two an elbow needs`
+          : "every edge runs straight",
   };
 }
 

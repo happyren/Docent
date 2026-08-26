@@ -126,7 +126,24 @@ describe("the craft score (D76)", () => {
       ...box("q", 600, 400, "Q"),
       drawn("bendy", "p", "q", softened),
     ] as never);
-    expect(part(craftScore(withCorners), "bends").value).toBe(2);
+    // Two arcs are the Z's own elbows (D98): counted as two bends — the
+    // detail says so, proving each arc read as ONE turn, not six — and
+    // charged as zero excess.
+    const zed = part(craftScore(withCorners), "bends");
+    expect(zed.value).toBe(0);
+    expect(zed.penalty).toBe(0);
+    expect(zed.detail).toContain("2 bends, none beyond");
+    // A winding route — four corners — has two bends past the elbows, and they cost.
+    const hookPoints: Point[] = [[100, 30], [350, 30], [350, 430], [500, 430], [500, 200], [600, 200]];
+    const hooked = snapshotFromRawElements([
+      { ...base, id: "F", type: "frame", name: "Hooked", x: -100, y: -100, width: 1000, height: 700, customData: { docent: { narrative: "A hook." } } },
+      ...box("p", 0, 0, "P"),
+      ...box("q", 600, 160, "Q"),
+      drawn("hook", "p", "q", arcCorners(hookPoints)),
+    ] as never);
+    const hook = part(craftScore(hooked), "bends");
+    expect(hook.value).toBe(2);
+    expect(hook.penalty).toBeGreaterThan(0);
 
     const straight = snapshotFromRawElements([
       { ...base, id: "F", type: "frame", name: "Straight", x: -100, y: -100, width: 1000, height: 400, customData: { docent: { narrative: "No turns." } } },
