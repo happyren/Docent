@@ -149,6 +149,49 @@ describe("the guarantee (D73): a tidy changes nothing but the picture", () => {
   });
 });
 
+/**
+ * The same guarantee over the outer picture (D100): tidying the whole
+ * diagram now composes Layer 1 — frames and the components around them
+ * ranked as one — and that is still a picture change and nothing else.
+ */
+const withExternals = snapshotFromRawElements([
+  ...raw,
+  { ...base, id: "up", type: "rectangle", x: 1800, y: -600, width: 160, height: 80, boundElements: [{ id: "up_t", type: "text" }] },
+  { ...base, id: "up_t", type: "text", x: 1810, y: -580, width: 140, height: 20, text: "Upstream", containerId: "up", fontFamily: 5, fontSize: 20 },
+  { ...base, id: "down", type: "rectangle", x: 2100, y: -600, width: 160, height: 80, boundElements: [{ id: "down_t", type: "text" }] },
+  { ...base, id: "down_t", type: "text", x: 2110, y: -580, width: 140, height: 20, text: "Downstream", containerId: "down", fontFamily: 5, fontSize: 20 },
+  { ...arrow("x1", "up", "gateway"), frameId: null },
+  { ...arrow("x2", "db", "down"), frameId: null },
+] as never);
+
+describe("the outer picture is a picture change too (D73, D100)", () => {
+  it("composes Layer 1 on a whole tidy without touching a word of meaning", () => {
+    const after = tidied(withExternals, { all: true }, 29);
+    expect(describeMeaningChange(withExternals, after).changelog).toBe("");
+    const { diff } = describeChange(withExternals, after);
+    for (const entry of [...diff.nodes.changed, ...diff.frames.changed]) {
+      for (const change of entry.changes) expect(["moved", "resized"]).toContain(change.kind);
+    }
+    expect(diff.edges.changed).toEqual([]);
+    // The externals lead the frame and the sink follows it, which is the
+    // whole of what the composition is for.
+    const graph = buildSceneGraph(after);
+    const frame = after.elements.find((el) => el.id === "F")!;
+    const at = (label: string) => graph.nodes.find((n) => n.label === label)!.bounds;
+    expect(at("Upstream").x + at("Upstream").width).toBeLessThanOrEqual(frame.x);
+    expect(at("Downstream").x).toBeGreaterThanOrEqual(frame.x + frame.width);
+  });
+
+  it("says it once, and says it only when the whole diagram was asked for", () => {
+    const whole = plan(tidyOps(withExternals, { all: true }), withExternals, idSource(29));
+    expect(whole.notes.filter((n) => n === "Layer 1: arranged whole — sources lead, sinks follow (D100)")).toHaveLength(1);
+    const oneFrame = plan(tidyOps(withExternals, { frame: "F" }), withExternals, idSource(29));
+    expect(oneFrame.notes.some((n) => n.includes("arranged whole"))).toBe(false);
+    // Two runs, one picture (I3).
+    expect(plan(tidyOps(withExternals, { all: true }), withExternals, idSource(29)).write).toEqual(whole.write);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // scopes
 // ---------------------------------------------------------------------------

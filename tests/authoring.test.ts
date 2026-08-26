@@ -7,9 +7,10 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
-import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, GAP_X, GAP_Y, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel, snapUp } from "../src/authoring/layout";
-import { absolutePoints, polylineThroughBox, routeEdge } from "../src/authoring/route";
+import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, GAP_X, GAP_Y, GRID, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel, snapUp } from "../src/authoring/layout";
+import { absolutePoints, CORNER_RADIUS, polylineThroughBox, routeEdge, type Point } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
+import { tidyOps } from "../src/authoring/tidy";
 
 const base = {
   angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
@@ -648,6 +649,177 @@ describe("frames keep their distance (D86)", () => {
         expect(clear).toBe(true);
       }
     }
+  });
+});
+
+describe("Layer 1 is arranged whole (D100)", () => {
+  /** A component, framed or loose — the fixture below needs both. */
+  const comp = (id: string, x: number, y: number, label: string, frameId: string | null) => [
+    { ...base, id, type: "rectangle", x, y, width: 180, height: 80, frameId, boundElements: [{ id: `${id}_t`, type: "text" }] },
+    { ...base, id: `${id}_t`, type: "text", x: x + 10, y: y + 20, width: 160, height: 20, text: label, containerId: id, frameId, fontFamily: 5, fontSize: 20 },
+  ];
+  const wire = (id: string, from: string, to: string) => ({
+    ...base, id, type: "arrow", x: 0, y: 0, width: 10, height: 10, frameId: null, roundness: { type: 2 },
+    points: [[0, 0], [10, 10]], startBinding: { elementId: from }, endBinding: { elementId: to }, endArrowhead: "arrow",
+  });
+
+  /**
+   * The field case, drawn the way the pipeline used to leave it: a frame of
+   * four laid out properly, and every component around it stranded in a row
+   * in the sky with long diagonals raining down onto the frame.
+   */
+  const field = snapshotFromRawElements([
+    { ...base, id: "FC", type: "frame", name: "Core", x: 0, y: 900, width: 900, height: 460 },
+    ...comp("m1", 60, 1000, "Ingest", "FC"),
+    ...comp("m2", 300, 1000, "Route", "FC"),
+    ...comp("m3", 540, 1000, "Settle", "FC"),
+    ...comp("m4", 300, 1160, "Audit", "FC"),
+    ...Array.from({ length: 6 }, (_, i) => comp(`x${i}`, i * 240, 0, `External ${i}`, null)).flat(),
+    ...Array.from({ length: 2 }, (_, i) => comp(`s${i}`, 1600 + i * 240, 0, `Sink ${i}`, null)).flat(),
+    wire("a0", "x0", "m1"), wire("a1", "x1", "m1"), wire("a2", "x2", "m2"),
+    wire("a3", "x3", "m2"), wire("a4", "x4", "m3"), wire("a5", "x5", "m4"),
+    wire("b0", "m3", "s0"), wire("b1", "m4", "s1"),
+    wire("c0", "m1", "m2"), wire("c1", "m2", "m3"), wire("c2", "m2", "m4"),
+  ] as never);
+
+  /** Axis-aligned, allowing the short legs an arc at a corner draws (D78, D98). */
+  const orthogonal = (pts: readonly Point[]) =>
+    pts.slice(0, -1).every((p, i) => {
+      const q = pts[i + 1];
+      return Math.abs(p[0] - q[0]) < 1e-6 || Math.abs(p[1] - q[1]) < 1e-6 || Math.hypot(q[0] - p[0], q[1] - p[1]) <= CORNER_RADIUS;
+    });
+
+  const composed = (seed = 5) => {
+    const ops = tidyOps(field, { all: true });
+    const result = plan(ops, field, idSource(seed));
+    return { result, after: simulate(field, result.write) };
+  };
+
+  it("ranks the externals before the frame and the sinks after it", () => {
+    const { result, after } = composed();
+    const graph = buildSceneGraph(after);
+    const frame = after.elements.find((el) => el.id === "FC")!;
+    const at = (label: string) => graph.nodes.find((n) => n.label === label)!.bounds;
+    // Sources take the columns before what they feed …
+    for (let i = 0; i < 6; i++) {
+      const box = at(`External ${i}`);
+      expect(box.x + box.width).toBeLessThanOrEqual(frame.x);
+    }
+    // … and sinks the columns after.
+    for (let i = 0; i < 2; i++) expect(at(`Sink ${i}`).x).toBeGreaterThanOrEqual(frame.x + frame.width);
+    // The members went with their frame, every one of them still inside it.
+    for (const label of ["Ingest", "Route", "Settle", "Audit"]) {
+      const box = at(label);
+      expect(box.x).toBeGreaterThanOrEqual(frame.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(frame.x + frame.width);
+      expect(box.y).toBeGreaterThanOrEqual(frame.y);
+      expect(box.y + box.height).toBeLessThanOrEqual(frame.y + frame.height);
+    }
+    // One line for the tier, not one per frame.
+    expect(result.notes.filter((n) => n === "Layer 1: arranged whole — sources lead, sinks follow (D100)")).toHaveLength(1);
+  });
+
+  it("draws every edge square, through nothing, and never clean across the frame", () => {
+    const { after } = composed();
+    const graph = buildSceneGraph(after);
+    const els = new Map(after.elements.map((el) => [el.id, el]));
+    const frame = els.get("FC")!;
+    const boxes = graph.nodes.map((n) => ({ id: n.id, ...n.bounds }));
+    let drawn = 0;
+    for (const edge of graph.edges) {
+      const el = els.get(edge.sourceId)!;
+      expect(el.points).not.toBeNull();
+      const line = absolutePoints(el.x, el.y, el.points!);
+      // The router the meta-pass uses is the one D98 squared away.
+      expect(orthogonal(line)).toBe(true);
+      // D72's guarantee still stands over the composed picture.
+      for (const b of boxes) {
+        if (b.id === edge.from || b.id === edge.to) continue;
+        expect(polylineThroughBox(line, b, 2)).toBe(false);
+      }
+      // And no edge crosses the frame's body: what feeds a member stops
+      // inside it, what a member feeds starts inside it.
+      const inside = (id: string | null) => graph.nodes.find((n) => n.id === id)?.frameId !== null;
+      if (!inside(edge.from) && inside(edge.to)) expect(Math.max(...line.map((p) => p[0]))).toBeLessThanOrEqual(frame.x + frame.width);
+      if (inside(edge.from) && !inside(edge.to)) expect(Math.min(...line.map((p) => p[0]))).toBeGreaterThanOrEqual(frame.x);
+      drawn += 1;
+    }
+    expect(drawn).toBe(11);
+  });
+
+  it("leaves every box grid-true and reads the same twice (D99, I3)", () => {
+    const { result, after } = composed();
+    const frame = after.elements.find((el) => el.id === "FC")!;
+    for (const b of [...buildSceneGraph(after).nodes.map((n) => n.bounds), frame]) {
+      for (const v of [b.x, b.y, b.width, b.height]) expect(v % GRID).toBe(0);
+    }
+    expect(composed().result.write).toEqual(result.write);
+  });
+
+  it("composes what a batch built whole, without being asked (D66 one tier up)", () => {
+    // Nothing on Layer 1 but this batch's own work: no hand placement in it
+    // for D60 to guard, so it is arranged the way a frame the agent built is.
+    const built = plan(
+      [
+        { op: "add_frame", ref: "$f", name: "Core", narrative: "The engine." },
+        { op: "add_node", ref: "$in", label: "Ingest", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$out", label: "Settle", frame: "$f", intents: ["x"] },
+        { op: "add_node", ref: "$up", label: "Upstream", intents: ["x"] },
+        { op: "add_node", ref: "$down", label: "Downstream", intents: ["x"] },
+        { op: "add_edge", from: "$in", to: "$out" },
+        { op: "add_edge", from: "$up", to: "$in", label: "feeds" },
+        { op: "add_edge", from: "$out", to: "$down", label: "reports" },
+      ],
+      snapshotFromRawElements([] as never),
+      idSource(47),
+    );
+    const frame = built.write.frames![0];
+    const shape = (label: string) => built.write.shapes!.find((s) => s.label === label)!;
+    expect(shape("Upstream").x + shape("Upstream").width).toBeLessThanOrEqual(frame.x);
+    expect(shape("Downstream").x).toBeGreaterThanOrEqual(frame.x + frame.width);
+    expect(built.notes.filter((n) => n.includes("arranged whole"))).toHaveLength(1);
+  });
+
+  /** Two frames and a loose component: what a batch inside one must not disturb. */
+  const neighbours = snapshotFromRawElements([
+    { ...base, id: "P1", type: "frame", name: "01 One", x: 0, y: 0, width: 600, height: 300 },
+    { ...base, id: "P2", type: "frame", name: "02 Two", x: 0, y: 700, width: 600, height: 300 },
+    ...comp("p1a", 40, 100, "Alpha", "P1"),
+    ...comp("p1b", 320, 100, "Beta", "P1"),
+    ...comp("p2a", 40, 800, "Gamma", "P2"),
+    ...comp("far", 1400, 40, "Far away", null),
+    wire("w1", "p1a", "p1b"),
+    wire("w2", "far", "p2a"),
+  ] as never);
+  const stayed = (write: ReturnType<typeof plan>["write"], ids: readonly string[]) =>
+    ids.every((id) => !(write.patches ?? []).some((p) => p.id === id && (p.x !== undefined || p.y !== undefined)));
+
+  it("arranges nothing outer for a batch that only edited inside one frame (D60)", () => {
+    const result = plan(
+      [
+        { op: "add_node", ref: "$new", label: "Delta", frame: "P1", intents: ["x"] },
+        { op: "add_edge", from: "p1b", to: "$new" },
+      ],
+      neighbours,
+      idSource(41),
+    );
+    expect(stayed(result.write, ["P2", "p2a", "far"])).toBe(true);
+    expect(result.notes.some((n) => n.includes("arranged whole"))).toBe(false);
+  });
+
+  it("arranges nothing outer for a tidy of one frame either (D60, D73)", () => {
+    const result = plan(tidyOps(neighbours, { frame: "P1" }), neighbours, idSource(43));
+    expect(stayed(result.write, ["P2", "p2a", "far"])).toBe(true);
+    expect(result.notes.some((n) => n.includes("arranged whole"))).toBe(false);
+    // Asking for the whole diagram IS the asking, and then it composes.
+    const whole = plan(tidyOps(neighbours, { all: true }), neighbours, idSource(43));
+    expect(whole.notes.filter((n) => n.includes("arranged whole"))).toHaveLength(1);
+    const after = simulate(neighbours, whole.write);
+    const graph = buildSceneGraph(after);
+    // The loose component feeds a member of P2, so it leads it.
+    const far = graph.nodes.find((n) => n.label === "Far away")!.bounds;
+    const p2 = after.elements.find((el) => el.id === "P2")!;
+    expect(far.x + far.width).toBeLessThanOrEqual(p2.x);
   });
 });
 
