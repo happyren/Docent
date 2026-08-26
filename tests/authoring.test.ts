@@ -7,7 +7,7 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
-import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel } from "../src/authoring/layout";
+import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, GAP_X, GAP_Y, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel, snapUp } from "../src/authoring/layout";
 import { absolutePoints, polylineThroughBox, routeEdge } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
 
@@ -65,8 +65,9 @@ describe("layout (D60)", () => {
     const frame = { x: 0, y: 0, width: 900, height: 400 };
     const occupied = [{ x: 40, y: 100, width: 160, height: 80 }];
     const placed = placeInFrame(frame, occupied, size, occupied[0]);
-    expect(placed.x).toBe(40 + 160 + 60);
-    expect(placed.y).toBe(100);
+    // After the anchor by the house gap, both on the grid (D99).
+    expect(placed.x).toBe(40 + 160 + GAP_X);
+    expect(placed.y).toBe(snapUp(100));
     // No anchor: first free spot in the first row.
     const free = placeInFrame(frame, occupied, size, null);
     expect(free.y).toBeLessThanOrEqual(100 + 80 + 50);
@@ -97,9 +98,10 @@ describe("plan (D59, D62)", () => {
     expect(retry.type).toBe("rectangle");
     expect(retry.style.backgroundColor).toBe("#ffec99"); // service, from the legend
     expect(retry.frameId).toBe("F");
-    // Right of Orders is Postgres, so it goes below Orders — never on top of anything.
-    expect(retry.x).toBe(340);
-    expect(retry.y).toBe(100 + 80 + 50);
+    // Right of Orders is Postgres, so it goes below Orders — never on top of
+    // anything — and on the grid (D99).
+    expect(retry.x).toBe(snapUp(340));
+    expect(retry.y).toBe(snapUp(100 + 80 + GAP_Y));
     expect(retry.meaning).toEqual({ intents: ["retries failed charges"], logic: "if charge fails: retry 3x then park" });
     expect(result.ids["$retry"]).toBe(retry.id);
     const edge = result.write.arrows![0];
@@ -107,7 +109,12 @@ describe("plan (D59, D62)", () => {
     expect(edge.to).toBe(retry.id);
     expect(edge.frameId).toBe("F");
     expect(edge.endArrowhead).toBe("arrow");
-    expect(result.write.patches).toEqual([{ id: "gateway", meaning: { intents: ["rate-limits at the edge", "terminates TLS"] } }]);
+    expect(result.write.patches).toEqual([
+      { id: "gateway", meaning: { intents: ["rate-limits at the edge", "terminates TLS"] } },
+      // The frame was drawn 900 wide, which is not a grid multiple: the
+      // write that puts a component in it leaves it grid-true (D99).
+      { id: "F", x: 0, y: 0, width: 904, height: 400 },
+    ]);
     expect(result.touched).toContain("gateway");
   });
 
@@ -125,7 +132,7 @@ describe("plan (D59, D62)", () => {
     // Postgres feeds the ledger, so the ledger goes below Postgres (right of it is outside the frame's row).
     const ledger = result.write.shapes![0];
     expect(ledger.x).toBe(640);
-    expect(ledger.y).toBe(100 + 90 + 50);
+    expect(ledger.y).toBe(snapUp(100 + 90 + GAP_Y));
   });
 
   it("refuses a bad batch whole, naming every problem", () => {
@@ -260,7 +267,9 @@ describe("an edge is as long as its words (D70)", () => {
     );
     const node = result.write.shapes![0];
     const gateway = sparse.elements.find((el) => el.id === "gateway")!;
-    expect(node.y).toBe(gateway.y);
+    // The gateway's own row, on the grid: the fixture drew it at 100, which
+    // is not a grid line, and a box Docent places always is (D99).
+    expect(node.y).toBe(snapUp(gateway.y));
     expect(node.x - (gateway.x + gateway.width)).toBeGreaterThanOrEqual(room);
   });
 
@@ -271,7 +280,7 @@ describe("an edge is as long as its words (D70)", () => {
     });
     const ordered = [...wide.values()].sort((a, b) => a.x - b.x);
     expect(ordered[1].x - (ordered[0].x + ordered[0].width)).toBeGreaterThanOrEqual(300);
-    expect(ordered[2].x - (ordered[1].x + ordered[1].width)).toBe(60);
+    expect(ordered[2].x - (ordered[1].x + ordered[1].width)).toBe(GAP_X);
   });
 });
 
@@ -373,12 +382,13 @@ describe("the layered pipeline, whole (D74)", () => {
     expect(box("svcB").width).toBe(160);
     expect(box("storeX").width).toBe(200);
     expect(box("storeY").width).toBe(200);
-    // One rank, one height — the tallest of that rank. Height is the rank's
-    // business alone now: a long label wraps taller than its kind (D80).
+    // One rank, one height — the tallest of that rank, rounded up to the
+    // grid (D99). Height is the rank's business alone now: a long label
+    // wraps taller than its kind (D80).
     expect(box("svcA").height).toBe(80);
     expect(box("storeX").height).toBe(80);
-    expect(box("svcB").height).toBe(100);
-    expect(box("storeY").height).toBe(100);
+    expect(box("svcB").height).toBe(snapUp(100));
+    expect(box("storeY").height).toBe(snapUp(100));
   });
 
   it("gives one picture, whatever order the components arrive in", () => {
@@ -491,10 +501,11 @@ describe("cycles and sizes (D79, D80)", () => {
     expect(sizeForLabel(long, font, "ellipse").width).toBeGreaterThan(500);
     for (const label of labels) expect(of(label).width).toBeLessThan(500);
     expect(new Set(labels.map((label) => of(label).width)).size).toBe(1);
-    expect(of(long).width).toBe(sizeForLabel(short[0], font, "ellipse").width);
+    // The shared width is that typical label's, rounded up to the grid (D99).
+    expect(of(long).width).toBe(snapUp(sizeForLabel(short[0], font, "ellipse").width));
     // It costs its own component lines instead.
     expect(of(long).height).toBeGreaterThan(of(short[0]).height);
-    expect(of(long).height).toBe(sizeAtWidth(long, font, "ellipse", of(long).width).height);
+    expect(of(long).height).toBe(snapUp(sizeAtWidth(long, font, "ellipse", of(long).width).height));
   });
 
   it("leaves one of a kind its own size, and still gives a rank one height", () => {
@@ -514,16 +525,16 @@ describe("cycles and sizes (D79, D80)", () => {
     const boxes = layeredLayout(nodes, [link("only", "twinB"), link("twinA", "tall")], sizes, { x: 0, y: 0 }, {
       kindOf: (id) => (id.startsWith("twin") ? "twin" : id),
     });
-    // The only one of its kind keeps the width it came with.
-    expect(boxes.get("only")!.width).toBe(420);
+    // The only one of its kind keeps the width it came with, on the grid (D99).
+    expect(boxes.get("only")!.width).toBe(snapUp(420));
     expect(boxes.get("tall")!.width).toBe(160);
     // The pair share one: unlabelled, that is the widest that still fits.
-    expect(boxes.get("twinA")!.width).toBe(300);
-    expect(boxes.get("twinB")!.width).toBe(300);
+    expect(boxes.get("twinA")!.width).toBe(snapUp(300));
+    expect(boxes.get("twinB")!.width).toBe(snapUp(300));
     // A rank is one height throughout.
     expect(boxes.get("only")!.height).toBe(boxes.get("twinA")!.height);
     expect(boxes.get("twinB")!.height).toBe(boxes.get("tall")!.height);
-    expect(boxes.get("twinB")!.height).toBe(130);
+    expect(boxes.get("twinB")!.height).toBe(snapUp(130));
     expect(ids.every((id) => boxes.has(id))).toBe(true);
   });
 });

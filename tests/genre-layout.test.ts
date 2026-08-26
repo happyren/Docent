@@ -1,10 +1,25 @@
 /**
  * Layout postures (S22, D90): one deterministic pipeline told how its
  * genre reads — straight for a time axis that must not turn back on
- * itself, lanes for a context per row.
+ * itself, lanes for a context per row. And the rhythm every posture keeps:
+ * everything sits on the grid (D99).
  */
 import { describe, expect, it } from "vitest";
-import { FRAME_HEAD, FRAME_PAD, GAP_X, GAP_Y, LANE_GAP, laneLayout, layeredLayout } from "../src/authoring/layout";
+import {
+  FRAME_GAP,
+  FRAME_HEAD,
+  FRAME_PAD,
+  GAP_X,
+  GAP_Y,
+  GRID,
+  LANE_GAP,
+  growFrame,
+  laneLayout,
+  layeredLayout,
+  separateFrames,
+  snapUp,
+  type Box,
+} from "../src/authoring/layout";
 
 const W = 160;
 const H = 80;
@@ -145,5 +160,118 @@ describe("lanes are rows, ranks are columns (D90)", () => {
 
   it("leaves a lane room enough to be framed (D86)", () => {
     expect(LANE_GAP).toBeGreaterThanOrEqual(FRAME_HEAD + 2 * FRAME_PAD + 24);
+  });
+});
+
+describe("everything sits on the grid (D99)", () => {
+  const onGrid = (value: number) => value % GRID === 0;
+  const gridTrue = (box: Box) => onGrid(box.x) && onGrid(box.y) && onGrid(box.width) && onGrid(box.height);
+  const apart = (a: Box, b: Box) =>
+    a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y;
+
+  /** Odd sizes, an odd origin, and a flow long enough to fold (D71). */
+  const awkward = (n: number) => ({
+    nodes: Array.from({ length: n }, (_, i) => ({ id: `s${i}`, bounds: { x: i * 37, y: i * 13, width: 151, height: 73 } })) as never[],
+    edges: Array.from({ length: n - 1 }, (_, i) => ({ id: `e${i}`, from: `s${i}`, to: `s${i + 1}`, label: null })) as never[],
+    sizes: new Map(Array.from({ length: n }, (_, i) => [`s${i}`, { width: 151 + i, height: 73 + i }])),
+  });
+
+  it("answers every box of a layered layout on the grid, whatever it was handed", () => {
+    const { nodes, edges, sizes } = awkward(9);
+    const boxes = layeredLayout(nodes, edges, sizes, { x: -13, y: 7 }, {
+      labelSize: (e) => (e.id === "e2" ? { width: 181, height: 23 } : { width: 0, height: 0 }),
+    });
+    const placed = [...boxes.values()];
+    expect(placed).toHaveLength(9);
+    for (const box of placed) expect(gridTrue(box)).toBe(true);
+    // A box never lost room to the rounding, and none of it made an overlap.
+    for (const [id, box] of boxes) {
+      expect(box.width).toBeGreaterThanOrEqual(sizes.get(id)!.width);
+      expect(box.height).toBeGreaterThanOrEqual(sizes.get(id)!.height);
+    }
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) expect(apart(placed[i], placed[j])).toBe(true);
+    }
+  });
+
+  it("answers every box of a lane layout on the grid", () => {
+    const spec = [["place-order", "Ordering"], ["order-placed", "Ordering"], ["open-orders", "Reporting"], ["stray", null]] as const;
+    const fixture = lanesOf(spec);
+    const sizes = new Map(spec.map(([id], i) => [id, { width: 153 + i, height: 71 + i * 3 }]));
+    const boxes = laneLayout(fixture.nodes, flow(spec.map(([id]) => id)), sizes, { x: 5, y: -9 }, {
+      lanes: ["Ordering", "Billing", "Reporting"],
+      laneOf: fixture.laneOf,
+      labelSize: () => ({ width: 111, height: 19 }),
+    });
+    for (const box of boxes.values()) expect(gridTrue(box)).toBe(true);
+  });
+
+  it("rounds a kind's shared size UP to the grid, never under its widest member (D80)", () => {
+    const nodes = [
+      { id: "a", bounds: { x: 0, y: 0, width: 150, height: 70 } },
+      { id: "b", bounds: { x: 300, y: 0, width: 202, height: 70 } },
+    ] as never[];
+    const sizes = new Map([
+      ["a", { width: 150, height: 70 }],
+      ["b", { width: 202, height: 70 }],
+    ]);
+    const boxes = layeredLayout(nodes, [{ id: "e", from: "a", to: "b", label: null }] as never[], sizes, { x: 0, y: 0 }, {
+      kindOf: () => "service",
+    });
+    // 202 is the floor a shared width may not go under; the grid takes it up.
+    expect(boxes.get("a")!.width).toBe(snapUp(202));
+    expect(boxes.get("b")!.width).toBe(snapUp(202));
+    expect(boxes.get("a")!.width).toBeGreaterThanOrEqual(202);
+    expect(boxes.get("a")!.height).toBe(snapUp(70));
+  });
+
+  it("rounds a label's column gap UP, so the label still fits (D70)", () => {
+    const { nodes, edges, sizes } = chain(3);
+    // 300 is not a grid multiple: rounding down would take the label's room.
+    const boxes = layeredLayout(nodes, edges, sizes, { x: 0, y: 0 }, {
+      labelSize: (e) => (e.id === "e0" ? { width: 300, height: 20 } : { width: 0, height: 0 }),
+    });
+    const gap = boxes.get("s1")!.x - (boxes.get("s0")!.x + boxes.get("s0")!.width);
+    expect(gap).toBeGreaterThanOrEqual(300);
+    expect(gap).toBe(snapUp(300));
+    // Every other gap is the house minimum, itself a grid multiple.
+    expect(boxes.get("s2")!.x - (boxes.get("s1")!.x + boxes.get("s1")!.width)).toBe(GAP_X);
+    expect(onGrid(GAP_X) && onGrid(GAP_Y) && onGrid(LANE_GAP) && onGrid(FRAME_GAP)).toBe(true);
+  });
+
+  it("grows a frame outward to the grid, never in on its members", () => {
+    const frame = { x: 5, y: 5, width: 100, height: 100 };
+    const member = { x: 37, y: 41, width: 151, height: 73 };
+    const grown = growFrame(frame, [member]);
+    expect(gridTrue(grown)).toBe(true);
+    // Outward on every side: the frame it was given is still inside it, and
+    // so is the room its member asks for.
+    expect(grown.x).toBeLessThanOrEqual(frame.x);
+    expect(grown.y).toBeLessThanOrEqual(frame.y);
+    expect(grown.x + grown.width).toBeGreaterThanOrEqual(frame.x + frame.width);
+    expect(grown.y + grown.height).toBeGreaterThanOrEqual(frame.y + frame.height);
+    expect(grown.x).toBeLessThanOrEqual(member.x - FRAME_PAD);
+    expect(grown.y).toBeLessThanOrEqual(member.y - FRAME_HEAD - FRAME_PAD);
+    expect(grown.x + grown.width).toBeGreaterThanOrEqual(member.x + member.width + FRAME_PAD);
+    expect(grown.y + grown.height).toBeGreaterThanOrEqual(member.y + member.height + FRAME_PAD);
+  });
+
+  it("parts two frames by a grid multiple, and leaves them grid-true (D86)", () => {
+    const boxes: Box[] = [
+      { x: 0, y: 0, width: 400, height: 200 },
+      { x: 240, y: 40, width: 400, height: 200 },
+    ];
+    const moved = separateFrames([
+      { id: "A", box: boxes[0], tier: 1, order: 0 },
+      { id: "B", box: boxes[1], tier: 1, order: 1 },
+    ]);
+    const push = moved.get("B")!;
+    expect(moved.has("A")).toBe(false);
+    expect(onGrid(push.dx) && onGrid(push.dy)).toBe(true);
+    const parted = { ...boxes[1], x: boxes[1].x + push.dx, y: boxes[1].y + push.dy };
+    expect(gridTrue(parted)).toBe(true);
+    // The clearing rounded up, so the gap D86 asks for is still there.
+    expect(parted.x - (boxes[0].x + boxes[0].width)).toBeGreaterThanOrEqual(FRAME_GAP);
+    expect(apart(boxes[0], parted)).toBe(true);
   });
 });

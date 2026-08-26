@@ -91,7 +91,7 @@ describe("the craft score (D76)", () => {
     expect(part(score, "overlaps").value).toBe(0);
     expect(part(score, "overlaps").penalty).toBe(0);
     // Every part is reported, weighted as the evidence ranks them.
-    expect(score.parts.map((p) => p.key)).toEqual(["crossings", "bends", "alignment", "overlaps", "lengths", "angles", "colour"]);
+    expect(score.parts.map((p) => p.key)).toEqual(["crossings", "bends", "alignment", "overlaps", "lengths", "squareness", "colour"]);
     expect(score.parts.reduce((sum, p) => sum + p.weight, 0)).toBe(100);
     expect(score.perFrame).toEqual([{ id: "F", name: "02 Core Services", score: score.score, worst: "alignment" }]);
   });
@@ -174,6 +174,44 @@ describe("the craft score (D76)", () => {
     const said = report.findings.find((f) => f.message.startsWith("craft score"))!;
     expect(said.level).toBe("info");
     expect(said.message).toContain(`craft score ${report.score.score} of 100`);
+  });
+});
+
+describe("squared away (D98, D99)", () => {
+  /** Two components in one row, and one arrow drawn between them. */
+  const twoInARow = (id: string, points: readonly Point[], top = 0) =>
+    snapshotFromRawElements([
+      { ...base, id: "F", type: "frame", name: "Square", x: -80, y: -80, width: 800, height: 320, customData: { docent: { narrative: "A pair." } } },
+      ...box("p", 0, top, "P"),
+      ...box("q", 400, top, "Q"),
+      drawn(id, "p", "q", points),
+    ] as never);
+
+  it("costs a drawn segment that runs on the slant, and nothing for the same picture squared", () => {
+    // The same pair, joined once: on the slant, then along the axis (D98).
+    const slanted = craftScore(twoInARow("slant", [[160, 72], [400, 8]]));
+    const square = craftScore(twoInARow("square", [[160, 40], [400, 40]]));
+    expect(part(slanted, "squareness").penalty).toBeGreaterThan(0);
+    expect(part(slanted, "squareness").detail).toContain("oblique");
+    expect(part(square, "squareness").penalty).toBe(0);
+    expect(part(square, "squareness").detail).toBe("every line is square and every box is on the grid");
+    expect(slanted.score).toBeLessThan(square.score);
+  });
+
+  it("costs a box off the grid, lightly, and names it", () => {
+    // The same square picture, four units off the grid (D99).
+    const onGrid = craftScore(twoInARow("square", [[160, 40], [400, 40]]));
+    const off = craftScore(twoInARow("square", [[160, 44], [400, 44]], 4));
+    expect(part(off, "squareness").penalty).toBeGreaterThan(0);
+    expect(part(off, "squareness").detail).toContain("off the 8-grid");
+    expect(off.score).toBeLessThan(onGrid.score);
+    // Lightly: a diagonal costs more than drift does.
+    expect(part(off, "squareness").penalty).toBeLessThan(part(craftScore(twoInARow("slant", [[160, 72], [400, 8]])), "squareness").penalty);
+    // It is what the lint calls worst, in the part's new name.
+    expect(off.perFrame[0].worst).toBe("squareness");
+    const said = lint(twoInARow("square", [[160, 44], [400, 44]], 4)).findings.find((f) => f.message.startsWith("craft score"))!;
+    expect(said.message).toContain("worst: squareness");
+    expect(said.message).toContain("squareness costs");
   });
 });
 

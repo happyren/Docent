@@ -3,7 +3,9 @@
  * best at. Sizes come from labels; new components go into free space
  * inside their frame after what feeds them; frames grow to fit; new
  * frames go to free canvas space. A layered layout re-flows a frame only
- * when asked. Pure and deterministic (I3).
+ * when asked. Every box that comes back sits on the grid (D99) — places,
+ * sizes, column edges and row tops all multiples of GRID, gaps and shared
+ * sizes rounded up to it and never down. Pure and deterministic (I3).
  */
 import type { SnapshotElement } from "../adapter/snapshot";
 import type { GraphEdge, GraphNode } from "../scene/graph";
@@ -21,11 +23,26 @@ export interface Size {
   height: number;
 }
 
-/** Gaps in scene units. */
-export const GAP_X = 60;
-export const GAP_Y = 50;
+/**
+ * The grid everything sits on (D99). Every box the layout answers — its
+ * place and its size, the left edge of a column, the top of a row — is a
+ * multiple of it, and so are the standard gaps below, so the rhythm holds
+ * without a second rounding: a box moved by a multiple of the grid is
+ * still on it.
+ */
+export const GRID = 8;
+
+/** Up to the next grid line. Sizes and gaps only ever round this way (D99). */
+export const snapUp = (value: number): number => Math.ceil(value / GRID) * GRID;
+
+/** Down to the grid line below: the way a bound rounds when it must not close in (D99). */
+export const snapDown = (value: number): number => Math.floor(value / GRID) * GRID;
+
+/** Gaps in scene units, each a multiple of the grid (D99). */
+export const GAP_X = 64;
+export const GAP_Y = 56;
 export const FRAME_PAD = 40;
-export const FRAME_HEAD = 36;
+export const FRAME_HEAD = 40;
 export const MIN_W = 150;
 export const MIN_H = 70;
 
@@ -138,22 +155,28 @@ export function placeInFrame(
   /** The gap kept from the anchor — at least the label of the edge between them (D70). */
   gapX: number = GAP_X,
 ): Box {
+  // Every place answered here is on the grid (D99), and every candidate is
+  // snapped BEFORE it is tried, so what `fits` clears is the box that comes
+  // back — a snap can never put one on top of anything.
   const origin = frame
-    ? { x: frame.x + FRAME_PAD, y: frame.y + FRAME_HEAD + FRAME_PAD }
+    ? { x: snapUp(frame.x + FRAME_PAD), y: snapUp(frame.y + FRAME_HEAD + FRAME_PAD) }
     : occupied.length
-      ? { x: Math.min(...occupied.map((b) => b.x)), y: Math.min(...occupied.map((b) => b.y)) }
+      ? { x: snapUp(Math.min(...occupied.map((b) => b.x))), y: snapUp(Math.min(...occupied.map((b) => b.y))) }
       : { x: 0, y: 0 };
-  if (floor !== null && origin.y < floor) origin.y = floor;
+  if (floor !== null && origin.y < floor) origin.y = snapUp(floor);
   const right = frame ? frame.x + frame.width - FRAME_PAD : Number.POSITIVE_INFINITY;
   const fits = (box: Box) => !occupied.some((o) => overlaps(o, box, Math.min(GAP_X, GAP_Y) / 2));
+  const at = (x: number, y: number): Box => ({ x: snapUp(x), y: snapUp(y), ...size });
 
   // Preferred: right of the anchor, same row; then below it.
   if (anchor) {
-    const gap = Math.max(GAP_X, gapX);
+    // The gap the label asks for rounds UP to the grid — a label that fit
+    // still fits (D70, D99).
+    const gap = snapUp(Math.max(GAP_X, gapX));
     const candidates: Box[] = [
-      { x: anchor.x + anchor.width + gap, y: anchor.y, ...size },
-      { x: anchor.x, y: anchor.y + anchor.height + GAP_Y, ...size },
-      { x: anchor.x + anchor.width + gap, y: anchor.y + anchor.height + GAP_Y, ...size },
+      at(anchor.x + anchor.width + gap, anchor.y),
+      at(anchor.x, anchor.y + anchor.height + GAP_Y),
+      at(anchor.x + anchor.width + gap, anchor.y + anchor.height + GAP_Y),
     ];
     for (const c of candidates) {
       if (fits(c) && c.x + c.width <= right + size.width) return c;
@@ -162,8 +185,8 @@ export function placeInFrame(
   // Otherwise: scan rows from the top of the content, left to right.
   const rows = new Set<number>([origin.y]);
   for (const o of occupied) {
-    rows.add(o.y);
-    rows.add(o.y + o.height + GAP_Y);
+    rows.add(snapUp(o.y));
+    rows.add(snapUp(o.y + o.height + GAP_Y));
   }
   for (const y of [...rows].filter((r) => floor === null || r >= floor).sort((a, b) => a - b)) {
     let x = origin.x;
@@ -172,7 +195,7 @@ export function placeInFrame(
       if (fits(box)) return box;
       // Jump past whatever blocks this spot.
       const blockers = occupied.filter((o) => overlaps(o, box, Math.min(GAP_X, GAP_Y) / 2));
-      const nextX = Math.max(...blockers.map((o) => o.x + o.width)) + GAP_X;
+      const nextX = snapUp(Math.max(...blockers.map((o) => o.x + o.width)) + GAP_X);
       if (!Number.isFinite(nextX) || nextX <= x) break;
       x = nextX;
       if (x + size.width > right && right !== Number.POSITIVE_INFINITY) break;
@@ -180,29 +203,37 @@ export function placeInFrame(
   }
   // Below everything.
   const bottom = occupied.length ? Math.max(...occupied.map((o) => o.y + o.height)) + GAP_Y : origin.y;
-  return { x: origin.x, y: bottom, ...size };
+  return at(origin.x, bottom);
 }
 
-/** A frame grown (never shrunk) to hold the boxes with padding. */
+/**
+ * A frame grown (never shrunk) to hold the boxes with padding, its bounds
+ * snapped OUTWARD to the grid (D99) — every edge moves away from the
+ * members, so a frame that held its room still holds it.
+ */
 export function growFrame(frame: Box, contents: readonly Box[]): Box {
   if (!contents.length) return frame;
-  const minX = Math.min(frame.x, ...contents.map((b) => b.x - FRAME_PAD));
-  const minY = Math.min(frame.y, ...contents.map((b) => b.y - FRAME_HEAD - FRAME_PAD));
-  const maxX = Math.max(frame.x + frame.width, ...contents.map((b) => b.x + b.width + FRAME_PAD));
-  const maxY = Math.max(frame.y + frame.height, ...contents.map((b) => b.y + b.height + FRAME_PAD));
+  const minX = snapDown(Math.min(frame.x, ...contents.map((b) => b.x - FRAME_PAD)));
+  const minY = snapDown(Math.min(frame.y, ...contents.map((b) => b.y - FRAME_HEAD - FRAME_PAD)));
+  const maxX = snapUp(Math.max(frame.x + frame.width, ...contents.map((b) => b.x + b.width + FRAME_PAD)));
+  const maxY = snapUp(Math.max(frame.y + frame.height, ...contents.map((b) => b.y + b.height + FRAME_PAD)));
   return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
 }
+
+/** The room a new frame leaves under the tier it joins — a grid multiple (D99). */
+const FRAME_DROP = 144;
 
 /**
  * Free canvas space for a new frame: below everything on the tier it
  * belongs to, left-aligned with it — the same place create-on-click puts
- * a detail frame.
+ * a detail frame. On the grid, snapped outward: left of the tier's left
+ * edge, below its lowest (D99).
  */
 export function placeFrame(existing: readonly Box[], size: Size): Box {
   if (!existing.length) return { x: 0, y: 0, ...size };
-  const minX = Math.min(...existing.map((b) => b.x));
+  const minX = snapDown(Math.min(...existing.map((b) => b.x)));
   const maxY = Math.max(...existing.map((b) => b.y + b.height));
-  return { x: minX, y: maxY + 140, ...size };
+  return { x: minX, y: snapUp(maxY + FRAME_DROP), ...size };
 }
 
 /**
@@ -228,8 +259,10 @@ export interface LabelDraw {
  * columns is at least the widest edge label that sits in it (D70), and a
  * flow of more than `TURN_AFTER` ranks folds into bands that alternate
  * direction (D71) — the map posture's fold, which a straight posture
- * skips (D90). Returns new boxes at the frame's origin; the caller grows
- * the frame.
+ * skips (D90). Every box comes back on the grid (D99): sizes round up
+ * before anything is placed, so the separations are grid multiples and
+ * what the pipeline lined up stays lined up. Returns new boxes at the
+ * frame's origin; the caller grows the frame.
  */
 export interface LayoutOptions {
   /** The room an edge's label takes; nothing when absent. */
@@ -353,8 +386,12 @@ interface Slot {
   index: number;
 }
 
-/** The room kept after a slot: half of it after a dummy, which is only a line. */
-const gapAfterSlot = (slot: Slot): number => (slot.dummy ? GAP_Y / 2 : GAP_Y);
+/**
+ * The room kept after a slot: half of it after a dummy, which is only a
+ * line — rounded up to the grid, so a row's tops stay a grid multiple
+ * apart however the rank is made up (D99).
+ */
+const gapAfterSlot = (slot: Slot): number => (slot.dummy ? snapUp(GAP_Y / 2) : GAP_Y);
 
 /** What two neighbours in a rank must keep between their centres. */
 const separation = (first: Slot, second: Slot): number =>
@@ -752,7 +789,9 @@ function sharedSizes(
       const d = draw(id);
       return d ? widestWordWidth(d.text, d.fontSize, d.shape) : out.get(id)!.width;
     };
-    const shared = Math.max(Math.ceil(median(ids.map(natural)) / 10) * 10, ...ids.map(floor));
+    // The measurements are left alone; it is the size they are SHARED at
+    // that rounds up to the grid, and up so no label loses room (D80, D99).
+    const shared = snapUp(Math.max(Math.ceil(median(ids.map(natural)) / 10) * 10, ...ids.map(floor)));
     for (const id of ids) {
       const d = draw(id);
       const size = out.get(id)!;
@@ -768,8 +807,8 @@ function sharedSizes(
     else rows.set(r, [n.id]);
   }
   for (const ids of rows.values()) {
-    const height = Math.max(...ids.map((id) => out.get(id)!.height));
-    for (const id of ids) out.set(id, { ...out.get(id)!, height });
+    const height = snapUp(Math.max(...ids.map((id) => out.get(id)!.height)));
+    for (const id of ids) out.set(id, { width: snapUp(out.get(id)!.width), height });
   }
   return out;
 }
@@ -872,7 +911,13 @@ export function layeredLayout(
   // A kind's shared width, a rank's shared height (D74, D80) — only when
   // the caller can name a kind, since nothing else knows what a peer is.
   const drawn = options.kindOf ? sharedSizes(byOrder, rank, sizes, options.kindOf, options.labelOf) : null;
-  const sizeOf = (id: string): Size => drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
+  // A drawn size rounds UP to the grid (D99) before anything is placed, so
+  // the separations the pipeline keeps are grid multiples too and a row's
+  // tops stay exactly as far apart as they were.
+  const sizeOf = (id: string): Size => {
+    const size = drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
+    return { width: snapUp(size.width), height: snapUp(size.height) };
+  };
   // An edge that skips ranks gets a dummy in each rank it passes, so the
   // real components there are pushed off its line instead of under it.
   const layers = new Map<number, Slot[]>();
@@ -903,7 +948,7 @@ export function layeredLayout(
       const slot: Slot = {
         id: `__dummy${dummies++}`,
         dummy: true,
-        size: { width: 0, height: Math.max(Math.round(MIN_H / 2), label.height) },
+        size: { width: 0, height: snapUp(Math.max(Math.round(MIN_H / 2), label.height)) },
         tie: previous.tie + 0.5 + at * 1e-6,
         up: [],
         down: [],
@@ -927,7 +972,9 @@ export function layeredLayout(
     rank: r,
     layer: ordered[i],
     width: Math.max(0, ...ordered[i].map((slot) => slot.size.width)),
-    gap: Math.max(GAP_X, gapAfter.get(r) ?? 0),
+    // A label's gap rounds UP to the grid, never down: the label must still
+    // fit, and the column after it must still land on a grid line (D70, D99).
+    gap: snapUp(Math.max(GAP_X, gapAfter.get(r) ?? 0)),
   }));
   // Fold into bands (D71): left to right, then right to left beneath. A
   // straight posture takes them all in one band instead — a time axis must
@@ -935,9 +982,12 @@ export function layeredLayout(
   const perBand =
     options.posture === "straight" ? Math.max(1, columns.length) : columnsPerBand(columns.length);
   const result = new Map<string, Box>();
-  let bandTop = origin.y;
+  // The whole picture starts on the grid, and every width and gap after it
+  // is a grid multiple, so every column edge and band top is one too (D99).
+  let bandTop = snapUp(origin.y);
+  const left = snapUp(origin.x);
   // Where the previous band's last column stood: the next band starts under it.
-  let lastColumn = { left: origin.x, right: origin.x };
+  let lastColumn = { left, right: left };
   for (let b = 0; b * perBand < columns.length; b++) {
     const band = columns.slice(b * perBand, (b + 1) * perBand);
     const bandWidth = band.reduce((w, c, i) => w + c.width + (i ? band[i - 1].gap : 0), 0);
@@ -950,12 +1000,15 @@ export function layeredLayout(
     const reversed = b % 2 === 1;
     // A turned band runs right to left from under the column the flow
     // came from, never past the frame's left edge.
-    let x = reversed ? Math.max(lastColumn.right, origin.x + bandWidth) : lastColumn.left;
+    let x = reversed ? Math.max(lastColumn.right, left + bandWidth) : lastColumn.left;
     for (let i = 0; i < band.length; i++) {
       const column = band[i];
       if (reversed) x -= column.width;
       for (const slot of column.layer) {
-        if (!slot.dummy) result.set(slot.id, { x, y: Math.round(centre.get(slot)! - slot.size.height / 2 + dy), ...slot.size });
+        // A row's top lands on the grid (D99). Two slots the pipeline put
+        // level are level still: their tops are a grid multiple apart, so
+        // one rounding moves both the same way (I3).
+        if (!slot.dummy) result.set(slot.id, { x, y: snapUp(centre.get(slot)! - slot.size.height / 2 + dy), ...slot.size });
       }
       lastColumn = { left: x, right: x + column.width };
       if (reversed) x -= i + 1 < band.length ? column.gap : 0;
@@ -966,7 +1019,7 @@ export function layeredLayout(
     const turnLabel = edges
       .filter((e) => e.from && e.to && !back.has(e.id) && rank.get(e.from) === turning.rank && rank.get(e.to) === turning.rank + 1)
       .reduce((h, e) => Math.max(h, labelOf(e).height), 0);
-    bandTop += bottom - top + Math.max(GAP_Y * 2, turnLabel + 40);
+    bandTop = snapUp(bandTop + bottom - top + Math.max(GAP_Y * 2, turnLabel + 40));
   }
   return result;
 }
@@ -975,6 +1028,7 @@ export function layeredLayout(
  * The room between two lanes (D90): the caller wraps each lane in a frame,
  * and a frame reaches FRAME_HEAD + FRAME_PAD above what it holds and
  * FRAME_PAD below, so this leaves the two frames 24 of clear air (D86).
+ * A grid multiple, like every gap Docent keeps (D99).
  */
 export const LANE_GAP = FRAME_HEAD + 2 * FRAME_PAD + 24;
 
@@ -1016,7 +1070,12 @@ export function laneLayout(
   const back = backEdges(nodes, edges, options.order);
   const rank = longestPathRanks(byOrder, edges, ids, back);
   const drawn = options.kindOf ? sharedSizes(byOrder, rank, sizes, options.kindOf, options.labelOf) : null;
-  const sizeOf = (id: string): Size => drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
+  // Sizes round up to the grid before anything is placed (D99), as in the
+  // layered posture — the lanes are the same pipeline read sideways.
+  const sizeOf = (id: string): Size => {
+    const size = drawn?.get(id) ?? sizes.get(id) ?? { width: MIN_W, height: MIN_H };
+    return { width: snapUp(size.width), height: snapUp(size.height) };
+  };
   const labelOf = (e: GraphEdge): Size => options.labelSize?.(e) ?? { width: 0, height: 0 };
   const gapAfter = labelGaps(forwardFlows(edges, ids, back, order), rank, labelOf);
   // A component whose lane was never declared — or which names none — is
@@ -1035,11 +1094,14 @@ export function laneLayout(
     const r = rank.get(n.id)!;
     columnWidth.set(r, Math.max(columnWidth.get(r) ?? 0, sizeOf(n.id).width));
   }
+  // Column left edges on the grid (D99): the first is snapped, and every
+  // width and gap after it is a grid multiple — a label's gap rounded UP,
+  // so the label still fits (D70).
   const columnLeft = new Map<number, number>();
-  let x = origin.x;
+  let x = snapUp(origin.x);
   for (const r of columns) {
     columnLeft.set(r, x);
-    x += columnWidth.get(r)! + Math.max(GAP_X, gapAfter.get(r) ?? 0);
+    x += columnWidth.get(r)! + snapUp(Math.max(GAP_X, gapAfter.get(r) ?? 0));
   }
   // What sits in one (lane, rank) cell, in authored order — `byOrder` is
   // already in it, so a stack needs no tie-break of its own.
@@ -1059,8 +1121,11 @@ export function laneLayout(
   const laneHeight = Array.from({ length: laneCount }, (_, lane) =>
     Math.max(0, ...columns.map((r) => stackHeight(cells.get(cellKey(lane, r)) ?? []))),
   );
+  // Row tops on the grid (D99): a lane's height is a sum of grid-multiple
+  // heights and gaps, and LANE_GAP is one too, so snapping the first is
+  // enough to put every lane on a grid line.
   const laneTop: number[] = [];
-  let y = origin.y;
+  let y = snapUp(origin.y);
   for (let lane = 0; lane < laneCount; lane++) {
     laneTop.push(y);
     y += laneHeight[lane] + LANE_GAP;
@@ -1072,7 +1137,10 @@ export function laneLayout(
       if (!members) continue;
       // The stack sits in the middle of its lane, so one component per
       // cell keeps a straight line along the lane however others stack.
-      let top = laneTop[lane] + Math.round((laneHeight[lane] - stackHeight(members)) / 2);
+      // Half a grid multiple is not one, so the centring rounds down: the
+      // stack sits a touch high rather than a touch low, and the room left
+      // under it inside the lane only grows (D99).
+      let top = laneTop[lane] + snapDown((laneHeight[lane] - stackHeight(members)) / 2);
       for (const id of members) {
         const size = sizeOf(id);
         result.set(id, { x: columnLeft.get(r)!, y: top, ...size });
@@ -1156,8 +1224,8 @@ export interface FramePlacement {
   order: number;
 }
 
-/** The gap two frames always keep (D86). */
-export const FRAME_GAP = 60;
+/** The gap two frames always keep (D86) — a grid multiple, like the rest (D99). */
+export const FRAME_GAP = 64;
 
 /**
  * Frames keep their distance (D86): within each tier, any two frames that
@@ -1165,8 +1233,9 @@ export const FRAME_GAP = 60;
  * later in the declared order, along the axis their centres already
  * differ on most, in the direction they already differ, so what is left
  * of what and what is above what stays true; the legend is immovable and
- * pushes frames the same way. Returns the moves, empty when nothing
- * overlaps. Deterministic (I3).
+ * pushes frames the same way. Every push is a grid multiple, so a parted
+ * frame is as grid-true as it was (D99). Returns the moves, empty when
+ * nothing overlaps. Deterministic (I3).
  */
 export function separateFrames(
   frames: readonly FramePlacement[],
@@ -1187,6 +1256,10 @@ export function separateFrames(
   const TOUCH = 2;
   const apart = (a: Box, b: Box) =>
     a.x + a.width - TOUCH <= b.x || b.x + b.width - TOUCH <= a.x || a.y + a.height - TOUCH <= b.y || b.y + b.height - TOUCH <= a.y;
+  // A clearing push rounds UP to the grid, whichever way it goes: the frame
+  // it moves was on the grid and stays on it, and the air it opens only
+  // ever grows (D86, D99).
+  const clearing = (distance: number): number => (distance >= 0 ? snapUp(distance) : -snapUp(-distance));
   const push = (fixed: Box, moving: Box): { dx: number; dy: number } => {
     const [cx, cy] = centre(fixed);
     const [mx, my] = centre(moving);
@@ -1198,10 +1271,10 @@ export function separateFrames(
     const horizontal = Math.abs(dxc) * (fixed.height + moving.height) >= Math.abs(dyc) * (fixed.width + moving.width);
     if (horizontal) {
       const dir = dxc >= 0 ? 1 : -1;
-      return { dx: dir >= 0 ? fixed.x + fixed.width + gap - moving.x : fixed.x - gap - (moving.x + moving.width), dy: 0 };
+      return { dx: clearing(dir >= 0 ? fixed.x + fixed.width + gap - moving.x : fixed.x - gap - (moving.x + moving.width)), dy: 0 };
     }
     const dir = dyc >= 0 ? 1 : -1;
-    return { dx: 0, dy: dir >= 0 ? fixed.y + fixed.height + gap - moving.y : fixed.y - gap - (moving.y + moving.height) };
+    return { dx: 0, dy: clearing(dir >= 0 ? fixed.y + fixed.height + gap - moving.y : fixed.y - gap - (moving.y + moving.height)) };
   };
   for (const tier of [...byTier.keys()].sort((a, b) => a - b)) {
     const list = [...byTier.get(tier)!].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : 1));
