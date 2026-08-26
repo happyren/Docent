@@ -89,9 +89,10 @@ const TURN_EPSILON = 0.5;
 const AXIS_DEGREES = 12;
 /**
  * The deviation from an axis a DRAWN segment may keep and still read as
- * square (D98, D99). Its partner is route.ts's `AXIS_DEGREES` — what the
- * router itself flattens onto the axis; what the router would snap, the
- * score must not charge for. Mirrored here rather than imported, since
+ * square (D98, D99). Its partner is route.ts's `AXIS_SNAP` — the
+ * drawing-side snap DISTANCE (px); this is the judging tolerance in
+ * degrees. Different dimensions, deliberately not one import: what the
+ * router would snap, the score must not charge for. Kept here, since
  * route.ts exports no such constant yet; the two are to be reconciled to
  * one when it does.
  */
