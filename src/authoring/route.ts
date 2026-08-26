@@ -1,17 +1,21 @@
 /**
- * Edge routing (D72), edges that flow (D75), and an edge that reads as one
- * stroke (D78): an edge never cuts through a component, it leaves and
- * enters at a port spread along the side it uses, and when its straight
- * line is blocked the sides it leaves and enters are the pair that routes
- * cheapest — so a back edge along a row goes over it as a U rather than out
- * of the side facing its target and straight back down. The straight line
- * between two ports is kept when nothing lies on it; otherwise an
- * orthogonal path is found on the grid the obstacles' padded edges define —
- * fewest bends first, shortest second. The route is then simplified (jogs
- * collapsed, hairpins removed, no leg shorter than a corner), segments that
- * would run along one line are nudged apart, and every turn is drawn as an
- * explicit circular arc, so what Excalidraw draws is exactly the route.
- * Pure and deterministic (I3).
+ * Edge routing (D72), edges that flow (D75), an edge that reads as one
+ * stroke (D78), and an edge that is axis-aligned or turns (D98): an edge
+ * never cuts through a component, it leaves and enters at a port spread
+ * along the side it uses, and when its straight line is blocked the sides it
+ * leaves and enters are the pair that routes cheapest — so a back edge along
+ * a row goes over it as a U rather than out of the side facing its target
+ * and straight back down. The straight line between two ports is kept only
+ * when nothing lies on it *and* it is horizontal or vertical within the snap
+ * tolerance, in which case the ports slide along their sides until it is
+ * square; every other pair takes an orthogonal path on the grid the
+ * obstacles' padded edges define — fewest bends first, shortest second. The
+ * route is then simplified (jogs collapsed, hairpins removed, no leg shorter
+ * than a corner), segments that would run along one line are nudged apart,
+ * and every turn is drawn as an explicit circular arc, so what Excalidraw
+ * draws is exactly the route. Deterministic (I3) — and pure but for one
+ * thing: the router writes the snap back into the ports it was handed,
+ * because the caller draws the line the router settled.
  */
 import type { Box } from "./layout";
 
@@ -25,6 +29,16 @@ export const NUDGE = 12;
 export const CORNER_RADIUS = 24;
 /** Ports keep to this share of a side, centred — a corner never carries one (D75). */
 export const PORT_SPAN = 0.7;
+/**
+ * How near an axis a clear line must be to stand as a straight edge (D98),
+ * in scene units. Wide enough to take up the slack a spread port (D75) or a
+ * rounded shape's outline leaves between two components the layout meant to
+ * line up — Brandes–Köpf aligns them to the unit, so the slop that survives
+ * is a port's, and a port never moves a side's whole width. Narrow enough
+ * that nothing a reader would call a diagonal survives as one: past it the
+ * edge turns.
+ */
+export const AXIS_SNAP = 8;
 /** What one bend costs, in scene units of length. */
 /**
  * What a turn costs in length (D72, D78): dear enough that a back edge goes
@@ -195,6 +209,32 @@ function middleOf(box: Box, side: Side): number {
   return side === "top" || side === "bottom" ? box.x + box.width / 2 : box.y + box.height / 2;
 }
 
+/** The stretch of a side a port may stand on: its middle share, as D75 spreads it. */
+function sideSpan(box: Box, side: Side): [number, number] {
+  const along = side === "top" || side === "bottom" ? box.width : box.height;
+  const middle = middleOf(box, side);
+  return [middle - (PORT_SPAN * along) / 2, middle + (PORT_SPAN * along) / 2];
+}
+
+/**
+ * Where along `side` a port must stand for the shape drawn in the box to meet
+ * the edge at `target` — `portAt`'s arithmetic run backwards. A port slid to
+ * square an edge up (D98) has to land on the drawing and not on its bounding
+ * box (D75), and on an ellipse or a diamond those are not the same place.
+ */
+function posForOutline(box: Box, shape: string | undefined, side: Side, target: number): number {
+  if (shape !== "ellipse" && shape !== "diamond") return target;
+  const along = side === "top" || side === "bottom" ? box.width : box.height;
+  const half = along / 2;
+  const middle = middleOf(box, side);
+  if (half <= 0) return target;
+  // How far out the outline point sits, as a share of the half side; the
+  // position that puts it there is further out, and runs away at the corner.
+  const k = Math.min(Math.abs(target - middle) / half, 0.999);
+  const reach = shape === "ellipse" ? (k * half) / Math.sqrt(1 - k * k) : (k * half) / (1 - k);
+  return middle + Math.sign(target - middle) * reach;
+}
+
 /** The pair of sides an edge leaves and enters through. */
 export interface SidePair {
   start: Side;
@@ -283,17 +323,58 @@ export interface RouteOptions {
 }
 
 /**
+ * The two ports of a near-axis line, slid along their sides until the line
+ * between them is truly horizontal or vertical (D98), or null when they
+ * cannot reach it. A port moves only along the side it stands on — a port on
+ * a top or a bottom cannot change the line's height — and only within the
+ * spread D75 gives it, because past that it would sit on a corner rather
+ * than on the shape. Both ends give half when both can; one alone comes all
+ * the way. Deterministic (I3): the same ports snap the same way every run.
+ */
+function snapToAxis(from: PortNode, to: PortNode, ports: PortEnds, clearance: number): PortEnds | null {
+  const a = ports.start.at;
+  const b = ports.end.at;
+  // The axis the line is already nearer is the one it is squared to.
+  const horizontal = Math.abs(b[1] - a[1]) <= Math.abs(b[0] - a[0]);
+  const axis = horizontal ? 1 : 0;
+  const off = Math.abs(b[axis] - a[axis]);
+  if (off > AXIS_SNAP) return null;
+  if (off < TIGHT) return ports;
+  const runs = (side: Side) => (horizontal ? side === "left" || side === "right" : side === "top" || side === "bottom");
+  const startRuns = runs(ports.start.side);
+  const endRuns = runs(ports.end.side);
+  if (!startRuns && !endRuns) return null;
+  const target = startRuns === endRuns ? (a[axis] + b[axis]) / 2 : startRuns ? b[axis] : a[axis];
+  const slid = (box: PortNode, port: Port, can: boolean): Port | null => {
+    if (!can) return port;
+    const pos = posForOutline(box, box.shape, port.side, target);
+    const [lo, hi] = sideSpan(box, port.side);
+    // Clamped is refused, not clamped to: a port held short of the target
+    // leaves the line oblique, and an oblique line turns (D98).
+    if (pos < lo - TIGHT || pos > hi + TIGHT) return null;
+    return portAt(box, box.shape, port.side, pos, clearance);
+  };
+  const start = slid(from, ports.start, startRuns);
+  const end = slid(to, ports.end, endRuns);
+  return start && end ? { start, end } : null;
+}
+
+/**
  * The turning points of an edge from `from` to `to`, or null when the
- * straight line is clear. The points are in scene coordinates and all lie
+ * straight line stands. The points are in scene coordinates and all lie
  * outside both ends; the caller draws from each end's outline to the
- * nearest of them. Null also when no path exists on the grid, in which
- * case the straight line is all there is. With `ports` the path starts and
- * ends at the given ports (D75); without them, at the middle of a side, as
- * D72 alone did.
+ * nearest of them. A straight line stands only when nothing lies on it and
+ * it is horizontal or vertical within `AXIS_SNAP` (D98) — with ports the
+ * two of them are slid along their sides to square it, and `ports` comes
+ * back carrying them, since the caller draws the line this decided. Null
+ * also when no path exists on the grid, in which case the straight line is
+ * all there is: a diagonal that cannot route beats no edge at all. With
+ * `ports` the path starts and ends at the given ports (D75); without them,
+ * at the middle of a side, as D72 alone did.
  */
 export function routeEdge(
-  from: Box,
-  to: Box,
+  from: PortNode,
+  to: PortNode,
   obstacles: readonly Box[],
   clearance = ROUTE_PAD,
   ports?: PortEnds,
@@ -311,12 +392,36 @@ export function routeEdge(
   // that runs along the side it claims to leave — the whole shape of a back
   // edge drawn straight over the tops of a row — is not a straight edge, it
   // is the route refusing to turn.
-  const outward =
+  const outward = (p: Point, q: Point) =>
     !ports || !options?.leaveBySide
       ? true
-      : (lineB[0] - lineA[0]) * NORMAL[ports.start.side][0] + (lineB[1] - lineA[1]) * NORMAL[ports.start.side][1] > 1e-6 &&
-        (lineA[0] - lineB[0]) * NORMAL[ports.end.side][0] + (lineA[1] - lineB[1]) * NORMAL[ports.end.side][1] > 1e-6;
-  if (outward && !near.some((o) => segmentThroughBox(lineA, lineB, o, 4))) return null;
+      : (q[0] - p[0]) * NORMAL[ports.start.side][0] + (q[1] - p[1]) * NORMAL[ports.start.side][1] > 1e-6 &&
+        (p[0] - q[0]) * NORMAL[ports.end.side][0] + (p[1] - q[1]) * NORMAL[ports.end.side][1] > 1e-6;
+  const clear = (p: Point, q: Point) => !near.some((o) => segmentThroughBox(p, q, o, 4));
+  if (outward(lineA, lineB) && clear(lineA, lineB)) {
+    // An edge is axis-aligned or it turns (D98). A clear line is kept only
+    // when what would be drawn is square within the snap; everything oblique
+    // falls through to the grid below, clear or not. The reader's eye tracks
+    // rectilinear paths and bundles parallel runs, and a field of mixed
+    // angles reads as string.
+    if (!ports) {
+      // Centre to centre there is nothing to slide, so the tolerance is only
+      // read: a few px of slope on a bound arrow between components the
+      // ranking (D74) all but aligned reads straight, and it usually aligns
+      // them exactly anyway.
+      if (Math.abs(lineB[1] - lineA[1]) <= AXIS_SNAP || Math.abs(lineB[0] - lineA[0]) <= AXIS_SNAP) return null;
+    } else {
+      const snapped = snapToAxis(from, to, ports, clearance);
+      // The snap moves each end by up to the tolerance, so the line is asked
+      // again about what it passes and which way it leaves: D72 outranks the
+      // square, and a squared line that grazes something is not one.
+      if (snapped && clear(snapped.start.at, snapped.end.at) && outward(snapped.start.at, snapped.end.at)) {
+        ports.start = snapped.start;
+        ports.end = snapped.end;
+        return null;
+      }
+    }
+  }
 
   const blocks = near.map((o) => pad(o, clearance));
   const fromPad = pad(from, clearance);
@@ -487,8 +592,9 @@ export function routeCost(points: readonly Point[], bendCost = BEND_COST): numbe
 
 /**
  * The pair of sides an edge should leave and enter through (D78), or null
- * when the straight line between the centres is clear and D75's facing
- * sides stand. Every pair of sides is routed once, from the middle of each,
+ * when the straight line between the centres is clear *and* square within
+ * the snap (D98), where D75's facing sides stand and the line is drawn from
+ * them. Every pair of sides is routed once, from the middle of each,
  * and the cheapest whole drawn line wins — length plus what its turns cost.
  * A back edge along a row therefore leaves over or under the row and comes
  * back along one channel, rather than out of the side that faces its target
@@ -566,16 +672,26 @@ export function chooseSidesWithLine(
   const near = obstaclesNear(from, to, obstacles).filter((o) => o !== from && o !== to);
   const a = centre(from);
   const b = centre(to);
-  if (!near.some((o) => segmentThroughBox(a, b, o, 4))) return null;
+  // D78 left the facing sides alone whenever the line was clear; D98 leaves
+  // them alone only when that line is square within the snap, because an
+  // oblique pair is routed now — and sides chosen for a line that will not be
+  // drawn are the wrong sides for the line that will.
+  const square = Math.abs(b[1] - a[1]) <= AXIS_SNAP || Math.abs(b[0] - a[0]) <= AXIS_SNAP;
+  if (square && !near.some((o) => segmentThroughBox(a, b, o, 4))) return null;
   const facing: SidePair = { start: sideTowards(from, b), end: sideTowards(to, a) };
   // Sixteen probes at most, over the obstacle list the caller already has.
   let best: { pair: SidePair; cost: number; rank: number; line: Point[] } | null = null;
+  // The straight line the grid could not better: kept aside, and taken only
+  // when no pair routes at all (D98).
+  let last: { pair: SidePair; line: Point[] } | null = null;
   for (const start of SIDE_ORDER) {
     for (const end of SIDE_ORDER) {
       const ports: PortEnds = {
         start: portAt(from, from.shape, start, middleOf(from, start), clearance),
         end: portAt(to, to.shape, end, middleOf(to, end), clearance),
       };
+      // The probe carries its ports back snapped when it kept a square line
+      // (D98), so the line costed below is the line that would be drawn.
       const found = routeEdge(from, to, near, clearance, ports, { leaveBySide: true });
       // A route the router had to take from a side's middle instead is not
       // this pair's route, and says nothing about what this pair costs.
@@ -585,6 +701,13 @@ export function chooseSidesWithLine(
       // length, worst to read, and the first thing to cross a fan.
       if (!found && !(start === facing.start && end === facing.end)) continue;
       const line: Point[] = found ? [ports.start.at, ...found, ports.end.at] : [ports.start.at, ports.end.at];
+      // A line the router kept but did not square is the last resort — the
+      // grid had no path — and a diagonal that cannot route must not be
+      // priced against routes that exist: by length alone it wins every time.
+      if (!found && !aligned(line[0], line[1])) {
+        last = { pair: { start, end }, line };
+        continue;
+      }
       // Cheapest whole line — turns priced by BEND_COST, crossings of lines
       // already chosen by CROSS_COST — then the facing sides and a fixed
       // side order so two runs give one picture (I3).
@@ -594,7 +717,7 @@ export function chooseSidesWithLine(
       if (!best || cost < best.cost - TIGHT || (cost < best.cost + TIGHT && rank < best.rank)) best = { pair: { start, end }, cost, rank, line };
     }
   }
-  return best ? { pair: best.pair, line: best.line } : null;
+  return best ? { pair: best.pair, line: best.line } : last;
 }
 
 /** How far off a straight line a point must sit to count as a turn, in scene units. */

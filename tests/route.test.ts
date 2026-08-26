@@ -1,9 +1,11 @@
 /**
- * Edges that flow (D75) and read as one stroke (D78): ports spread along a
- * side, sides chosen by route cost when the straight line is blocked, jogs
- * and hairpins simplified away, routed segments nudged off the lines they
- * would share, and every turn drawn as an arc Docent puts down itself —
- * over D72's guarantee that an edge never cuts through a component.
+ * Edges that flow (D75), read as one stroke (D78), and are axis-aligned or
+ * turn (D98): ports spread along a side, sides chosen by route cost whenever
+ * the straight line is not one Docent would draw, near-axis lines snapped
+ * true by their ports and oblique ones routed, jogs and hairpins simplified
+ * away, routed segments nudged off the lines they would share, and every
+ * turn drawn as an arc Docent puts down itself — over D72's guarantee that
+ * an edge never cuts through a component.
  */
 import { describe, expect, it } from "vitest";
 import { buildSceneGraph } from "../src/scene/graph";
@@ -11,6 +13,7 @@ import { snapshotFromRawElements } from "../src/adapter/snapshot";
 import { absolutePoints, segmentsCrossProperly,
   arcCorners,
   assignPorts,
+  AXIS_SNAP,
   bindingFocus,
   chooseSides,
   CORNER_RADIUS,
@@ -31,6 +34,22 @@ import { absolutePoints, segmentsCrossProperly,
 import { idSource, lint, plan, simulate } from "../src/authoring/ops";
 
 const box = (id: string, x: number, y: number, width = 200, height = 200, shape = "rectangle") => ({ id, x, y, width, height, shape });
+
+/**
+ * Whether a drawn line is orthogonal (D98): every leg of it runs along an
+ * axis, but for the short chords the arc at a corner leaves behind — no
+ * chord of an arc of the corner radius is longer than the radius, so a leg
+ * that is neither square nor short is a diagonal somebody drew.
+ */
+const orthogonal = (pts: readonly Point[]) =>
+  pts.slice(0, -1).every((p, i) => {
+    const q = pts[i + 1];
+    return (
+      Math.abs(p[0] - q[0]) < 1e-6 ||
+      Math.abs(p[1] - q[1]) < 1e-6 ||
+      Math.hypot(q[0] - p[0], q[1] - p[1]) <= CORNER_RADIUS
+    );
+  });
 
 describe("ports spread along a side (D75)", () => {
   // Three sources to the left of one target, so all three arrive on its left.
@@ -315,8 +334,117 @@ describe("the router starts and ends at the ports it is given (D75)", () => {
 
   it("still keeps a clear straight line, and D72's four side-middle ports without ports", () => {
     const ports = assignPorts([{ id: "e", from: "from", to: "to" }], nodes).get("e")!;
+    // The two ends are level, so the clear line is square and stands (D98).
     expect(routeEdge(from, to, [{ x: 300, y: 400, width: 160, height: 80 }], ROUTE_PAD, ports)).toBeNull();
     expect(routeEdge(from, to, [between])).not.toBeNull();
+  });
+});
+
+describe("an edge is axis-aligned or it turns (D98)", () => {
+  const portsFor = (from: ReturnType<typeof box>, to: ReturnType<typeof box>) =>
+    assignPorts([{ id: "e", from: from.id, to: to.id }], new Map([from, to].map((b) => [b.id, b]))).get("e")!;
+  /** Whether every leg of a drawn line runs along one axis. */
+  const squareAll = (line: readonly Point[]) =>
+    line.slice(0, -1).every((p, i) => Math.abs(p[0] - line[i + 1][0]) < 1e-6 || Math.abs(p[1] - line[i + 1][1]) < 1e-6);
+  const from = box("from", 0, 0, 160, 80);
+
+  it("routes an oblique pair with nothing in its way, every segment square", () => {
+    const to = box("to", 600, 300, 160, 80);
+    const ports = portsFor(from, to);
+    const via = routeEdge(from, to, [], ROUTE_PAD, ports);
+    // Nothing is in the way and the line is clear — and it turns all the same.
+    expect(via).not.toBeNull();
+    const line: Point[] = [ports.start.at, ...via!, ports.end.at];
+    expect(squareAll(line)).toBe(true);
+    // At least one corner: two ends and a turn between them.
+    expect(routeCorners(line).length).toBeGreaterThanOrEqual(3);
+    // Nothing was snapped — the ports are where D75 spread them.
+    expect(ports.start.at).toEqual([160, 40]);
+    expect(ports.end.at).toEqual([600, 340]);
+    // Centre to centre, where there is no port to slide, it turns too.
+    const bare = routeEdge(from, to, [])!;
+    expect(bare).not.toBeNull();
+    expect(squareAll([[80, 40], ...bare, [680, 340]])).toBe(true);
+  });
+
+  it("snaps a near-axis pair exactly true, by its ports, and keeps the straight line", () => {
+    const to = box("to", 600, 3, 160, 80);
+    const ports = portsFor(from, to);
+    // Three px of slope between the ports before the router sees them.
+    expect([ports.start.at, ports.end.at]).toEqual([[160, 40], [600, 43]]);
+    expect(routeEdge(from, to, [], ROUTE_PAD, ports)).toBeNull();
+    // Both ends gave half, and the drawn line is exactly horizontal.
+    expect(ports.end.at[1] - ports.start.at[1]).toBe(0);
+    expect(ports.start.at).toEqual([160, 41.5]);
+    expect(ports.end.at).toEqual([600, 41.5]);
+    // Each port still on its own side, inside the spread D75 gives it, with
+    // its routing point carried along.
+    expect([ports.start.side, ports.end.side]).toEqual(["right", "left"]);
+    expect(ports.start.outside).toEqual([160 + ROUTE_PAD, 41.5]);
+    expect(ports.end.outside).toEqual([600 - ROUTE_PAD, 41.5]);
+    for (const port of [ports.start, ports.end]) {
+      expect(Math.abs(port.at[1] - 41.5)).toBeLessThanOrEqual((PORT_SPAN * 80) / 2);
+    }
+    // The same holds down the other axis, where the ports slide along a top
+    // and a bottom instead.
+    const below = box("below", 3, 400, 160, 80);
+    const down = portsFor(from, below);
+    expect([down.start.side, down.end.side]).toEqual(["bottom", "top"]);
+    expect(routeEdge(from, below, [], ROUTE_PAD, down)).toBeNull();
+    expect(down.end.at[0] - down.start.at[0]).toBe(0);
+    expect(down.start.at).toEqual([81.5, 80]);
+  });
+
+  it("routes a pair past the tolerance rather than magnet it into line", () => {
+    // Fifteen px of slope: past the snap, and well under a corner — the
+    // tolerance is a snap, not a magnet.
+    const to = box("to", 600, 15, 160, 80);
+    const ports = portsFor(from, to);
+    const via = routeEdge(from, to, [], ROUTE_PAD, ports);
+    expect(via).not.toBeNull();
+    expect(ports.start.at).toEqual([160, 40]);
+    expect(ports.end.at).toEqual([600, 55]);
+    const line: Point[] = [ports.start.at, ...via!, ports.end.at];
+    expect(squareAll(line)).toBe(true);
+    expect(routeCorners(line).length).toBeGreaterThanOrEqual(3);
+    // Either side of the tolerance itself: at it the line is snapped, one px
+    // past it the edge turns.
+    const at = box("at", 600, AXIS_SNAP, 160, 80);
+    const atPorts = portsFor(from, at);
+    expect(routeEdge(from, at, [], ROUTE_PAD, atPorts)).toBeNull();
+    expect(atPorts.end.at[1] - atPorts.start.at[1]).toBe(0);
+    const past = box("past", 600, AXIS_SNAP + 1, 160, 80);
+    expect(routeEdge(from, past, [], ROUTE_PAD, portsFor(from, past))).not.toBeNull();
+  });
+
+  it("keeps the last-resort straight when the grid has no path", () => {
+    const boxed = box("boxed", 400, 300, 100, 100);
+    const small = box("small", 0, 0, 100, 100);
+    // A component so wide that nothing gets round it: no grid line is open,
+    // and a diagonal that cannot route beats no edge at all.
+    const swallow = { x: -400, y: -400, width: 1600, height: 1600 };
+    const ports = portsFor(small, boxed);
+    const line: Point[] = [ports.start.at, ports.end.at];
+    // Oblique and blocked, so a null here can only be the last resort.
+    expect(Math.abs(line[1][0] - line[0][0])).toBeGreaterThan(AXIS_SNAP);
+    expect(Math.abs(line[1][1] - line[0][1])).toBeGreaterThan(AXIS_SNAP);
+    expect(polylineThroughBox(line, swallow)).toBe(true);
+    expect(routeEdge(small, boxed, [swallow], ROUTE_PAD, ports)).toBeNull();
+    // And the ports it was given come back untouched: nothing was snapped.
+    expect([ports.start.at, ports.end.at]).toEqual([[100, 50], [400, 350]]);
+  });
+
+  it("costs an oblique clear pair as the route it will be, not as a free line", () => {
+    const to = box("to", 600, 300, 160, 80);
+    // D78 read a clear line as the end of it and left the facing sides
+    // alone; the line is clear here, and no longer straight, so the sides
+    // are costed like any route — and out of the right into the top is one
+    // turn where the facing pair would have taken two.
+    expect(sideTowards(to, [80, 40])).toBe("left");
+    expect(chooseSides(from, to, [])).toEqual({ start: "right", end: "top" });
+    // A clear line that is square is still drawn: the facing sides stand.
+    expect(chooseSides(from, box("level", 600, 0, 160, 80), [])).toBeNull();
+    expect(chooseSides(from, box("nearly", 600, 3, 160, 80), [])).toBeNull();
   });
 });
 
@@ -349,17 +477,31 @@ describe("a planned batch draws flowing edges (D75)", () => {
     expect(ends.every(Boolean)).toBe(true);
     const arriving = ends.map((e) => `${e.end[0]},${e.end[1]}`);
     expect(new Set(arriving).size).toBe(3);
-    // All three arrive on the hub's left side, inside its middle 70%.
-    for (const e of ends) {
-      expect(e.end[0]).toBe(600);
-      expect(e.end[1]).toBeGreaterThanOrEqual(200 - (PORT_SPAN * 80) / 2);
-      expect(e.end[1]).toBeLessThanOrEqual(200 + (PORT_SPAN * 80) / 2);
+    // Every leg arrives on the hub's own outline, inside the middle 70% of
+    // the side it uses. Until D98 all three came in on the left, the side
+    // that faces them, because all three were drawn as straight diagonals;
+    // now each turns, and the sides are the pair its route costs least from
+    // — the two above and below the hub come in over its top and under its
+    // bottom, which is one turn where the left side would have been two.
+    const hub = { x: 600, y: 160, width: 160, height: 80 };
+    for (const [x, y] of ends.map((e) => e.end)) {
+      const upright = x === hub.x || x === hub.x + hub.width;
+      expect(upright || y === hub.y || y === hub.y + hub.height).toBe(true);
+      const along = upright ? y : x;
+      const middle = upright ? hub.y + hub.height / 2 : hub.x + hub.width / 2;
+      const span = upright ? hub.height : hub.width;
+      expect(Math.abs(along - middle)).toBeLessThanOrEqual((PORT_SPAN * span) / 2);
     }
+    expect(arriving.sort()).toEqual(["600,200", "680,160", "680,240"]);
     // And the simulated scene draws from those ports.
     const after = simulate(snapshot, result.write);
     for (const arrow of result.write.arrows!) {
       const el = after.elements.find((el) => el.id === arrow.id)!;
       expect([el.x, el.y]).toEqual(arrow.ends!.start);
+    }
+    // Every leg is square: no diagonal survives (D98).
+    for (const arrow of result.write.arrows!) {
+      expect(orthogonal([arrow.ends!.start, ...(arrow.via ?? []), arrow.ends!.end])).toBe(true);
     }
   });
 
@@ -583,5 +725,9 @@ it("a hub's fan never crosses itself (D75)", () => {
       if (segmentsCrossProperly(lines[i].pts[s], lines[i].pts[s+1], lines[j].pts[t], lines[j].pts[t+1])) total++;
   }
   expect(total).toBe(0);
+  // And every leg of every one of them runs along an axis (D98): the fan is
+  // orthogonal and untangled at once, which is the whole of the claim.
+  expect(lines).toHaveLength(9);
+  for (const line of lines) expect(orthogonal(line.pts)).toBe(true);
 });
 });
