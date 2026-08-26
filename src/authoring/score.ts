@@ -89,13 +89,13 @@ const TURN_EPSILON = 0.5;
 const AXIS_DEGREES = 12;
 /**
  * The deviation from an axis a DRAWN segment may keep and still read as
- * square (D98, D99). Its partner is route.ts's `AXIS_SNAP` — what the
+ * square (D98, D99). Its partner is route.ts's `AXIS_DEGREES` — what the
  * router itself flattens onto the axis; what the router would snap, the
  * score must not charge for. Mirrored here rather than imported, since
  * route.ts exports no such constant yet; the two are to be reconciled to
  * one when it does.
  */
-const AXIS_SNAP = AXIS_DEGREES;
+
 /** Centres this close on the cross axis read as lined up. */
 const ALIGN_PX = 2;
 /**
@@ -482,7 +482,7 @@ function squarenessPart(nodes: readonly GraphNode[], edges: readonly EdgeGeom[])
       if (Math.hypot(dx, dy) <= SHORT_SEGMENT) continue;
       segments += 1;
       const angle = (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180) / Math.PI;
-      if (Math.min(angle, 90 - angle) > AXIS_SNAP) oblique += 1;
+      if (Math.min(angle, 90 - angle) > AXIS_DEGREES) oblique += 1;
     }
   }
   const onGrid = (value: number): boolean => value % GRID === 0;
