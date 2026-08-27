@@ -27,6 +27,8 @@ import type { SceneLink } from "../adapter/snapshot";
 import {
   createBranch as createPortfolioBranch,
   getBinding as getPortfolioBinding,
+  listProjects,
+  listScenes,
   loadScene as loadPortfolioScene,
   saveScene as savePortfolioScene,
 } from "../portfolio/client";
@@ -42,6 +44,8 @@ import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
+import { CommandPalette } from "./CommandPalette";
+import type { PaletteCommand, PaletteScene } from "./palette";
 
 const UNTITLED = "untitled.excalidraw";
 
@@ -66,9 +70,10 @@ const isDesktop = Boolean(
 const hasOverlayTitleBar = isDesktop && /Mac/.test(navigator.userAgent);
 
 /**
- * Actions the native menu bar can invoke, in menu-bar order. The ids are the
- * contract with the Rust menu (src-tauri/src/lib.rs) — change one side and the
- * other must follow.
+ * Actions the native menu bar can invoke, in menu-bar order — File, Diagram,
+ * Project (D109). The ids are the contract with the Rust menu
+ * (src-tauri/src/lib.rs), matched literally by the test at the foot of that
+ * file: change one side and the other must follow.
  */
 type DocentMenuId =
   | "new"
@@ -77,18 +82,121 @@ type DocentMenuId =
   | "save"
   | "save-as"
   | "export-file"
+  | "export-mermaid"
+  | "export-sidecar"
   | "present"
   | "library"
   | "legend"
   | "arrange"
   | "tidy"
   | "detail-markers"
+  | "portfolio"
+  | "connect-agent"
   | "plugins"
-  | "agent-edit"
-  | "export-mermaid"
-  | "export-sidecar";
+  | "agent-edit";
 
 type DocentMenuWindow = Window & { __docentMenu?: (id: DocentMenuId) => void };
+
+/**
+ * Everything the command table holds: the menu bar's ids plus the actions no
+ * menu carries — the exports the desktop shell has no file channel for, the
+ * portfolio's sync verbs, and the tools' own collapse (D110).
+ */
+type DocentActionId =
+  | DocentMenuId
+  | "export-pdf"
+  | "branch"
+  | "pull"
+  | "push"
+  | "tools";
+
+/** One command, in the one place it is implemented (B4). */
+interface DocentAction {
+  /** What every door calls it — menu item, palette row, hamburger entry. */
+  title: string;
+  /** The chord the menu bar gives it, as this platform writes it. */
+  shortcut?: string;
+  /** A word of context for the palette's row; the menus have none. */
+  hint?: string;
+  /** False where this platform cannot do it, and the palette drops the row. */
+  available?: boolean;
+  run: () => void;
+}
+
+const isMac = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
+
+/** The chords, spelled the way each platform spells them. */
+const KEY = isMac
+  ? {
+      newScene: "⌘N",
+      open: "⌘O",
+      import: "⇧⌘O",
+      save: "⌘S",
+      saveAs: "⇧⌘S",
+      present: "⌘P",
+      library: "⌘L",
+      tidy: "⌥⇧F",
+    }
+  : {
+      newScene: "Ctrl+N",
+      open: "Ctrl+O",
+      import: "Ctrl+Shift+O",
+      save: "Ctrl+S",
+      saveAs: "Ctrl+Shift+S",
+      present: "Ctrl+P",
+      library: "Ctrl+L",
+      tidy: "Alt+Shift+F",
+    };
+
+/** The palette's own order — the menu bar's, read top to bottom (D111). */
+const PALETTE_ORDER: readonly DocentActionId[] = [
+  "new",
+  "open",
+  "import",
+  "save",
+  "save-as",
+  "export-file",
+  "export-mermaid",
+  "export-sidecar",
+  "export-pdf",
+  "present",
+  "library",
+  "tools",
+  "legend",
+  "arrange",
+  "tidy",
+  "detail-markers",
+  "portfolio",
+  "branch",
+  "pull",
+  "push",
+  "connect-agent",
+  "plugins",
+  "agent-edit",
+];
+
+/**
+ * Whether the tools are away (D110). Remembered per machine, and read inside a
+ * try/catch: a browser with storage denied is a browser with the tools showing,
+ * never one that fails to come up.
+ */
+const TOOLS_COLLAPSED = "docent.toolsCollapsed";
+
+function readToolsCollapsed(): boolean {
+  try {
+    return localStorage.getItem(TOOLS_COLLAPSED) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function rememberToolsCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(TOOLS_COLLAPSED, collapsed ? "1" : "0");
+  } catch {
+    // Remembered where it can be; the session still collapses either way.
+  }
+}
 
 export function App() {
   const canvasRef = useRef<DocentCanvasHandle | null>(null);
@@ -100,6 +208,16 @@ export function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  // The palette (D111) and the tools' collapse (D110) — both Docent's own
+  // chrome, both keyed off the app root and nothing else.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [toolsCollapsed, setToolsCollapsed] = useState(readToolsCollapsed);
+  const toggleTools = useCallback(() => {
+    setToolsCollapsed((collapsed) => {
+      rememberToolsCollapsed(!collapsed);
+      return !collapsed;
+    });
+  }, []);
   // Agent authoring (S19, D61): the person's switch, the orange frame, and
   // the last edit's line with its Undo.
   const [agentCanEdit, setAgentCanEdit] = useState(true);
@@ -116,6 +234,10 @@ export function App() {
   } | null>(null);
   const trunkLockRef = useRef(trunkLock);
   trunkLockRef.current = trunkLock;
+  // Whether the open scene's project is bound to a repository (S14). Learned
+  // from the same probe the lock is, and read by the palette: the sync verbs
+  // are commands only where there is something to sync with.
+  const [projectBound, setProjectBound] = useState(false);
   // Spoken narration (S18, D52): one controller, fed by the narration sink
   // and the presentation's waypoint. Only a shell with plugins can speak.
   const speech = useMemo(() => new SpeechController(new WebAudioSink()), []);
@@ -358,10 +480,12 @@ export function App() {
     async (source: { project: string; scene: string } | null) => {
       if (!source) {
         setTrunkLock(null);
+        setProjectBound(false);
         return;
       }
       try {
         const binding = await getPortfolioBinding(source.project);
+        setProjectBound(binding !== null);
         setTrunkLock(
           binding && binding.protected && binding.branch === binding.baseBranch
             ? { project: source.project, branch: binding.branch }
@@ -369,6 +493,7 @@ export function App() {
         );
       } catch {
         setTrunkLock(null);
+        setProjectBound(false);
       }
     },
     [],
@@ -699,6 +824,17 @@ export function App() {
   }, [cutting, flashNote, refreshTrunkLock]);
 
   /**
+   * The guard `open_scene` keeps (D96), said once and shared: nothing opens
+   * over unsaved changes, whether the way in is a link, the way back, or a
+   * row in the palette (D111). True means the caller must stop.
+   */
+  const blockedByUnsaved = useCallback(async () => {
+    if (!dirty) return false;
+    await alertDialog(UNSAVED_CHANGES);
+    return true;
+  }, [dirty]);
+
+  /**
    * Follow a scene link (D96): the jump, under the guard `open_scene` keeps,
    * with the way back recorded before the target opens. `at` is where to
    * arrive when the target still holds it — gone or absent, the overview
@@ -707,10 +843,7 @@ export function App() {
   const followLink = useCallback(
     async (elementId: string, link: SceneLink) => {
       const from = portfolioSourceRef.current;
-      if (dirty) {
-        await alertDialog(UNSAVED_CHANGES);
-        return;
-      }
+      if (await blockedByUnsaved()) return;
       const project = link.project ?? from?.project ?? null;
       if (!project) {
         await alertDialog(
@@ -737,17 +870,14 @@ export function App() {
         flashNote(`${project} / ${link.scene} no longer holds “${link.at}” — here is the whole diagram`);
       }
     },
-    [dirty, openPortfolioScene, drill.pushJump, flashNote],
+    [blockedByUnsaved, openPortfolioScene, drill.pushJump, flashNote],
   );
 
   /** The way back (D96): reopen where the last jump left, on what jumped. */
   const followBack = useCallback(async () => {
     const back = drill.jumps[drill.jumps.length - 1];
     if (!back) return;
-    if (dirty) {
-      await alertDialog(UNSAVED_CHANGES);
-      return;
-    }
+    if (await blockedByUnsaved()) return;
     try {
       await openPortfolioScene(back.project, back.scene, { keepTrail: true });
     } catch (err) {
@@ -763,7 +893,49 @@ export function App() {
     } catch {
       // The element that jumped is gone; the scene is still the way back.
     }
-  }, [dirty, openPortfolioScene, drill.jumps, drill.popJump]);
+  }, [blockedByUnsaved, openPortfolioScene, drill.jumps, drill.popJump]);
+
+  /**
+   * Every scene the portfolio holds, as the addresses the palette matches on
+   * (D92, D111). Asked when the palette OPENS and never on boot — the canvas
+   * comes up without waiting on a store — and one project the store will not
+   * list is not the others' problem. No store at all throws, and the palette
+   * is commands only, silently: a file-only session is a session, not a fault.
+   */
+  const loadPaletteScenes = useCallback(async (): Promise<PaletteScene[]> => {
+    const projects = await listProjects();
+    const found: PaletteScene[] = [];
+    // Serially: the desktop store answers one request at a time (D34), so a
+    // fan-out would only queue itself.
+    for (const project of projects) {
+      try {
+        for (const scene of await listScenes(project.id)) {
+          found.push({ project: project.id, path: scene.name });
+        }
+      } catch {
+        // Skipped, not surfaced.
+      }
+    }
+    return found;
+  }, []);
+
+  /** A palette row's scene, opened through the one loader under D96's guard. */
+  const openPaletteScene = useCallback(
+    (scene: PaletteScene) => {
+      void (async () => {
+        if (await blockedByUnsaved()) return;
+        try {
+          await openPortfolioScene(scene.project, scene.path);
+        } catch (err) {
+          console.error(err);
+          await alertDialog(
+            `Could not open ${scene.project}/${scene.path}: ${err instanceof Error ? err.message : err}`,
+          );
+        }
+      })();
+    },
+    [blockedByUnsaved, openPortfolioScene],
+  );
 
   /**
    * Show a review change in place (D48): the scene comes up if it is not the
@@ -1081,67 +1253,204 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [tidyDiagram]);
 
-  // Native menu bar bridge (S13). The Rust handlers reach the page by
-  // evaluating `window.__docentMenu(id)`, which keeps the desktop shell free
-  // of any JS SDK (I7) — the same reasoning as the injected store base URL.
-  // Held in a ref so the registration survives re-renders: the handlers are
-  // rebuilt every render, the global is installed once.
-  const menuHandlersRef = useRef<Record<DocentMenuId, () => void>>(
-    {} as Record<DocentMenuId, () => void>,
-  );
-  // Desktop semantics throughout: the portfolio is this app's file system, so
-  // New, Open and Save address it, and only Import/Export cross to a loose
-  // file. The web app never reaches this map — it keeps the in-canvas menu and
-  // the browser file paths, both untouched.
-  menuHandlersRef.current = {
-    new: () => openPortfolio("save"),
-    open: () => openPortfolio("browse"),
-    import: () => void importSceneIntoCanvas(),
-    save: () => {
-      // Nowhere to save to yet: the modal stands in for the save dialog,
-      // opened on its name field.
-      if (!portfolioSourceRef.current) openPortfolio("save");
-      else void saveScene();
+  /**
+   * ── One command, one implementation (B4, D109) ──────────────────────────
+   *
+   * The in-canvas hamburger, the native menu bar and the palette are three
+   * doors onto this table and never onto each other's copies. Where a
+   * platform differs the difference lives inside one `run`: the desktop's
+   * File verbs address the portfolio — which is that app's file system — and
+   * cross to a loose file only through the shell's native dialogs, while the
+   * web's address the browser's own pickers and downloads.
+   *
+   * Rebuilt every render, because every handler closes over state; the ref
+   * below is what the shell's `__docentMenu` reads, so the global is
+   * installed once and never holds a stale closure.
+   */
+  const actions: Record<DocentActionId, DocentAction> = {
+    new: {
+      title: "New scene…",
+      shortcut: KEY.newScene,
+      available: isDesktop,
+      run: () => openPortfolio("save"),
     },
-    "save-as": () => {
-      // A copy under a new name — detach first, so a cancelled Save As cannot
-      // silently overwrite the scene it started from.
-      portfolioSourceRef.current = null;
-      syncSceneUrl(null);
-      openPortfolio("save");
+    open: {
+      title: "Open…",
+      shortcut: KEY.open,
+      run: () => {
+        if (isDesktop) openPortfolio("browse");
+        else void openScene();
+      },
     },
-    "export-file": () => {
-      if (!canvasRef.current) return;
-      void exportToFile(ensureExtension(exportLeafName), prepareSceneForSave());
+    import: {
+      title: "Import scene file…",
+      shortcut: KEY.import,
+      available: isDesktop,
+      run: () => void importSceneIntoCanvas(),
     },
-    present: () => presentation.enter(),
-    library: () => canvasRef.current?.toggleLibrarySidebar(),
-    legend: () => setLegendOpen(true),
-    plugins: () => setPluginsOpen(true),
-    "agent-edit": () => setAgentCanEdit((v) => !v),
-    arrange: arrangeTiers,
-    tidy: tidyDiagram,
-    "detail-markers": () => setDetailMarkers((v) => !v),
-    "export-mermaid": () => {
-      const handle = canvasRef.current;
-      if (!handle) return;
-      const { mermaid } = exportScene(handle.getSceneSnapshot(), exportContext());
-      void exportToFile(`${exportLeafName}.mmd`, mermaid);
+    save: {
+      title: "Save",
+      shortcut: KEY.save,
+      run: () => {
+        // Nowhere to save to yet, on the desktop: the modal stands in for the
+        // save dialog, opened on its name field.
+        if (isDesktop && !portfolioSourceRef.current) openPortfolio("save");
+        else void saveScene();
+      },
     },
-    "export-sidecar": () => {
-      const handle = canvasRef.current;
-      if (!handle) return;
-      const { sidecar } = exportScene(handle.getSceneSnapshot(), exportContext());
-      void exportToFile(`${exportLeafName}.docent.json`, sidecar);
+    "save-as": {
+      title: "Save as…",
+      shortcut: KEY.saveAs,
+      run: () => {
+        if (!isDesktop) {
+          void saveSceneAs();
+          return;
+        }
+        // A copy under a new name — detach first, so a cancelled Save As
+        // cannot silently overwrite the scene it started from.
+        portfolioSourceRef.current = null;
+        syncSceneUrl(null);
+        openPortfolio("save");
+      },
+    },
+    "export-file": {
+      title: "Export scene file…",
+      available: isDesktop,
+      run: () => {
+        if (!canvasRef.current) return;
+        void exportToFile(ensureExtension(exportLeafName), prepareSceneForSave());
+      },
+    },
+    "export-mermaid": {
+      title: "Export Mermaid…",
+      run: () => {
+        if (!isDesktop) {
+          exportMermaidFile();
+          return;
+        }
+        const handle = canvasRef.current;
+        if (!handle) return;
+        const { mermaid } = exportScene(handle.getSceneSnapshot(), exportContext());
+        void exportToFile(`${exportLeafName}.mmd`, mermaid);
+      },
+    },
+    "export-sidecar": {
+      title: "Export semantic JSON…",
+      run: () => {
+        if (!isDesktop) {
+          exportSidecarFile();
+          return;
+        }
+        const handle = canvasRef.current;
+        if (!handle) return;
+        const { sidecar } = exportScene(handle.getSceneSnapshot(), exportContext());
+        void exportToFile(`${exportLeafName}.docent.json`, sidecar);
+      },
+    },
+    // The PDF is bytes (D105), and the shell's file channel writes text —
+    // so this one stays a browser download and is not offered on the desktop
+    // rather than being offered and failing.
+    "export-pdf": {
+      title: "Export PDF…",
+      available: !isDesktop,
+      run: exportPdfFile,
+    },
+    present: { title: "Present", shortcut: KEY.present, run: () => presentation.enter() },
+    library: {
+      title: "Shape library",
+      shortcut: KEY.library,
+      run: () => canvasRef.current?.toggleLibrarySidebar(),
+    },
+    tools: {
+      title: toolsCollapsed ? "Show the tools" : "Hide the tools",
+      hint: "the left rail",
+      run: toggleTools,
+    },
+    legend: { title: "Legend…", run: () => setLegendOpen(true) },
+    arrange: { title: "Arrange detail tiers", run: arrangeTiers },
+    tidy: { title: "Tidy diagram", shortcut: KEY.tidy, run: tidyDiagram },
+    "detail-markers": {
+      title: detailMarkers ? "Hide detail markers" : "Show detail markers",
+      run: () => setDetailMarkers((v) => !v),
+    },
+    portfolio: { title: "Portfolio…", run: () => openPortfolio("browse") },
+    // The sync verbs live in the portfolio's own strip, where the branch list,
+    // the conflict resolution and the review all are — so these open it
+    // rather than growing a second, thinner copy of them here.
+    branch: {
+      title: "Create a branch…",
+      hint: "in the portfolio",
+      available: projectBound,
+      // On a locked trunk there is already a one-click way out (D104); take it.
+      run: () => (trunkLockRef.current ? cutDraftBranch() : openPortfolio("browse")),
+    },
+    pull: {
+      title: "Pull from GitHub",
+      hint: "in the portfolio",
+      available: projectBound,
+      run: () => openPortfolio("browse"),
+    },
+    push: {
+      title: "Push to GitHub",
+      hint: "in the portfolio",
+      available: projectBound,
+      run: () => openPortfolio("browse"),
+    },
+    "connect-agent": { title: "Connect agent bridge", run: connectAgent },
+    plugins: {
+      title: "Plugins…",
+      available: hasPlugins(),
+      run: () => setPluginsOpen(true),
+    },
+    "agent-edit": {
+      title: agentCanEdit ? "Agent can edit ✓" : "Agent can edit",
+      run: () => setAgentCanEdit((v) => !v),
     },
   };
+
+  // Native menu bar bridge (S13, D109). The Rust handlers reach the page by
+  // evaluating `window.__docentMenu(id)`, which keeps the desktop shell free
+  // of any JS SDK (I7) — the same reasoning as the injected store base URL.
+  const menuHandlersRef = useRef(actions);
+  menuHandlersRef.current = actions;
   useEffect(() => {
     if (!isDesktop) return;
     const target = window as DocentMenuWindow;
-    target.__docentMenu = (id) => menuHandlersRef.current[id]?.();
+    target.__docentMenu = (id) => menuHandlersRef.current[id]?.run();
     return () => {
       delete target.__docentMenu;
     };
+  }, []);
+
+  /** The same table, as palette rows (D111) — menu order, minus what this
+      platform cannot do. */
+  const paletteCommands: PaletteCommand[] = PALETTE_ORDER.filter(
+    (id) => actions[id].available !== false,
+  ).map((id) => ({
+    id,
+    title: actions[id].title,
+    ...(actions[id].hint ? { hint: actions[id].hint } : {}),
+    ...(actions[id].shortcut ? { shortcut: actions[id].shortcut } : {}),
+    run: actions[id].run,
+  }));
+
+  // The palette's chord (D111): Cmd+K, Ctrl+K elsewhere. It takes that one
+  // combination and nothing else — a key it does not own is never
+  // preventDefaulted — and it keeps out of text: a field being typed in owns
+  // its own keyboard, Excalidraw's editors included.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== "k") return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, []);
 
   // Presentation keyboard controls (S2) + drill back (S11).
@@ -1395,6 +1704,8 @@ export function App() {
         "docent-app",
         isDesktop ? "docent-desktop" : "",
         hasOverlayTitleBar ? "docent-overlay-titlebar" : "",
+        // The tools are away, and the paper is the whole window (D110).
+        toolsCollapsed ? "docent-tools-collapsed" : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1416,27 +1727,54 @@ export function App() {
           onSelectionChange={setSelectedIds}
           onThemeChange={setCanvasTheme}
           menuActions={{
-            onOpen: () => void openScene(),
-            onSave: () => void saveScene(),
-            onSaveAs: () => void saveSceneAs(),
-            onPresent: () => presentation.enter(),
-            onOpenLegend: () => setLegendOpen(true),
-            onOpenPortfolio: () => openPortfolio("browse"),
-            onExportMermaid: exportMermaidFile,
-            onExportSidecar: exportSidecarFile,
-            onExportPdf: exportPdfFile,
-            onArrangeTiers: arrangeTiers,
-            onTidy: tidyDiagram,
-            onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
-            onConnectAgent: connectAgent,
-            onOpenPlugins: hasPlugins() ? () => setPluginsOpen(true) : undefined,
-            onToggleAgentEdit: () => setAgentCanEdit((v) => !v),
+            onOpen: actions.open.run,
+            onSave: actions.save.run,
+            onSaveAs: actions["save-as"].run,
+            onPresent: actions.present.run,
+            onOpenLegend: actions.legend.run,
+            onOpenPortfolio: actions.portfolio.run,
+            onExportMermaid: actions["export-mermaid"].run,
+            onExportSidecar: actions["export-sidecar"].run,
+            onExportPdf: actions["export-pdf"].run,
+            onArrangeTiers: actions.arrange.run,
+            onTidy: actions.tidy.run,
+            onToggleDetailMarkers: actions["detail-markers"].run,
+            onConnectAgent: actions["connect-agent"].run,
+            onOpenPlugins: hasPlugins() ? actions.plugins.run : undefined,
+            onToggleAgentEdit: actions["agent-edit"].run,
             agentCanEdit,
           }}
           hideDocentMenuItems={isDesktop}
           detailMarkersVisible={detailMarkers}
           contextExport={{ resolveFrameAt, onCopy: copyFrameJson }}
         />
+        {/* The tools' collapse (D110): Docent's own chip at the foot of the
+            rail, and — collapsed — the whole of what is left over the paper.
+            Not during a presentation, which has no tools to speak of. */}
+        {!presentation.active && (
+          <button
+            type="button"
+            className="docent-tools-chip"
+            aria-pressed={toolsCollapsed}
+            title={toolsCollapsed ? "Show the tools" : "Hide the tools"}
+            aria-label={toolsCollapsed ? "Show the tools" : "Hide the tools"}
+            onClick={toggleTools}
+          >
+            <svg
+              viewBox="0 0 20 20"
+              aria-hidden="true"
+              focusable="false"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.25"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 16.2l.9-3.3L13.3 4.4a1.5 1.5 0 0 1 2.1 0l.2.2a1.5 1.5 0 0 1 0 2.1L7.2 15.3 4 16.2Z" />
+              <path d="M12.5 5.2l2.3 2.3" />
+            </svg>
+          </button>
+        )}
         {canvas && (
           <Breadcrumbs
             canvas={canvas}
@@ -1605,6 +1943,16 @@ export function App() {
           canvas={canvas}
           selection={singleSelected}
           onClose={() => setLegendOpen(false)}
+        />
+      )}
+      {/* The keyboard's way to everything (D111): the same table the menus
+          carry, and the portfolio's scenes by path. */}
+      {paletteOpen && (
+        <CommandPalette
+          commands={paletteCommands}
+          loadScenes={loadPaletteScenes}
+          onOpenScene={openPaletteScene}
+          onClose={() => setPaletteOpen(false)}
         />
       )}
     </div>
