@@ -3,64 +3,238 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="description" content="Docent — guided tours for your architecture diagrams. Tiered drill-down, longtake presentations, GitHub sync, and an MCP endpoint agents can drive. MIT, self-hosted or desktop.">
 <title>Docent — guided tours for your diagrams</title>
 <link rel="icon" href="icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Spline+Sans:wght@400;500;600&display=swap">
 <style>
-  :root { --bg:#1b1b1f; --panel:#232329; --fg:#e8e8ea; --muted:#a0a0aa; --accent:#ffb454; --violet:#7a63c4; }
+  /*
+   * The site wears the house (D107). Atelier only: a website may commit to one
+   * look, and Docent's is the dark one. Grounds, text, the single bronze accent,
+   * one hairline weight, one shadow, radii 3–6 — the same tokens the app ships.
+   */
+  :root {
+    /* Grounds. */
+    --bg:#1c1a18;
+    --raised:#26231f;
+    --well:#1c1a18;
+    --line-strong:#3a352e;
+
+    /* Text, three readable steps. Nothing a reader must read goes below these. */
+    --fg:#efeae2;
+    --body:#d6d0c6;
+    --muted:#9d968b;
+
+    /* Bronze — the one accent, spent on links, one call to action, and the
+       rule under a section head. */
+    --accent:#c08a3e;
+    --accent-deep:#a97428;
+    --accent-text:#d9a75c;
+    --accent-on:#1c1a18;
+    --accent-line:rgba(192,138,62,.45);
+    --accent-edge:rgba(192,138,62,.3);
+    --accent-wash:rgba(192,138,62,.16);
+
+    /* Clay — the colour that means take care. */
+    --clay-line:rgba(217,122,88,.45);
+
+    /* One border weight, two strengths. One shadow. */
+    --hairline:rgba(233,228,220,.09);
+    --hairline-strong:rgba(233,228,220,.16);
+    --shadow:0 12px 36px rgba(0,0,0,.45);
+
+    /* A picture of a drawing is a picture of paper. */
+    --paper:#f7f5f1;
+    --paper-band:#ece7dd;
+    --paper-edge:rgba(35,30,24,.16);
+    --ink:#3a352e;
+    --ink-edge:#57514a;
+    --ink-accent:#9a6b1f;
+    --ink-accent-deep:#845a14;
+
+    --radius-card:6px;
+    --radius-tile:4px;
+    --radius-control:3px;
+
+    --font-title:"Newsreader",Georgia,"Times New Roman",serif;
+    --font-body:"Spline Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+
+    --meta-size:11px;
+    --meta-tracking:.11em;
+  }
+
   * { box-sizing:border-box; }
-  body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--fg); line-height:1.55; }
-  main { max-width:880px; margin:0 auto; padding:48px 24px 80px; }
-  header { text-align:center; margin-bottom:32px; }
-  header img { width:96px; height:96px; border-radius:22px; }
-  h1 { font-size:2.4rem; margin:16px 0 6px; }
-  .tagline { color:var(--muted); font-size:1.15rem; margin:0; }
-  .credit { margin-top:14px; font-size:.95rem; color:var(--muted); }
-  .credit a { color:var(--accent); }
-  a { color:var(--violet); }
-  .ghlink { text-align:center; margin:14px 0 0; }
-  .ghlink a { color:var(--muted); font-size:.95rem; }
-  .switcher { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; margin:26px 0 14px; }
-  .switcher button { background:var(--panel); color:var(--muted); border:1px solid #3a3a42; border-radius:999px; padding:8px 18px; font-size:.95rem; cursor:pointer; }
-  .switcher button.active { background:var(--violet); border-color:var(--violet); color:#fff; }
-  .detected { text-align:center; color:var(--muted); font-size:.85rem; margin:0 0 18px; }
-  section { background:var(--panel); border:1px solid #33333b; border-radius:14px; padding:22px 26px; margin:18px 0; }
-  section.platform { display:none; }
+  html { scroll-behavior:smooth; }
+  body {
+    margin:0; background:var(--bg); color:var(--body);
+    font-family:var(--font-body); font-size:16.5px; line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  main { max-width:760px; margin:0 auto; padding:56px 24px 88px; }
+
+  h1, h2, h3 { font-family:var(--font-title); font-weight:500; color:var(--fg); }
+  h1 { font-size:clamp(2.3rem,7vw,3rem); line-height:1.1; letter-spacing:-.01em; margin:20px 0 10px; }
+  h2 { font-size:1.55rem; line-height:1.24; margin:0 0 18px; }
+  h2::after {
+    content:""; display:block; height:1px; margin-top:14px;
+    background:linear-gradient(90deg, rgba(192,138,62,0.5), transparent);
+  }
+  h3 { font-size:1.08rem; line-height:1.35; margin:26px 0 8px; }
+  p { margin:0 0 14px; }
+  strong { color:var(--fg); font-weight:600; }
+
+  a { color:var(--accent-text); text-decoration:none; border-bottom:1px solid var(--accent-edge); transition:color .15s, border-color .15s; }
+  a:hover { border-bottom-color:var(--accent); }
+
+  /* Metadata: small, letterspaced caps. */
+  .meta {
+    font-size:var(--meta-size); letter-spacing:var(--meta-tracking);
+    text-transform:uppercase; color:var(--muted);
+  }
+
+  header { text-align:center; }
+  header img { width:88px; height:88px; border-radius:20px; }
+  .tagline { color:var(--body); font-size:1.16rem; max-width:34em; margin:0 auto 18px; }
+  .credit { color:var(--muted); font-size:.9rem; max-width:38em; margin:20px auto 0; }
+  .credit a, .ghlink a, footer a { color:var(--muted); border-bottom-color:var(--hairline-strong); }
+  .credit a:hover, .ghlink a:hover, footer a:hover { color:var(--accent-text); border-bottom-color:var(--accent-line); }
+  header .meta { margin:0 0 4px; }
+  .actions { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin:26px 0 12px; }
+  .ghlink { margin:0; font-size:.9rem; }
+
+  /* The hero band: a strip of canvas paper with a drawing on it — two tiers,
+     the way Docent shows a diagram. Same stroke vocabulary as the genre cards. */
+  .heroart {
+    margin:34px 0 0; padding:14px 18px;
+    background:var(--paper); border-radius:var(--radius-card);
+    box-shadow:inset 0 0 0 1px var(--paper-edge), var(--shadow);
+  }
+  .heroart svg { display:block; width:100%; height:auto; }
+
+  /* Hand-drawn ink, shared by the hero band and the genre cards. */
+  :is(.heroart,.genre) svg path { fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+  :is(.heroart,.genre) svg .s { stroke:var(--ink); }
+  :is(.heroart,.genre) svg .v { stroke:var(--ink-edge); }
+  :is(.heroart,.genre) svg .a { stroke:var(--ink-accent); }
+  :is(.heroart,.genre) svg .g { stroke:var(--ink); opacity:.46; }
+  :is(.heroart,.genre) svg .d { stroke-dasharray:6 5; }
+  :is(.heroart,.genre) svg .faint { opacity:.5; }
+  :is(.heroart,.genre) svg .band { fill:var(--paper-band); stroke:var(--paper-edge); stroke-width:1.4; }
+  :is(.heroart,.genre) svg .bg { fill:var(--paper); }
+  :is(.heroart,.genre) svg .dot { fill:var(--ink); stroke:none; }
+  :is(.heroart,.genre) svg .a.dot { fill:var(--ink-accent); }
+  :is(.heroart,.genre) svg text {
+    fill:var(--ink-accent-deep); text-anchor:middle;
+    font:600 8.5px var(--font-body);
+  }
+  .heroart svg path { stroke-width:1.5; }
+
+  /* Install: the switcher and its panel. */
+  .install { margin:44px 0 0; scroll-margin-top:24px; }
+  .switcher { display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin:0 0 14px; }
+  .switcher button {
+    background:var(--raised); color:var(--muted);
+    border:1px solid var(--hairline-strong); border-radius:var(--radius-control);
+    padding:12px 18px; min-height:44px; cursor:pointer;
+    font-family:var(--font-body); font-size:12px; font-weight:500;
+    letter-spacing:.08em; text-transform:uppercase;
+    transition:color .15s, border-color .15s, background .15s;
+  }
+  .switcher button:hover { color:var(--fg); border-color:var(--line-strong); }
+  .switcher button.active { background:var(--accent-wash); border-color:var(--accent-line); color:var(--accent-text); }
+  .detected { text-align:center; color:var(--muted); font-size:.82rem; margin:0 0 16px; }
+
+  /* Sections are bands on the page ground, parted by one hairline. Only the
+     things you act on — the install panel, the cards — are raised. */
+  section { margin:56px 0 0; padding-top:36px; border-top:1px solid var(--hairline); }
+  section.platform {
+    display:none; margin:0; padding:26px 28px 28px;
+    border:1px solid var(--hairline); border-radius:var(--radius-card);
+    background:var(--raised);
+  }
   section.platform.active { display:block; }
-  .no-js section.platform { display:block; }
-  h2 { margin:0 0 10px; font-size:1.25rem; }
-  h3 { margin:18px 0 6px; font-size:1.02rem; }
-  pre { background:#141417; border:1px solid #33333b; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.85rem; }
-  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
-  .badge { display:inline-block; vertical-align:middle; margin-left:8px; padding:2px 9px; border-radius:999px; background:var(--violet); color:#fff; font-size:.7rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; }
-  .plugin-card { display:flex; align-items:center; justify-content:space-between; gap:18px; background:#141417; border:1px solid #33333b; border-radius:10px; padding:14px 16px; margin:12px 0; }
-  .plugin-card .muted { color:var(--muted); font-size:.92rem; }
-  @media (max-width:640px) { .plugin-card { flex-direction:column; align-items:flex-start; } }
-  .genre { display:flex; align-items:center; gap:20px; background:#141417; border:1px solid #33333b; border-radius:10px; padding:14px 16px; margin:12px 0; }
-  .genre h3 { margin:0 0 4px; }
-  .genre p { margin:0; color:var(--muted); font-size:.92rem; }
-  .genre svg { flex:0 0 196px; width:196px; height:auto; }
-  .genre svg path { fill:none; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
-  .genre svg .s { stroke:var(--muted); }
-  .genre svg .v { stroke:var(--violet); }
-  .genre svg .a { stroke:var(--accent); }
-  .genre svg .g { stroke:var(--muted); opacity:.36; }
-  .genre svg .d { stroke-dasharray:6 5; }
-  .genre svg .faint { opacity:.5; }
-  .genre svg .band { fill:#1c1c23; stroke:#3f3f4a; stroke-width:1.4; }
-  .genre svg .bg { fill:#141417; }
-  .genre svg .dot { fill:var(--muted); stroke:none; }
-  .genre svg .a.dot { fill:var(--accent); }
-  .genre svg text { fill:var(--accent); font:600 8.5px system-ui,-apple-system,sans-serif; text-anchor:middle; }
-  @media (max-width:640px) { .genre { flex-direction:column; align-items:flex-start; } .genre svg { flex:none; width:100%; max-width:240px; } }
-  p code, li code { background:#141417; padding:1px 6px; border-radius:5px; }
-  .note { color:var(--muted); font-size:.92rem; }
-  .cta { display:inline-block; background:var(--violet); color:#fff; text-decoration:none; padding:12px 22px; border-radius:10px; font-weight:600; border:none; font-size:1rem; cursor:pointer; }
-  .cta.small { padding:8px 16px; font-size:.9rem; }
-  .copyrow { display:flex; gap:8px; align-items:stretch; margin:10px 0; }
+  .no-js section.platform { display:block; margin-bottom:14px; }
+  section h3:first-of-type { margin-top:20px; }
+
+  pre {
+    background:var(--well); border:1px solid var(--hairline-strong);
+    border-radius:var(--radius-tile); padding:12px 14px;
+    overflow-x:auto; font-size:13px; line-height:1.5; margin:0 0 14px;
+  }
+  code { font-family:var(--font-mono); }
+  p code, li code {
+    background:rgba(233,228,220,.06); border:1px solid var(--hairline);
+    padding:1px 6px; border-radius:var(--radius-control); font-size:.88em;
+  }
+
+  .badge {
+    display:inline-block; vertical-align:middle; margin-left:10px;
+    padding:3px 8px; border-radius:var(--radius-control);
+    border:1px solid var(--accent-line); color:var(--accent-text);
+    font-family:var(--font-body); font-size:10px; font-weight:500;
+    letter-spacing:var(--meta-tracking); text-transform:uppercase;
+  }
+
+  .note { color:var(--muted); font-size:.9rem; }
+  .caution { border-left:2px solid var(--clay-line); padding-left:14px; }
+
+  ul { list-style:none; margin:16px 0; padding:0; }
+  li { position:relative; padding-left:20px; margin:0 0 10px; }
+  li::before { content:""; position:absolute; left:0; top:.78em; width:9px; height:1px; background:var(--accent-line); }
+
+  .cta {
+    display:inline-block; flex:0 0 auto; border:1px solid var(--hairline-strong);
+    background:var(--raised); color:var(--fg); border-radius:var(--radius-control);
+    padding:12px 20px; min-height:44px; cursor:pointer; white-space:nowrap;
+    font-family:var(--font-body); font-size:.95rem; font-weight:500; text-decoration:none;
+    transition:color .15s, border-color .15s, background .15s;
+  }
+  .cta:hover { color:var(--accent-text); border-color:var(--accent-line); }
+  .cta.primary { background:var(--accent); border-color:var(--accent); color:var(--accent-on); font-weight:600; }
+  .cta.primary:hover { background:var(--accent-deep); border-color:var(--accent-deep); color:var(--accent-on); }
+  .cta.small { padding:9px 16px; min-height:0; font-size:.86rem; }
+
+  .copyrow { display:flex; gap:10px; align-items:stretch; margin:10px 0 14px; }
   .copyrow pre { flex:1; margin:0; white-space:pre-wrap; word-break:break-all; }
-  footer { text-align:center; color:var(--muted); font-size:.9rem; margin-top:48px; }
-  footer a { color:var(--muted); }
-  ul { margin:8px 0; padding-left:22px; }
+
+  .plugin-card {
+    display:flex; align-items:center; justify-content:space-between; gap:20px;
+    background:var(--raised); border:1px solid var(--hairline);
+    border-radius:var(--radius-tile); padding:16px 18px; margin:16px 0;
+  }
+  .plugin-card > div { min-width:0; }
+  .plugin-card .muted { color:var(--muted); font-size:.9rem; }
+
+  .genre {
+    display:flex; align-items:center; gap:22px;
+    background:var(--raised); border:1px solid var(--hairline);
+    border-radius:var(--radius-tile); padding:16px 18px; margin:16px 0;
+  }
+  .genre h3 { margin:0 0 5px; }
+  .genre p { margin:0; color:var(--muted); font-size:.9rem; }
+  .genre svg {
+    flex:0 0 216px; width:216px; height:auto; padding:9px 10px;
+    background:var(--paper); border-radius:var(--radius-tile);
+    box-shadow:inset 0 0 0 1px var(--paper-edge);
+  }
+
+  footer { text-align:center; color:var(--muted); font-size:.86rem; margin-top:56px; padding-top:32px; border-top:1px solid var(--hairline); }
+  footer p { margin:0; }
+
+  @media (max-width:640px) {
+    main { padding:36px 20px 64px; }
+    .heroart { padding:12px 12px; }
+    .heroart svg path { stroke-width:2.6; }
+    .plugin-card, .genre { flex-direction:column; align-items:flex-start; }
+    .genre svg { flex:none; width:100%; max-width:280px; }
+    .switcher button { flex:1 1 40%; }
+    .copyrow { flex-direction:column; }
+    section { margin-top:44px; padding-top:30px; }
+  }
 </style>
 </head>
 <body class="no-js">
@@ -69,54 +243,93 @@
     <img src="icon.png" alt="Docent icon">
     <h1>Docent</h1>
     <p class="tagline">A docent walks you through the museum. This one walks humans — and AI&nbsp;agents — through your architecture diagrams.</p>
+    <p class="meta">Free &amp; open source · MIT · macOS (Apple&nbsp;Silicon&nbsp;+&nbsp;Intel) · Windows · Linux · self&#8209;hosted</p>
+    <p class="actions">
+      <a class="cta primary" href="#install">Download Docent</a>
+      <a class="cta" href="https://github.com/happyren/Docent">Source on GitHub</a>
+    </p>
+    <p class="ghlink"><a href="https://github.com/happyren/Docent/releases/latest">All downloads on the release page</a></p>
     <p class="credit">Inspired by and built upon <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> — the canvas, the hand-drawn rendering, and the file format are Excalidraw's work. Docent is an independent project, not affiliated with or endorsed by Excalidraw.</p>
-    <p class="note" style="margin-top:12px">Free &amp; open source · MIT · macOS (Apple&nbsp;Silicon&nbsp;+&nbsp;Intel) · Windows · Linux · self-hosted</p>
-    <p class="ghlink"><a href="https://github.com/happyren/Docent">Source on GitHub</a> · <a href="https://github.com/happyren/Docent/releases/latest">all downloads</a></p>
   </header>
 
-  <div class="switcher" id="switcher" hidden>
-    <button data-os="macos">macOS</button>
-    <button data-os="windows">Windows</button>
-    <button data-os="linux">Linux</button>
-    <button data-os="docker">Self-host</button>
+  <div class="heroart" aria-hidden="true">
+    <!-- one map, and the tier under one of its components -->
+    <svg viewBox="0 0 640 148" width="640" height="148" focusable="false">
+      <path class="s d" d="M 68 20 C 158 18.8, 248 19.4, 338 18.6 C 337.4 56, 338.2 93.4, 337 130.8 C 247.6 131.8, 158 132, 68.6 131.2 C 69 94.2, 67.4 57.2, 68 20"/>
+      <path class="s" d="M 28 42 C 32.2 42, 35.6 45.4, 35.6 49.6 C 35.6 53.8, 32 57.6, 27.8 57.6 C 23.6 57.6, 20 53.9, 20 49.7 C 20 45.5, 23.8 42, 28 42"/>
+      <path class="s" d="M 27.9 57.6 C 28.1 64.6, 27.5 71.6, 27.9 78.6"/>
+      <path class="s" d="M 17.4 64.4 C 24.4 64.6, 31.4 64.8, 38.4 64.4"/>
+      <path class="s" d="M 27.9 78.6 C 25 83.2, 22.4 87.8, 19.8 92.4"/>
+      <path class="s" d="M 27.9 78.6 C 30.9 83, 33.3 87.8, 35.9 92.5"/>
+      <path class="v" d="M 44 68 C 56 66.8, 68 66, 82 65"/>
+      <path class="v" d="M 76.2 68 L 82.4 65 L 76 63.2"/>
+      <path class="s" d="M 88 50 C 117 49.4, 146 49.8, 175 49.2 C 175.4 63.4, 174.8 77.6, 175.6 91.8 C 146.2 92.2, 116.8 91.6, 87.4 91 C 88 77.4, 88.6 63.6, 88 50"/>
+      <path class="s" d="M 204 32 C 233 31.4, 262 31.8, 291 31.2 C 291.4 44, 290.8 56.8, 291.6 69.6 C 262.2 70, 232.8 69.4, 203.4 68.8 C 204 56.6, 204.6 44.2, 204 32"/>
+      <path class="s" d="M 252 84 C 276 84, 295 87, 295 90.4 C 295 93.8, 275.8 96.6, 251.8 96.6 C 227.8 96.6, 208.6 93.8, 208.6 90.4 C 208.6 87, 228 84, 252 84"/>
+      <path class="s" d="M 208.6 90.4 C 208.8 98.6, 208.2 106.8, 208.6 115 C 218 125.4, 286 125.4, 295 115 C 294.6 106.8, 295.2 98.6, 295 90.4"/>
+      <path class="v" d="M 177 62 C 185 58.6, 192 55.4, 200 52"/>
+      <path class="v" d="M 193.6 55.6 L 200.6 51.8 L 194.4 50.2"/>
+      <path class="v" d="M 160 93 C 175 95, 190 92.4, 206 90"/>
+      <path class="v" d="M 200.4 92.8 L 206.6 89.8 L 200.2 88"/>
+      <path class="v" d="M 250 71 C 250.2 74.6, 249.8 78.2, 250 82"/>
+      <path class="v" d="M 247.2 77 L 250.2 82.6 L 253.2 77"/>
+      <path class="a" d="M 282 70 L 292 70 L 292 80 Z"/>
+      <path class="a d" d="M 294 76 C 322 84, 350 76, 378 74"/>
+      <path class="a" d="M 372.2 76.8 L 378.6 73.8 L 372.4 71.6"/>
+      <path class="a d" d="M 386 30 C 466 28.8, 546 29.4, 626 28.6 C 625.4 60, 626.2 92, 625 123.8 C 545.6 124.8, 466 125, 386.6 124.2 C 387 92.2, 385.4 60.2, 386 30"/>
+      <path class="s" d="M 408 48 C 438 47.4, 468 47.8, 498 47.2 C 498.4 61, 497.8 74.8, 498.6 88.6 C 468.2 89, 437.8 88.4, 407.4 87.8 C 408 74.6, 408.6 61.2, 408 48"/>
+      <path class="s" d="M 530 60 C 557 59.4, 584 59.8, 611 59.2 C 611.4 73, 610.8 86.8, 611.6 100.6 C 584.2 101, 556.8 100.4, 529.4 99.8 C 530 86.6, 530.6 73.2, 530 60"/>
+      <path class="v" d="M 499 72 C 509 74, 519 76.4, 528 78"/>
+      <path class="v" d="M 522.6 80.6 L 528.6 77.8 L 523.4 74"/>
+    </svg>
   </div>
-  <p class="detected" id="detected" hidden></p>
 
-  <section class="platform" id="p-macos">
-    <h2>Install on macOS</h2>
-    <p>Docent is open-source and <strong>unsigned</strong> — we don't pay Apple's yearly developer fee, so macOS flags browser downloads. That's a missing signature, not malware; the source is public if you'd like to check what you're running.</p>
-    <h3>Recommended — one Terminal line, no security prompts</h3>
-    <p class="note">Terminal downloads skip macOS quarantine entirely, so the app opens like any other:</p>
-    <div class="copyrow">
-      <pre id="mac-cmd"><code>curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip &amp;&amp; ditto -x -k /tmp/Docent.zip /Applications &amp;&amp; open /Applications/Docent.app</code></pre>
-      <button class="cta small" id="mac-copy" hidden>Copy</button>
+  <div class="install" id="install">
+    <div class="switcher" id="switcher" hidden>
+      <button data-os="macos">macOS</button>
+      <button data-os="windows">Windows</button>
+      <button data-os="linux">Linux</button>
+      <button data-os="docker">Self-host</button>
     </div>
-    <h3>Or download in the browser</h3>
-    <p><a href="https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip">Download the zip</a>, unzip, then clear the quarantine flag once and open normally:</p>
-    <pre><code>xattr -cr ~/Downloads/Docent.app</code></pre>
-    <p class="note">macOS will otherwise report the app as "damaged" — current macOS offers no <em>Open&nbsp;Anyway</em> for unsigned apps. One universal build covers Apple&nbsp;Silicon and Intel.</p>
-  </section>
+    <p class="detected" id="detected" hidden></p>
 
-  <section class="platform" id="p-windows">
-    <h2>Install on Windows</h2>
-    <p style="margin:14px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_windows_portable.zip">Download for Windows (portable zip)</a></p>
-    <p>Unzip and run <code>docent.exe</code> — a single file, no installer. If SmartScreen appears: <strong>More info → Run anyway</strong> (same reason: no paid code-signing certificate).</p>
-    <p class="note">Needs Microsoft's WebView2 runtime, preinstalled on Windows&nbsp;11 and current Windows&nbsp;10. Older machine? Use the NSIS installer from the <a href="https://github.com/happyren/Docent/releases/latest">release page</a> — it fetches the runtime.</p>
-  </section>
+    <section class="platform" id="p-macos">
+      <h2>Install on macOS</h2>
+      <p class="caution">Docent is open-source and <strong>unsigned</strong> — we don't pay Apple's yearly developer fee, so macOS flags browser downloads. That's a missing signature, not malware; the source is public if you'd like to check what you're running.</p>
+      <h3>Recommended — one Terminal line, no security prompts</h3>
+      <p class="note">Terminal downloads skip macOS quarantine entirely, so the app opens like any other:</p>
+      <div class="copyrow">
+        <pre id="mac-cmd"><code>curl -fsSL -o /tmp/Docent.zip https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip &amp;&amp; ditto -x -k /tmp/Docent.zip /Applications &amp;&amp; open /Applications/Docent.app</code></pre>
+        <button class="cta small" id="mac-copy" hidden>Copy</button>
+      </div>
+      <h3>Or download in the browser</h3>
+      <p><a href="https://github.com/happyren/Docent/releases/latest/download/Docent_macos_universal_portable.zip">Download the zip</a>, unzip, then clear the quarantine flag once and open normally:</p>
+      <pre><code>xattr -cr ~/Downloads/Docent.app</code></pre>
+      <p class="note">macOS will otherwise report the app as "damaged" — current macOS offers no <em>Open&nbsp;Anyway</em> for unsigned apps. One universal build covers Apple&nbsp;Silicon and Intel.</p>
+    </section>
 
-  <section class="platform" id="p-linux">
-    <h2>Install on Linux</h2>
-    <p style="margin:14px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_amd64.AppImage">Download for Linux (AppImage)</a></p>
-    <pre><code>chmod +x Docent_amd64.AppImage &amp;&amp; ./Docent_amd64.AppImage</code></pre>
-    <p class="note"><code>.deb</code> and <code>.rpm</code> packages are on the <a href="https://github.com/happyren/Docent/releases/latest">release page</a>.</p>
-  </section>
+    <section class="platform" id="p-windows">
+      <h2>Install on Windows</h2>
+      <p style="margin:18px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_windows_portable.zip">Download for Windows (portable zip)</a></p>
+      <p>Unzip and run <code>docent.exe</code> — a single file, no installer.</p>
+      <p class="caution">If SmartScreen appears: <strong>More info → Run anyway</strong> — same reason as macOS, no paid code-signing certificate.</p>
+      <p class="note">Needs Microsoft's WebView2 runtime, preinstalled on Windows&nbsp;11 and current Windows&nbsp;10. Older machine? Use the NSIS installer from the <a href="https://github.com/happyren/Docent/releases/latest">release page</a> — it fetches the runtime.</p>
+    </section>
 
-  <section class="platform" id="p-docker">
-    <h2>Self-host (Docker)</h2>
-    <p>The same app as a shared team deployment — portfolio store and the MCP agent endpoint included:</p>
-    <pre><code>git clone https://github.com/happyren/Docent.git &amp;&amp; cd Docent &amp;&amp; docker compose up</code></pre>
-    <p class="note">Serves on port 3000 (override with <code>DOCENT_PORT</code>). See the <a href="https://github.com/happyren/Docent#readme">README</a> for the continuous-deployment installer and agent control.</p>
-  </section>
+    <section class="platform" id="p-linux">
+      <h2>Install on Linux</h2>
+      <p style="margin:18px 0"><a class="cta" href="https://github.com/happyren/Docent/releases/latest/download/Docent_amd64.AppImage">Download for Linux (AppImage)</a></p>
+      <pre><code>chmod +x Docent_amd64.AppImage &amp;&amp; ./Docent_amd64.AppImage</code></pre>
+      <p class="note"><code>.deb</code> and <code>.rpm</code> packages are on the <a href="https://github.com/happyren/Docent/releases/latest">release page</a>.</p>
+    </section>
+
+    <section class="platform" id="p-docker">
+      <h2>Self-host (Docker)</h2>
+      <p>The same app as a shared team deployment — portfolio store and the MCP agent endpoint included:</p>
+      <pre><code>git clone https://github.com/happyren/Docent.git &amp;&amp; cd Docent &amp;&amp; docker compose up</code></pre>
+      <p class="note">Serves on port 3000 (override with <code>DOCENT_PORT</code>). See the <a href="https://github.com/happyren/Docent#readme">README</a> for the continuous-deployment installer and agent control.</p>
+    </section>
+  </div>
 
   <section>
     <h2>What it does</h2>
@@ -298,7 +511,7 @@
     <p>Extend the desktop app without touching it: a plugin is a folder with a manifest and a program Docent starts, stops, and proxies on its own loopback origin. Plugin code never runs in the page, so the canvas stays exactly as fast and as safe as it is. Anyone can build one against the <a href="https://github.com/happyren/Docent/blob/master/docs/plugins.md">documented contracts</a>, in any language.</p>
     <div class="plugin-card">
       <div>
-        <strong>🔊 docent-pocket-tts</strong> — <em>spoken narration</em><br>
+        <strong>docent-pocket-tts</strong> — <em>spoken narration</em><br>
         <span class="muted">Every narration an agent gives, every tour step, and your own frame narratives during a presentation — spoken aloud by <a href="https://github.com/kyutai-labs/pocket-tts">Kyutai's Pocket TTS</a>, a 100M-parameter voice that runs on two CPU cores on your machine. No account, no key, nothing leaves the laptop. The tour waits for the voice.</span>
       </div>
       <a class="cta small" href="https://github.com/happyren/docent-pocket-tts">Get the plugin</a>
@@ -307,7 +520,7 @@
   </section>
 
   <footer>
-    <p>MIT licensed · <a href="https://github.com/happyren/Docent/blob/master/THIRD_PARTY_NOTICES.md">third-party notices</a> · built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a> ❤️</p>
+    <p>MIT licensed · <a href="https://github.com/happyren/Docent/blob/master/THIRD_PARTY_NOTICES.md">third-party notices</a> · built on <a href="https://github.com/excalidraw/excalidraw">Excalidraw</a></p>
   </footer>
 </main>
 <script>
@@ -346,7 +559,7 @@
       function () {
         var r = document.createRange(); r.selectNodeContents(document.getElementById("mac-cmd"));
         var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
-        copy.textContent = "Select + \u2318C"; setTimeout(function () { copy.textContent = "Copy"; }, 2000);
+        copy.textContent = "Select + ⌘C"; setTimeout(function () { copy.textContent = "Copy"; }, 2000);
       }
     );
   });
