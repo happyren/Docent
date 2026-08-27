@@ -1,8 +1,156 @@
+/* The house faces (D107), vendored as static assets on D23's precedent and
+   served from this app's own origin — a self-hosted install must come up with
+   its own typography and never call out to fonts.googleapis.com. Both files
+   are variable (one per family, spanning 400–600), latin-subset as Google
+   serves them; scripts/fetch-fonts.mjs is what put them there. Newsreader is
+   also an optical-size design, so `font-optical-sizing: auto` lets it size
+   itself. SIL OFL 1.1 both — see THIRD_PARTY_NOTICES.md. */
+@font-face {
+  font-family: "Newsreader";
+  src: url("/fonts/newsreader-latin.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Spline Sans";
+  src: url("/fonts/spline-sans-latin.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * The house tokens (D107, amendment A27). Every colour, radius, shadow and
+ * face Docent's own chrome wears is written here and nowhere else, in two
+ * themes:
+ *
+ *   Atelier   (dark)  — umber grounds, bone text, bronze accent, clay for harm
+ *   Porcelain (light) — porcelain grounds, ink text, sienna accent
+ *
+ * The theme is not a preference of Docent's. App.tsx mirrors the canvas's own
+ * `appState.theme` onto `<html data-docent-theme>`, so Excalidraw's "Dark
+ * mode" switch moves the chrome with it — one switch, one house. `:root` is
+ * Atelier; the block after it is the only place a Porcelain value is written.
+ *
+ * The restraint is the decision: ONE accent, spent only on primary buttons,
+ * the protected chip, selected and active states, and the hairline under a
+ * modal header — everything else is neutral. ONE border weight per theme, in
+ * a separating and an interactive strength. ONE shadow. Radii of 3 for
+ * controls, 4 for rows, 5 for floating islands, 6 for modals. Hit targets
+ * stay where they are, ≥ 44px wherever they already were.
+ *
+ * Excalidraw's own surfaces are Excalidraw's (I1): nothing here reaches into
+ * them beyond the one commented safe-area inset D108 requires.
+ */
 :root {
-  --docent-bg: #1b1b1f;
-  --docent-fg: #e8e8ea;
-  --docent-muted: #a0a0aa;
-  --docent-accent: #ffb454;
+  /* Grounds. `bg` is what the app sits on, `surface` the floating islands over
+     the paper, `raised` the modals and cards, `well` what is sunk into them
+     (inputs, code, tracks), `line-strong` the one drawn rule that is not a
+     hairline. */
+  --docent-bg: #1c1a18;
+  --docent-surface: rgba(28, 26, 24, 0.97);
+  --docent-raised: #26231f;
+  --docent-well: #1c1a18;
+  --docent-line-strong: #3a352e;
+
+  /* Text, in four steps. `faint` is decorative by construction — it does not
+     reach 4.5:1 on its ground, so nothing a reader must read may wear it. */
+  --docent-fg: #efeae2;
+  --docent-body: #d6d0c6;
+  --docent-muted: #9d968b;
+  --docent-faint: #6e675c;
+
+  /* Bronze. `accent` fills and draws; `accent-text` is its brighter form, for
+     accent set as text on a dark ground; `accent-on` is what sits on a fill. */
+  --docent-accent: #c08a3e;
+  --docent-accent-text: #d9a75c;
+  --docent-accent-on: #1c1a18;
+  --docent-accent-line: rgba(192, 138, 62, 0.45);
+  --docent-accent-edge: rgba(192, 138, 62, 0.18);
+  --docent-accent-wash: rgba(192, 138, 62, 0.07);
+  --docent-accent-wash-strong: rgba(192, 138, 62, 0.16);
+
+  /* Clay — the one colour that means this discards something. */
+  --docent-destructive: #d97a58;
+  --docent-destructive-text: #e9b19d;
+  --docent-destructive-on: #201612;
+  --docent-destructive-line: rgba(217, 122, 88, 0.4);
+  --docent-destructive-edge: rgba(217, 122, 88, 0.22);
+  --docent-destructive-wash: rgba(217, 122, 88, 0.06);
+
+  /* One border weight, two strengths: the hairline that separates, and the
+     edge an interactive thing wears. */
+  --docent-hairline: rgba(233, 228, 220, 0.09);
+  --docent-hairline-strong: rgba(233, 228, 220, 0.16);
+
+  /* One shadow. Depth is not a variable. */
+  --docent-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  --docent-scrim: rgba(20, 18, 16, 0.55);
+
+  /* A picture of a drawing is a picture of paper, whatever the chrome is
+     doing: thumbnails and review crops keep their own ground. */
+  --docent-paper: #f4f1ea;
+  --docent-paper-edge: rgba(0, 0, 0, 0.14);
+
+  /* Radii. */
+  --docent-radius-modal: 6px;
+  --docent-radius-island: 5px;
+  --docent-radius-row: 4px;
+  --docent-radius-control: 3px;
+
+  /* Type: a serif for titles, a grotesque for everything that is used, and the
+     mono the code and paths already wore. */
+  --docent-font-title: "Newsreader", Georgia, "Times New Roman", serif;
+  --docent-font-body: "Spline Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --docent-font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Metadata — timestamps, counts, paths — is small and letterspaced. */
+  --docent-meta-size: 11px;
+  --docent-meta-tracking: 0.03em;
+
+  /* The traffic-light safe area (D108). Zero until the shell is a borderless
+     macOS window; see `.docent-overlay-titlebar` at the foot of this file. */
+  --docent-safe-left: 0px;
+}
+
+/* Porcelain. Only the values that differ from Atelier live here. */
+:root[data-docent-theme="light"] {
+  --docent-bg: #f4f1ea;
+  --docent-surface: #faf8f4;
+  --docent-raised: #faf8f4;
+  --docent-well: #f4f1ea;
+  --docent-line-strong: #e9e4d8;
+
+  --docent-fg: #26231e;
+  --docent-body: #454034;
+  --docent-muted: #6f695e;
+  --docent-faint: #a49b8b;
+
+  --docent-accent: #9a6b1f;
+  --docent-accent-text: #9a6b1f;
+  --docent-accent-on: #faf8f4;
+  --docent-accent-line: rgba(154, 107, 31, 0.4);
+  --docent-accent-edge: rgba(154, 107, 31, 0.22);
+  --docent-accent-wash: rgba(154, 107, 31, 0.06);
+  --docent-accent-wash-strong: rgba(154, 107, 31, 0.1);
+
+  --docent-destructive: #b5563a;
+  --docent-destructive-text: #a34a30;
+  --docent-destructive-on: #faf8f4;
+  --docent-destructive-line: rgba(181, 86, 58, 0.45);
+  --docent-destructive-edge: rgba(181, 86, 58, 0.25);
+  --docent-destructive-wash: rgba(181, 86, 58, 0.05);
+
+  --docent-hairline: #e3ded2;
+  --docent-hairline-strong: #d8d2c4;
+
+  --docent-shadow: 0 12px 32px rgba(56, 48, 34, 0.16);
+  --docent-scrim: rgba(56, 48, 34, 0.18);
+
+  --docent-paper: #ffffff;
+  --docent-paper-edge: #d8d2c4;
 }
 
 * {
@@ -17,7 +165,33 @@ body,
 }
 
 body {
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: var(--docent-font-body);
+  background: var(--docent-bg);
+  color: var(--docent-fg);
+  font-optical-sizing: auto;
+}
+
+/* Titles — modal headers, section heads, the panel names — are set in the
+   serif at 500. The ramp is one decision, so it is written once. */
+.docent-modal-header,
+.docent-plugins-list h3,
+.docent-intent-title,
+.docent-hud-title {
+  font-family: var(--docent-font-title);
+  font-weight: 500;
+}
+
+/* Metadata — timestamps, counts, paths, standing labels. */
+.docent-portfolio-meta,
+.docent-portfolio-bound,
+.docent-portfolio-sync-note,
+.docent-scene-tag,
+.docent-portfolio-readonly,
+.docent-portfolio-conflict,
+.docent-portfolio-github-label,
+.docent-review-side figcaption {
+  font-size: var(--docent-meta-size);
+  letter-spacing: var(--docent-meta-tracking);
 }
 
 .docent-app {
@@ -40,7 +214,7 @@ body {
 
 
 .docent-dirty {
-  color: var(--docent-accent);
+  color: var(--docent-accent-text);
   margin-left: 6px;
 }
 
@@ -65,16 +239,17 @@ body {
   min-width: 0;
   max-width: 60%;
   padding: 5px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  box-shadow: var(--docent-shadow);
 }
 
 .docent-chip {
-  background: #efeff4;
-  color: #363640;
-  border: 1px solid #dcdce4;
-  border-radius: 999px;
+  background: var(--docent-well);
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 2px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -82,12 +257,13 @@ body {
 }
 
 .docent-chip:hover {
-  background: #e2e2ec;
+  border-color: var(--docent-accent-line);
+  color: var(--docent-fg);
 }
 
 .docent-crumb {
   font-size: 12px;
-  color: #6b6b78;
+  color: var(--docent-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -96,10 +272,11 @@ body {
   border: none;
   padding: 0;
   cursor: pointer;
+  font-family: inherit;
 }
 
 .docent-crumb:hover {
-  color: #1b1b1f;
+  color: var(--docent-fg);
 }
 
 .docent-crumb::before {
@@ -115,11 +292,12 @@ body {
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 10px;
-  background: rgba(27, 27, 31, 0.92);
-  color: var(--docent-fg);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  color: var(--docent-body);
   z-index: 12;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--docent-shadow);
 }
 
 .docent-narration-text {
@@ -134,6 +312,11 @@ body {
   cursor: pointer;
   font-size: 12px;
   padding: 2px;
+  font-family: inherit;
+}
+
+.docent-narration-close:hover {
+  color: var(--docent-fg);
 }
 
 .docent-overlay {
@@ -188,20 +371,23 @@ body {
   align-items: center;
   gap: 2px;
   padding: 8px 18px;
-  border-radius: 10px;
-  background: rgba(27, 27, 31, 0.88);
-  color: var(--docent-fg);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  box-shadow: var(--docent-shadow);
+  color: var(--docent-body);
   pointer-events: none;
   z-index: 10;
 }
 
 .docent-hud-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  color: var(--docent-fg);
 }
 
 .docent-hud-hint {
   font-size: 11px;
+  letter-spacing: var(--docent-meta-tracking);
   color: var(--docent-muted);
 }
 
@@ -209,7 +395,7 @@ body {
   font-size: 13px;
   max-width: 560px;
   text-align: center;
-  color: #d5d5dc;
+  color: var(--docent-body);
 }
 
 .docent-intent {
@@ -222,9 +408,11 @@ body {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border-radius: 10px;
-  background: rgba(27, 27, 31, 0.92);
-  color: var(--docent-fg);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  box-shadow: var(--docent-shadow);
+  color: var(--docent-body);
 }
 
 .docent-intent-header {
@@ -235,11 +423,9 @@ body {
 }
 
 .docent-intent-title {
-  font-size: 12px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--docent-muted);
+  font-size: 14px;
+  letter-spacing: 0.01em;
+  color: var(--docent-fg);
 }
 
 .docent-intent-target {
@@ -265,13 +451,31 @@ body {
 .docent-portfolio-new input,
 .docent-portfolio-new select,
 .docent-legend-row select {
-  background: #26262c;
+  background: var(--docent-well);
   color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 5px 8px;
   font-size: 13px;
   font-family: inherit;
+}
+
+/* One focus ring, in the accent, for every control the chrome owns — listed by
+   container rather than scoped to `.docent-app`, because Excalidraw's own UI
+   renders inside that too and its focus styles are its own (I1). */
+:is(
+    .docent-modal,
+    .docent-legend-panel,
+    .docent-intent,
+    .docent-selection-toolbar,
+    .docent-breadcrumbs,
+    .docent-trunk-lock,
+    .docent-agent-report,
+    .docent-narration
+  )
+  :is(input, select, textarea, button):focus-visible {
+  outline: 2px solid var(--docent-accent);
+  outline-offset: 1px;
 }
 
 .docent-field textarea {
@@ -281,7 +485,7 @@ body {
 .docent-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--docent-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -292,17 +496,33 @@ body {
   width: min(720px, 92vw);
   max-height: 80vh;
   overflow: auto;
-  background: #1f1f24;
-  color: var(--docent-fg);
-  border-radius: 12px;
+  background: var(--docent-raised);
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-modal);
   padding: 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  box-shadow: var(--docent-shadow);
 }
 
 .docent-modal-header {
-  font-weight: 650;
+  font-size: 22px;
+  color: var(--docent-fg);
+  /* The one gradient hairline in the house: it rules off the title and fades
+     out — the whole of the accent's job at the top of a modal (D107). Painted
+     as a background rather than a border or a pseudo-element, because these
+     headers are flex rows and a ::after would join the row as an item. */
+  padding-bottom: 14px;
+  background-image: linear-gradient(
+    90deg,
+    var(--docent-accent-line),
+    transparent 55%
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 100%;
 }
 
 .docent-modal-hint {
@@ -339,13 +559,21 @@ body {
 .docent-legend-row button,
 .docent-portfolio-new button,
 .docent-modal-actions button {
-  background: #2a2a30;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  background: none;
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 4px 10px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+}
+
+.docent-legend-row button:hover:not(:disabled),
+.docent-portfolio-new button:hover:not(:disabled),
+.docent-modal-actions button:hover:not(:disabled) {
+  color: var(--docent-fg);
+  border-color: var(--docent-accent-line);
 }
 
 .docent-modal-actions {
@@ -358,9 +586,14 @@ body {
   flex: 1;
 }
 
+/* The one filled button in the house — the accent spent where the sentence
+   ends (D107). Nothing else fills. */
 .docent-primary {
-  background: #4a3b78 !important;
-  border-color: #5d4b96 !important;
+  background: var(--docent-accent) !important;
+  border-color: var(--docent-accent) !important;
+  color: var(--docent-accent-on) !important;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .docent-selection-toolbar {
@@ -368,11 +601,12 @@ body {
   z-index: 9;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+  gap: 2px;
+  padding: 5px;
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  box-shadow: var(--docent-shadow);
   /* Only the buttons take the pointer: the bar's padding and gaps let
      clicks through to the canvas, so an arrow's anchors stay reachable
      under it. */
@@ -386,30 +620,34 @@ body {
 .docent-tool {
   background: none;
   border: none;
-  border-radius: 7px;
-  padding: 5px 10px;
+  border-radius: var(--docent-radius-control);
+  padding: 6px 13px;
   font-size: 12.5px;
-  color: #3d3d47;
+  font-family: inherit;
+  color: var(--docent-body);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .docent-tool:hover {
-  background: #efeff4;
+  background: var(--docent-well);
+  color: var(--docent-fg);
 }
 
+/* Active, not decorative: the accent marks what this selection already is. */
 .docent-tool-primary {
-  background: #eee9fb;
-  color: #4a3b78;
-  font-weight: 600;
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-accent-text);
+  font-weight: 500;
 }
 
 .docent-tool-primary:hover {
-  background: #e2d9f7;
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-accent-text);
 }
 
 .docent-tool-quiet {
-  color: #9a9aa4;
+  color: var(--docent-muted);
 }
 
 /* Wraps ONLY the overlay layer — the fake-zoom sink scales it in lockstep
@@ -451,8 +689,10 @@ body {
   min-width: 0;
 }
 
+/* A structural divide between two halves of the modal, so it is the one rule
+   that is drawn rather than whispered. */
 .docent-portfolio-projects {
-  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid var(--docent-line-strong);
   padding-right: 14px;
 }
 
@@ -469,17 +709,21 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  padding: 8px;
+  border-radius: var(--docent-radius-row);
+  border: 1px solid transparent;
   cursor: pointer;
 }
 
 .docent-portfolio-item:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--docent-well);
 }
 
+/* Selected is the accent's other job: a wash and an edge, never a fill. */
 .docent-portfolio-item.is-selected {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--docent-accent-wash);
+  border-color: var(--docent-accent-edge);
+  color: var(--docent-fg);
 }
 
 .docent-portfolio-name {
@@ -508,7 +752,6 @@ body {
 }
 
 .docent-portfolio-meta {
-  font-size: 11px;
   color: var(--docent-muted);
   white-space: nowrap;
 }
@@ -519,12 +762,13 @@ body {
   color: var(--docent-muted);
   cursor: pointer;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--docent-radius-control);
+  font-family: inherit;
 }
 
 .docent-portfolio-delete:hover {
-  color: #ff6b6b;
-  background: rgba(255, 107, 107, 0.12);
+  color: var(--docent-destructive);
+  background: var(--docent-destructive-wash);
 }
 
 .docent-portfolio-new {
@@ -541,30 +785,26 @@ body {
    the user is setting it up. It sits under the scene grid because it is about
    where the scenes come from, not about any one of them. */
 .docent-portfolio-bound {
-  font-size: 11px;
-  opacity: 0.75;
+  color: var(--docent-muted);
 }
 
 /* Shown beside the ⛓ only when the store knows the token cannot write: the
    project opens but never saves, and that is worth a standing word. */
 .docent-portfolio-readonly {
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: #ffb86b;
-  border: 1px solid rgba(255, 184, 107, 0.4);
-  border-radius: 4px;
+  color: var(--docent-destructive-text);
+  border: 1px solid var(--docent-destructive-line);
+  border-radius: var(--docent-radius-control);
   padding: 0 4px;
   white-space: nowrap;
 }
 
 /* What one scene did since the last sync (D29), in the same small-tag idiom as
    the read-only mark above: a standing word, never a control. */
+/* Informational, so neutral: the house spends its accent elsewhere (D107). */
 .docent-scene-tag {
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: #7fd1ff;
-  border: 1px solid rgba(127, 209, 255, 0.4);
-  border-radius: 4px;
+  color: var(--docent-muted);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 0 4px;
   white-space: nowrap;
 }
@@ -572,13 +812,13 @@ body {
 /* A conflict is the one state that blocks a push, so it wears the warning
    colour the read-only tag uses rather than the informational one. */
 .docent-scene-tag.is-conflicted {
-  color: #ffb86b;
-  border-color: rgba(255, 184, 107, 0.5);
+  color: var(--docent-destructive-text);
+  border-color: var(--docent-destructive-line);
 }
 
 /* The sync line: where this copy stands, beside the verbs that move it. */
 .docent-portfolio-sync-summary {
-  color: var(--docent-fg);
+  color: var(--docent-body);
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -590,8 +830,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
-  opacity: 0.75;
+  color: var(--docent-muted);
   white-space: nowrap;
   /* A store's refusal is a sentence, not a word: it may take the room the row
      has left and no more (D102). */
@@ -603,8 +842,7 @@ body {
 /* A verb that failed says so where it was asked, in the warning colour the
    rest of the strip already uses for trouble (D102). */
 .docent-portfolio-sync-note.is-failed {
-  color: #ffb86b;
-  opacity: 1;
+  color: var(--docent-destructive-text);
 }
 
 /* The spinner a control wears while its own verb is in flight (D102). */
@@ -627,14 +865,13 @@ body {
 }
 
 .docent-portfolio-conflict {
-  font-size: 10px;
-  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #ffb86b;
+  letter-spacing: 0.05em;
+  color: var(--docent-destructive-text);
 }
 
 .docent-portfolio-github {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--docent-line-strong);
   padding-top: 10px;
   display: flex;
   flex-direction: column;
@@ -652,8 +889,8 @@ body {
 
 .docent-portfolio-github-label {
   text-transform: uppercase;
-  font-size: 10px;
   letter-spacing: 0.05em;
+  color: var(--docent-muted);
 }
 
 .docent-portfolio-github-target {
@@ -665,18 +902,25 @@ body {
 }
 
 .docent-portfolio-github-warn {
-  color: #ffb86b;
+  color: var(--docent-destructive-text);
 }
 
 .docent-portfolio-github-head button,
 .docent-portfolio-github button {
-  background: #2a2a30;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  background: none;
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 4px 10px;
   font-size: 13px;
+  font-family: inherit;
   cursor: pointer;
+}
+
+.docent-portfolio-github-head button:hover:not(:disabled),
+.docent-portfolio-github button:hover:not(:disabled) {
+  color: var(--docent-fg);
+  border-color: var(--docent-accent-line);
 }
 
 /* The branch row (D28): one line under the target, never a second panel. */
@@ -689,10 +933,10 @@ body {
 
 .docent-portfolio-github-branches select,
 .docent-portfolio-github-branches input {
-  background: #26262c;
+  background: var(--docent-well);
   color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 4px 8px;
   font-size: 13px;
   font-family: inherit;
@@ -706,10 +950,10 @@ body {
 }
 
 .docent-portfolio-github-form input {
-  background: #26262c;
+  background: var(--docent-well);
   color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 5px 8px;
   font-size: 13px;
   font-family: inherit;
@@ -751,9 +995,9 @@ body {
 .docent-review-changelog {
   margin: 0;
   padding: 10px 12px;
-  background: #1c1c21;
-  border: 1px solid #2e2e36;
-  border-radius: 8px;
+  background: var(--docent-well);
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-row);
   font-size: 12.5px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -768,10 +1012,10 @@ body {
 }
 
 .docent-review-crop {
-  border: 1px solid #2e2e36;
-  border-radius: 10px;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-row);
   padding: 10px 12px;
-  background: #202026;
+  background: var(--docent-well);
 }
 
 .docent-review-crop > header {
@@ -797,10 +1041,9 @@ body {
 }
 
 .docent-review-side figcaption {
-  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  opacity: 0.7;
+  color: var(--docent-muted);
   margin-bottom: 4px;
 }
 
@@ -808,9 +1051,9 @@ body {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: 6px;
-  border: 1px solid #34343c;
-  background: #fff;
+  border-radius: var(--docent-radius-control);
+  border: 1px solid var(--docent-hairline-strong);
+  background: var(--docent-paper);
   image-rendering: auto;
 }
 
@@ -818,10 +1061,10 @@ body {
   display: grid;
   place-items: center;
   min-height: 120px;
-  border: 1px dashed #3a3a42;
-  border-radius: 6px;
+  border: 1px dashed var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   font-size: 12.5px;
-  opacity: 0.7;
+  color: var(--docent-muted);
 }
 
 .docent-review-lines {
@@ -865,32 +1108,39 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  padding: 8px 10px;
+  border-radius: var(--docent-radius-row);
+  background: var(--docent-well);
   cursor: pointer;
   min-width: 0;
 }
 
 .docent-portfolio-folder-head:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--docent-well);
+  color: var(--docent-fg);
 }
 
 /* Staging (D93): nothing is stored under it yet, so it reads as a sketch of
    a folder rather than one. */
 .docent-portfolio-folder-head.is-staged {
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  padding: 3px 7px;
+  border: 1px dashed var(--docent-hairline-strong);
+  padding: 7px 9px;
 }
 
 .docent-portfolio-folder-head button {
-  background: #2a2a30;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  background: none;
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 2px 8px;
   font-size: 11px;
+  font-family: inherit;
   cursor: pointer;
+}
+
+.docent-portfolio-folder-head button:hover:not(:disabled) {
+  color: var(--docent-fg);
+  border-color: var(--docent-accent-line);
 }
 
 .docent-portfolio-folder-head .docent-portfolio-delete {
@@ -901,7 +1151,7 @@ body {
 
 .docent-portfolio-chevron {
   width: 12px;
-  color: var(--docent-muted);
+  color: var(--docent-faint);
   font-size: 11px;
 }
 
@@ -912,7 +1162,7 @@ body {
   gap: 10px;
   margin-left: 10px;
   padding-left: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid var(--docent-hairline);
   min-width: 0;
 }
 
@@ -927,7 +1177,7 @@ body {
   color: var(--docent-muted);
   cursor: pointer;
   padding: 2px 4px;
-  border-radius: 4px;
+  border-radius: var(--docent-radius-control);
   font-size: 11px;
   font-family: inherit;
   white-space: nowrap;
@@ -940,13 +1190,14 @@ body {
 
 .docent-portfolio-move:hover {
   color: var(--docent-fg);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--docent-well);
 }
 
 /* Reverting discards work (D103), so the one action that does wears the
    warning colour rather than the neutral one Move… uses. */
 .docent-portfolio-revert:hover {
-  color: #ffb86b;
+  color: var(--docent-destructive);
+  background: var(--docent-destructive-wash);
 }
 
 .docent-scene-card {
@@ -954,30 +1205,32 @@ body {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--docent-radius-row);
+  background: var(--docent-well);
+  border: 1px solid var(--docent-hairline);
   cursor: pointer;
 }
 
 .docent-scene-card:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
+  border-color: var(--docent-accent-edge);
+  background: var(--docent-accent-wash);
 }
 
 .docent-scene-thumb {
   width: 100%;
   aspect-ratio: 16 / 10;
   object-fit: contain;
-  border-radius: 6px;
-  background: #ffffff;
+  border-radius: 2px;
+  background: var(--docent-paper);
+  box-shadow: inset 0 0 0 1px var(--docent-paper-edge);
 }
 
 .docent-scene-thumb.is-loading {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--docent-well);
+  box-shadow: inset 0 0 0 1px var(--docent-hairline);
   color: var(--docent-muted);
   font-size: 12px;
 }
@@ -1016,18 +1269,19 @@ body {
   flex-direction: column;
   gap: 10px;
   padding: 14px;
-  border-radius: 10px;
-  background: rgba(27, 27, 31, 0.95);
-  color: var(--docent-fg);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  color: var(--docent-body);
+  box-shadow: var(--docent-shadow);
 }
 
 .docent-legend-panel input,
 .docent-legend-panel select {
-  background: #26262c;
+  background: var(--docent-well);
   color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 5px 8px;
   font-size: 13px;
   font-family: inherit;
@@ -1044,18 +1298,19 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: #2a2a30;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 999px;
+  background: var(--docent-well);
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 4px 10px;
   font-size: 12px;
+  font-family: inherit;
   cursor: pointer;
 }
 
 .docent-legend-chip:hover {
-  border-color: #5d4b96;
-  background: #322b47;
+  border-color: var(--docent-accent-line);
+  color: var(--docent-fg);
 }
 
 .docent-legend-chip-attr {
@@ -1066,8 +1321,8 @@ body {
 .docent-legend-swatch {
   width: 14px;
   height: 14px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 2px;
+  border: 1px solid var(--docent-hairline-strong);
   flex: none;
 }
 
@@ -1076,13 +1331,14 @@ body {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--docent-radius-row);
+  background: var(--docent-well);
 }
 
 .docent-legend-chip.is-picked {
-  border-color: #7a63c4;
-  background: #3a3159;
+  border-color: var(--docent-accent-edge);
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-accent-text);
 }
 
 .docent-legend-pending {
@@ -1090,9 +1346,9 @@ body {
   flex-direction: column;
   gap: 6px;
   padding: 8px;
-  border-radius: 8px;
-  border: 1px dashed #5d4b96;
-  background: rgba(93, 75, 150, 0.12);
+  border-radius: var(--docent-radius-row);
+  border: 1px dashed var(--docent-accent-line);
+  background: var(--docent-accent-wash);
 }
 
 .docent-legend-pending-summary {
@@ -1101,7 +1357,7 @@ body {
 }
 
 .docent-legend-plus {
-  color: var(--docent-muted);
+  color: var(--docent-faint);
   width: 12px;
   text-align: center;
 }
@@ -1113,7 +1369,7 @@ body {
   justify-content: space-between;
   gap: 8px;
   padding-top: 4px;
-  border-top: 1px solid #2f2f36;
+  border-top: 1px solid var(--docent-hairline);
 }
 
 .docent-intent-status {
@@ -1122,16 +1378,18 @@ body {
 }
 
 .docent-intent-unsaved {
-  color: var(--docent-accent);
+  color: var(--docent-accent-text);
 }
 
 .docent-intent-save {
-  background: #4a3b78;
-  color: var(--docent-fg);
-  border: 1px solid #5d4b96;
-  border-radius: 6px;
+  background: var(--docent-accent);
+  color: var(--docent-accent-on);
+  border: 1px solid var(--docent-accent);
+  border-radius: var(--docent-radius-control);
   padding: 4px 10px;
   font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1141,7 +1399,7 @@ body {
 }
 
 .docent-logic {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--docent-font-mono);
   font-size: 12px;
   white-space: pre;
   resize: vertical;
@@ -1164,27 +1422,31 @@ body {
 }
 
 .docent-link-current button {
-  background: #26262c;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  background: var(--docent-well);
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 3px 8px;
   font-size: 11px;
+  font-family: inherit;
   cursor: pointer;
 }
 
 .docent-link-problem {
-  color: var(--docent-accent);
+  color: var(--docent-destructive-text);
 }
 
+/* The way back from a followed link (D96) — the one crumb that is a return
+   rather than a place, so it carries the accent's edge. */
 .docent-chip-back {
-  background: #dbeafe;
-  border-color: #bcd7fb;
-  color: #17457f;
+  background: var(--docent-accent-wash);
+  border-color: var(--docent-accent-edge);
+  color: var(--docent-accent-text);
 }
 
 .docent-chip-back:hover {
-  background: #c9e0fd;
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-accent-text);
 }
 
 /* The Plugins panel (S17, S18). */
@@ -1206,15 +1468,16 @@ body {
 }
 
 .docent-plugins-sub {
+  font-family: var(--docent-font-body);
   font-size: 12.5px;
   font-weight: 400;
-  opacity: 0.7;
+  color: var(--docent-muted);
 }
 
 .docent-plugins-sub a,
 .docent-plugin-links a,
 .docent-plugins-empty a {
-  color: #b197fc;
+  color: var(--docent-accent-text);
   text-decoration: none;
 }
 
@@ -1228,16 +1491,17 @@ body {
 .docent-chip {
   display: inline-block;
   padding: 1px 8px;
-  border-radius: 999px;
-  background: #2c2c34;
-  color: #c9c9d1;
+  border-radius: var(--docent-radius-control);
+  background: var(--docent-well);
+  color: var(--docent-body);
   font-size: 11.5px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--docent-font-mono);
 }
 
 .docent-chip.is-contract {
-  background: #2a2540;
-  color: #d0bfff;
+  background: var(--docent-accent-wash);
+  border-color: var(--docent-accent-edge);
+  color: var(--docent-accent-text);
 }
 
 .docent-status {
@@ -1245,11 +1509,11 @@ body {
   align-items: center;
   gap: 6px;
   padding: 1px 9px 1px 7px;
-  border-radius: 999px;
+  border-radius: var(--docent-radius-control);
   font-size: 11.5px;
   letter-spacing: 0.02em;
-  background: #2c2c34;
-  color: #c9c9d1;
+  background: var(--docent-well);
+  color: var(--docent-muted);
 }
 
 .docent-status-dot {
@@ -1259,18 +1523,22 @@ body {
   background: currentColor;
 }
 
+/* Three states, two colours and a pulse. The house has one accent and one
+   destructive (D107), so "running" takes the accent, "failed" the clay, and
+   "starting" stays neutral and says so by blinking rather than by adding a
+   third hue nothing else in the app uses. */
 .docent-status.is-on {
-  background: #153a2c;
-  color: #69db7c;
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-accent-text);
 }
 
 .docent-status.is-on .docent-status-dot {
-  box-shadow: 0 0 0 3px rgba(105, 219, 124, 0.18);
+  box-shadow: 0 0 0 3px var(--docent-accent-wash);
 }
 
 .docent-status.is-wait {
-  background: #3a2f12;
-  color: #ffd43b;
+  background: var(--docent-well);
+  color: var(--docent-body);
 }
 
 .docent-status.is-wait .docent-status-dot {
@@ -1278,8 +1546,8 @@ body {
 }
 
 .docent-status.is-bad {
-  background: #3d1b1b;
-  color: #ff8787;
+  background: var(--docent-destructive-wash);
+  color: var(--docent-destructive);
 }
 
 @keyframes docent-blink {
@@ -1308,7 +1576,8 @@ body {
   width: 40px;
   height: 22px;
   border-radius: 999px;
-  background: #3a3a44;
+  background: var(--docent-well);
+  border: 1px solid var(--docent-hairline-strong);
   transition: background 0.15s ease;
   position: relative;
 }
@@ -1317,24 +1586,25 @@ body {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--docent-body);
   transition: transform 0.15s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 
 .docent-switch input:checked + .docent-switch-track {
-  background: #7048e8;
+  background: var(--docent-accent);
+  border-color: var(--docent-accent);
 }
 
 .docent-switch input:checked + .docent-switch-track .docent-switch-thumb {
+  background: var(--docent-accent-on);
   transform: translateX(18px);
 }
 
 .docent-switch input:focus-visible + .docent-switch-track {
-  outline: 2px solid #b197fc;
+  outline: 2px solid var(--docent-accent);
   outline-offset: 2px;
 }
 
@@ -1348,13 +1618,14 @@ body {
   display: flex;
   gap: 14px;
   padding: 14px 16px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, #26223a, #202026 60%);
-  border: 1px solid #3a3350;
+  border-radius: var(--docent-radius-row);
+  background: var(--docent-well);
+  border: 1px solid var(--docent-hairline);
 }
 
 .docent-voice-card.is-on {
-  border-color: #2f6b47;
+  border-color: var(--docent-accent-edge);
+  background: var(--docent-accent-wash);
 }
 
 .docent-plugin-icon {
@@ -1363,13 +1634,14 @@ body {
   flex: none;
   display: grid;
   place-items: center;
-  border-radius: 10px;
-  background: #2c2c34;
+  border-radius: var(--docent-radius-control);
+  background: var(--docent-raised);
+  border: 1px solid var(--docent-hairline);
   font-size: 20px;
 }
 
 .docent-voice-icon {
-  background: #33295a;
+  border-color: var(--docent-accent-edge);
 }
 
 .docent-voice-body {
@@ -1389,7 +1661,7 @@ body {
 .docent-voice-hint {
   margin: 0;
   font-size: 12.5px;
-  opacity: 0.75;
+  color: var(--docent-muted);
   line-height: 1.45;
 }
 
@@ -1409,13 +1681,13 @@ body {
 }
 
 .docent-kbd {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--docent-font-mono);
   font-size: 11px;
   padding: 1px 6px;
-  border-radius: 5px;
-  border: 1px solid #4a4a55;
-  background: #1c1c21;
-  opacity: 0.8;
+  border-radius: var(--docent-radius-control);
+  border: 1px solid var(--docent-hairline-strong);
+  background: var(--docent-well);
+  color: var(--docent-muted);
 }
 
 .docent-voice-pick {
@@ -1426,12 +1698,13 @@ body {
 }
 
 .docent-voice-pick select {
-  background: #26262c;
+  background: var(--docent-well);
   color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
+  border: 1px solid var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-control);
   padding: 5px 8px;
   font-size: 13px;
+  font-family: inherit;
   max-width: 220px;
 }
 
@@ -1463,17 +1736,16 @@ body {
   align-items: center;
   justify-content: space-between;
   margin: 0;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  opacity: 0.75;
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--docent-fg);
 }
 
 .docent-plugin-card {
-  border: 1px solid #2e2e36;
-  border-radius: 12px;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-row);
   padding: 12px 14px;
-  background: #202026;
+  background: var(--docent-well);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1481,11 +1753,11 @@ body {
 }
 
 .docent-plugin-card.is-on {
-  border-color: #2f6b47;
+  border-color: var(--docent-accent-edge);
 }
 
 .docent-plugin-card.is-bad {
-  border-color: #6b2f2f;
+  border-color: var(--docent-destructive-edge);
 }
 
 .docent-plugin-card-head {
@@ -1523,7 +1795,7 @@ body {
 .docent-plugin-problem {
   margin: 0;
   font-size: 12.5px;
-  color: #ff8787;
+  color: var(--docent-destructive-text);
   overflow-wrap: anywhere;
 }
 
@@ -1540,13 +1812,13 @@ body {
 }
 
 .docent-plugin-license dt {
-  opacity: 0.6;
+  color: var(--docent-muted);
   text-transform: capitalize;
 }
 
 .docent-plugin-license dd {
   margin: 0;
-  opacity: 0.85;
+  color: var(--docent-body);
   overflow-wrap: anywhere;
 }
 
@@ -1555,27 +1827,28 @@ body {
   flex-wrap: wrap;
   gap: 6px 14px;
   font-size: 12px;
-  opacity: 0.8;
+  color: var(--docent-muted);
   min-width: 0;
 }
 
 .docent-plugin-links code,
 .docent-plugins-path {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: var(--docent-font-mono);
   font-size: 11.5px;
-  background: #1c1c21;
+  background: var(--docent-raised);
+  border: 1px solid var(--docent-hairline);
   padding: 1px 6px;
-  border-radius: 5px;
+  border-radius: var(--docent-radius-control);
   overflow-wrap: anywhere;
 }
 
 .docent-plugin-log {
-  opacity: 0.7;
+  color: var(--docent-muted);
 }
 
 .docent-plugins-empty {
-  border: 1px dashed #3a3a42;
-  border-radius: 12px;
+  border: 1px dashed var(--docent-hairline-strong);
+  border-radius: var(--docent-radius-row);
   padding: 14px 16px;
   font-size: 13px;
   line-height: 1.5;
@@ -1588,25 +1861,29 @@ body {
 .docent-plugins-where {
   margin: 0;
   font-size: 12px;
-  opacity: 0.7;
+  color: var(--docent-muted);
 }
 
-/* Agent at work (S19, D61): the orange frame says whose turn it is. */
+/* Agent at work (S19, D61): the frame says whose turn it is. It keeps its
+   orange identity — this is the one moment the app raises its voice — but
+   harmonized into the accent family (D107): the bronze the house already
+   spends, at full strength, rather than a safety-cone orange borrowed from
+   nowhere. The pulse still carries the "something is happening". */
 .docent-agent-frame {
   position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 14;
-  border: 5px solid #f76707;
-  border-radius: 4px;
-  box-shadow: inset 0 0 28px rgba(247, 103, 7, 0.35);
+  border: 5px solid var(--docent-accent);
+  border-radius: var(--docent-radius-row);
+  box-shadow: inset 0 0 28px var(--docent-accent-wash-strong);
   animation: docent-agent-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes docent-agent-pulse {
   50% {
-    border-color: #ffa94d;
-    box-shadow: inset 0 0 40px rgba(255, 169, 77, 0.45);
+    border-color: var(--docent-accent-text);
+    box-shadow: inset 0 0 40px var(--docent-accent-wash-strong);
   }
 }
 
@@ -1616,13 +1893,13 @@ body {
   left: 50%;
   transform: translateX(-50%);
   padding: 6px 14px;
-  border-radius: 999px;
-  background: #f76707;
-  color: #fff;
+  border-radius: var(--docent-radius-control);
+  background: var(--docent-accent);
+  color: var(--docent-accent-on);
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--docent-shadow);
 }
 
 /* The trunk lock (D104): the same view-only canvas the agent frame uses, said
@@ -1637,32 +1914,39 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(27, 27, 31, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: var(--docent-fg);
+  padding: 8px 12px;
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  color: var(--docent-body);
   font-size: 13px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--docent-shadow);
 }
 
 .docent-trunk-lock-text code {
+  font-family: var(--docent-font-mono);
   font-size: 12px;
+  color: var(--docent-accent-text);
 }
 
+/* The way out of the lock is the sentence's verb, so it is the one filled
+   thing on the strip (D104, D107). */
 .docent-trunk-lock button {
-  background: #2a2a30;
-  color: var(--docent-fg);
-  border: 1px solid #3a3a42;
-  border-radius: 6px;
-  padding: 3px 10px;
+  background: var(--docent-accent);
+  color: var(--docent-accent-on);
+  border: 1px solid var(--docent-accent);
+  border-radius: var(--docent-radius-control);
+  padding: 5px 14px;
   font-size: 12px;
   font-family: inherit;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   cursor: pointer;
 }
 
-.docent-trunk-lock button:hover:not(:disabled) {
-  border-color: #5a5a66;
+.docent-trunk-lock button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .docent-agent-report {
@@ -1673,14 +1957,17 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: rgba(27, 27, 31, 0.92);
-  border: 1px solid #f76707;
-  color: var(--docent-fg);
+  padding: 9px 16px;
+  border-radius: var(--docent-radius-row);
+  background: var(--docent-surface);
+  border: 1px solid var(--docent-hairline);
+  /* Whose line this is, said in one rule down the side rather than a frame
+     all the way round: the agent has finished, it is only reporting. */
+  border-left: 2px solid var(--docent-accent);
+  color: var(--docent-body);
   z-index: 12;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
-  font-size: 13px;
+  box-shadow: var(--docent-shadow);
+  font-size: 12.5px;
   line-height: 1.4;
 }
 
@@ -1688,4 +1975,72 @@ body {
   flex: 1;
   min-width: 0;
   white-space: pre-wrap;
+  letter-spacing: 0.01em;
+}
+
+/* ── The borderless window (D108) ──────────────────────────────────────────
+   On macOS the title bar is an overlay, so the canvas paints to the window's
+   edge and the traffic lights float over the top-left of the page. App.tsx
+   marks the app root `docent-overlay-titlebar` exactly when the shell is a
+   macOS desktop window; the web app and the Windows/Linux builds keep their
+   native frames and none of this applies.
+
+   Two things follow: the top-left islands move clear of the lights, and the
+   window keeps somewhere to be dragged by. */
+.docent-overlay-titlebar {
+  --docent-safe-left: 80px;
+}
+
+/*
+ * What actually sits under the lights is upstream's own top-left cluster —
+ * the menu button and the shape panel beneath it — and Excalidraw already has
+ * a name for "this many pixels down the left edge are not yours to draw in":
+ * `--sal`, its safe-area-inset-left, which its own `FixedSideContainer` and
+ * `App-bottom-bar` pad themselves by. So the traffic lights are declared to
+ * upstream as what they are — an unusable strip — and upstream lays itself
+ * out around them. That is tuning through the custom property it exposes,
+ * which is the only way Docent is allowed to touch its surfaces (I1); no
+ * selector reaches into its markup, and the value composes with any real
+ * device inset rather than replacing it.
+ */
+.docent-overlay-titlebar .excalidraw {
+  --sal: calc(env(safe-area-inset-left, 0px) + var(--docent-safe-left));
+}
+
+/* Docent's own top-left island keeps the same clearance. */
+.docent-overlay-titlebar .docent-legend-panel {
+  left: calc(12px + var(--docent-safe-left));
+}
+
+/*
+ * Somewhere to move the window by. A slim strip along the very top: every
+ * island begins 16px down, so at 14px tall this covers none of them and never
+ * has to out-rank anything to stay grabbable. What actually does the dragging
+ * is the `data-tauri-drag-region` attribute App.tsx puts on the same element,
+ * which the shell reads natively; `-webkit-app-region` is the belt to that
+ * braces, for the webviews that honour it. In a browser the element is never
+ * rendered at all.
+ */
+.docent-titlebar-drag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 14px;
+  z-index: 45;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* Undo is the offer, not the point: an accent outline, never a fill. */
+.docent-agent-report button:not(.docent-narration-close) {
+  background: none;
+  color: var(--docent-accent-text);
+  border: 1px solid var(--docent-accent-line);
+  border-radius: var(--docent-radius-control);
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 500;
+  cursor: pointer;
 }

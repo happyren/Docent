@@ -795,12 +795,26 @@ pub fn run() {
                 ));
             }
 
-            WebviewWindowBuilder::new(&handle, "main", WebviewUrl::App("index.html".into()))
-                .title("Docent")
-                .inner_size(1440.0, 900.0)
-                .min_inner_size(960.0, 640.0)
-                .initialization_script(script.as_str())
-                .build()?;
+            let builder =
+                WebviewWindowBuilder::new(&handle, "main", WebviewUrl::App("index.html".into()))
+                    .title("Docent")
+                    .inner_size(1440.0, 900.0)
+                    .min_inner_size(960.0, 640.0)
+                    .initialization_script(script.as_str());
+            // The window is borderless (D108): on macOS the title bar becomes an
+            // overlay, so the canvas paints to the window's edge and the traffic
+            // lights float over it — the title itself hidden, because the paper
+            // is the app and the file name is already in the chrome. The page
+            // keeps its top-left islands clear of the lights (see the safe-area
+            // inset in styles.css) and gives the window a drag strip to move by.
+            //
+            // Windows and Linux keep their native frames: a custom frame there
+            // buys sameness at the cost of every windowing convention.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+            builder.build()?;
 
             // With the store up and the window built, ask GitHub whether there
             // is a newer release — on a background thread, at most once a day,

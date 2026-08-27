@@ -56,6 +56,16 @@ const isDesktop = Boolean(
 );
 
 /**
+ * The borderless window (D108) is a macOS-only arrangement: only there does
+ * the shell build the window with an overlay title bar, so only there do the
+ * traffic lights float over the page and only there does the chrome owe them
+ * a safe area. The two sides agree by construction — the Rust builder is
+ * `#[cfg(target_os = "macos")]` and a macOS build runs in a macOS webview —
+ * so this needs no flag of its own from the shell.
+ */
+const hasOverlayTitleBar = isDesktop && /Mac/.test(navigator.userAgent);
+
+/**
  * Actions the native menu bar can invoke, in menu-bar order. The ids are the
  * contract with the Rust menu (src-tauri/src/lib.rs) — change one side and the
  * other must follow.
@@ -153,6 +163,19 @@ export function App() {
   // the desktop menu checkbox — which starts checked and toggles itself —
   // always agrees with the page without a page→shell channel.
   const [detailMarkers, setDetailMarkers] = useState(true);
+
+  /**
+   * The chrome wears the house, in the theme the canvas is already in (D107).
+   * Excalidraw owns the switch — its "Dark mode" item — and the adapter is the
+   * one place appState may be read (B1), so the theme arrives here as a
+   * callback and is written straight onto the document element, where the
+   * token blocks in styles.css key off it. Everything Docent draws, modals
+   * included, is inside that element, so one attribute dresses the whole app.
+   */
+  const [canvasTheme, setCanvasTheme] = useState<"light" | "dark">("light");
+  useEffect(() => {
+    document.documentElement.dataset.docentTheme = canvasTheme;
+  }, [canvasTheme]);
 
   const [narration, setNarration] = useState<string | null>(null);
   // Fake-zoom sink: scales the Excalidraw canvas elements and the overlay
@@ -1367,7 +1390,20 @@ export function App() {
         }`;
 
   return (
-    <div className={isDesktop ? "docent-app docent-desktop" : "docent-app"}>
+    <div
+      className={[
+        "docent-app",
+        isDesktop ? "docent-desktop" : "",
+        hasOverlayTitleBar ? "docent-overlay-titlebar" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {/* Somewhere to move a borderless window by (D108): a strip along the
+          very top, above the canvas and clear of every island. */}
+      {hasOverlayTitleBar && (
+        <div className="docent-titlebar-drag" data-tauri-drag-region />
+      )}
       <main
         className="docent-canvas"
         ref={(el) => {
@@ -1378,6 +1414,7 @@ export function App() {
           onReady={handleReady}
           onDocumentChange={handleDocumentChange}
           onSelectionChange={setSelectedIds}
+          onThemeChange={setCanvasTheme}
           menuActions={{
             onOpen: () => void openScene(),
             onSave: () => void saveScene(),

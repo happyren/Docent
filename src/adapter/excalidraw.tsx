@@ -713,6 +713,14 @@ export interface ExcalidrawCanvasProps {
   /** Fires when document content changes (viewport-only changes are filtered out). */
   onDocumentChange?: (fingerprint: number) => void;
   onSelectionChange?: (selectedIds: string[]) => void;
+  /**
+   * The canvas's own light/dark, reported when it is first known and whenever
+   * the person changes it from upstream's "Dark mode" item (D107). The theme
+   * lives in Excalidraw's `appState`, which only the adapter may read (B1) —
+   * and it is pushed rather than polled because a theme change moves no
+   * elements, so `onDocumentChange` never fires for it.
+   */
+  onThemeChange?: (theme: "light" | "dark") => void;
   menuActions: SceneMenuActions;
   /**
    * Drop Docent's own entries from the hamburger menu, leaving only
@@ -2531,6 +2539,7 @@ export function ExcalidrawCanvas({
   onReady,
   onDocumentChange,
   onSelectionChange,
+  onThemeChange,
   menuActions,
   hideDocentMenuItems = false,
   detailMarkersVisible = true,
@@ -2541,6 +2550,7 @@ export function ExcalidrawCanvas({
   useEffect(() => () => fontWatchRef.current?.(), []);
   const lastFingerprintRef = useRef(0);
   const lastSelectionRef = useRef("");
+  const lastThemeRef = useRef<string | null>(null);
   const lazyLibrariesRef = useRef(false);
 
   // Right-click export (D32): let upstream open its own menu, then append
@@ -2613,10 +2623,15 @@ export function ExcalidrawCanvas({
       );
       fontWatchRef.current?.();
       fontWatchRef.current = watchFonts(api);
+      // What the canvas came up in, before the first change (D107) — the
+      // chrome should never be dressed in the other theme for a frame.
+      const theme = api.getAppState().theme;
+      lastThemeRef.current = theme;
+      onThemeChange?.(theme === "dark" ? "dark" : "light");
       onReady?.(makeHandle(api));
       void loadBundledLibraries(api, (library) => library.eager);
     },
-    [onReady],
+    [onReady, onThemeChange],
   );
 
   const handleChange = useCallback(() => {
@@ -2634,6 +2649,13 @@ export function ExcalidrawCanvas({
       lazyLibrariesRef.current = true;
       void loadBundledLibraries(api, (library) => !library.eager);
     }
+    // The chrome follows the canvas (D107). The theme lives in appState and
+    // nowhere else, and changing it moves no elements — so onDocumentChange
+    // never fires for it and this is the only place it can be observed.
+    if (appState.theme !== lastThemeRef.current) {
+      lastThemeRef.current = appState.theme;
+      onThemeChange?.(appState.theme === "dark" ? "dark" : "light");
+    }
     const selected = appState.selectedElementIds;
     const ids = Object.keys(selected).filter((id) => selected[id]);
     const key = ids.slice().sort().join(" ");
@@ -2641,7 +2663,7 @@ export function ExcalidrawCanvas({
       lastSelectionRef.current = key;
       onSelectionChange?.(ids);
     }
-  }, [onDocumentChange, onSelectionChange]);
+  }, [onDocumentChange, onSelectionChange, onThemeChange]);
 
   return (
     <Excalidraw
