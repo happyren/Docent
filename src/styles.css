@@ -65,6 +65,7 @@
   /* Bronze. `accent` fills and draws; `accent-text` is its brighter form, for
      accent set as text on a dark ground; `accent-on` is what sits on a fill. */
   --docent-accent: #c08a3e;
+  --docent-accent-deep: #a97428;
   --docent-accent-text: #d9a75c;
   --docent-accent-on: #1c1a18;
   --docent-accent-line: rgba(192, 138, 62, 0.45);
@@ -129,6 +130,7 @@
   --docent-faint: #a49b8b;
 
   --docent-accent: #9a6b1f;
+  --docent-accent-deep: #7d5514;
   --docent-accent-text: #9a6b1f;
   --docent-accent-on: #faf8f4;
   --docent-accent-line: rgba(154, 107, 31, 0.4);
@@ -679,6 +681,12 @@ body {
   grid-template-columns: 240px 1fr;
   gap: 14px;
   min-height: 320px;
+  /* When the window squeezes the modal, overflow is scrolled, never painted
+     over the actions row below (buttons went half-dead under an invisible
+     sibling there). */
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .docent-portfolio-projects,
@@ -687,7 +695,13 @@ body {
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  /* In a short window this column gives ground; the tree below scrolls and
+     the action rows keep their place on screen (D102 is pointless if the
+     verbs can slide out of reach). */
+  min-height: 0;
+  overflow: hidden;
 }
+
 
 /* A structural divide between two halves of the modal, so it is the one rule
    that is drawn rather than whispered. */
@@ -1080,6 +1094,10 @@ body {
 .docent-portfolio-tree {
   flex: 1;
   overflow-y: auto;
+  /* The one value that lets a flex child actually give ground in a short
+     window — without it the column overflows and the sync verbs slide
+     under the actions row (their top halves went dead there). */
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2043,4 +2061,68 @@ body {
   font-family: inherit;
   font-weight: 500;
   cursor: pointer;
+}
+
+/* ------------------------------------------------------------------------
+   Excalidraw wears the house too (D107, I1): everything below goes through
+   the theme variables upstream publishes — no selector reaches into its
+   markup. Light is Porcelain, dark is Atelier; the canvas itself keeps
+   Excalidraw's own rendering.
+   --------------------------------------------------------------------- */
+.excalidraw {
+  --color-primary: var(--docent-accent);
+  --color-primary-darker: var(--docent-accent-deep);
+  --color-primary-darkest: #6b4712;
+  --color-primary-hover: var(--docent-accent-deep);
+  --color-primary-light: var(--docent-accent-wash);
+  --color-primary-light-darker: var(--docent-accent-wash-strong);
+  --color-surface-primary-container: var(--docent-accent-wash);
+  --color-on-primary-container: var(--docent-accent-text);
+  --island-bg-color: rgba(250, 248, 244, 0.96);
+  --sidebar-bg-color: #faf8f4;
+  --popup-bg-color: #faf8f4;
+  --popup-secondary-bg-color: #f4f1ea;
+  --popup-text-color: #26231e;
+  --text-primary-color: #26231e;
+  --default-bg-color: #f7f5f1;
+  --button-hover-bg: #f4f1ea;
+  --button-active-bg: #efeae0;
+  --sidebar-border-color: #e3ded2;
+  --color-border-outline: #d8d2c4;
+  --color-border-outline-variant: #e3ded2;
+  --shadow-island: var(--docent-shadow);
+  --modal-shadow: var(--docent-shadow);
+  --sidebar-shadow: var(--docent-shadow);
+  --color-danger-color: var(--docent-destructive);
+  --color-danger-background: var(--docent-destructive-wash);
+}
+
+/* Doubled class: upstream sets its dark variables at .excalidraw.theme--dark
+   and loads after this sheet, so an equal selector loses the tie. */
+.excalidraw.theme--dark.theme--dark {
+  --color-primary: var(--docent-accent);
+  --color-primary-darker: var(--docent-accent-deep);
+  --color-primary-darkest: #8a5f22;
+  --color-primary-hover: var(--docent-accent-text);
+  --color-primary-light: var(--docent-accent-wash);
+  --color-primary-light-darker: var(--docent-accent-wash-strong);
+  --color-surface-primary-container: var(--docent-accent-wash-strong);
+  --color-on-primary-container: var(--docent-accent-text);
+  --shadow-island: var(--docent-shadow);
+  --modal-shadow: var(--docent-shadow);
+  --sidebar-shadow: var(--docent-shadow);
+  --color-danger-color: var(--docent-destructive);
+  --color-danger-background: var(--docent-destructive-wash);
+  --island-bg-color: rgba(28, 26, 24, 0.97);
+  --sidebar-bg-color: #1c1a18;
+  --popup-bg-color: #26231f;
+  --popup-secondary-bg-color: #1c1a18;
+  --popup-text-color: #efeae2;
+  --text-primary-color: #efeae2;
+  --default-bg-color: #1c1a18;
+  --button-hover-bg: #26231f;
+  --button-active-bg: #3a352e;
+  --sidebar-border-color: rgba(233, 228, 220, 0.12);
+  --color-border-outline: rgba(233, 228, 220, 0.16);
+  --color-border-outline-variant: rgba(233, 228, 220, 0.09);
 }
