@@ -668,6 +668,8 @@ describe("GitHub binding", () => {
       // that learned the write bit (D28).
       baseBranch: "main",
       apiBase: github.base,
+      // The trunk lock (D104) is off unless the binding asked for one.
+      protected: false,
       hasToken: true,
       canWrite: true,
       // Review artifacts (D49) are off until a team asks.
@@ -735,6 +737,7 @@ describe("GitHub binding", () => {
       branch: "main",
       baseBranch: "main",
       apiBase: "https://api.github.com",
+      protected: false,
       hasToken: false,
       canWrite: null,
       review: { images: false, sidecars: false },
@@ -744,8 +747,52 @@ describe("GitHub binding", () => {
     await fetch(`${BASE}/api/projects/defaults`, { method: "DELETE" });
   });
 
+  /**
+   * The trunk lock (D104) is a field the store carries and nothing more: in on
+   * the PUT, into the dotfile only when it is on, back out on the GET — and
+   * the desktop store's suite asserts the same three things.
+   */
+  it("carries the trunk lock both ways, and writes it only when it is on", async () => {
+    await fetch(`${BASE}/api/projects/locked`, { method: "PUT" });
+    expect((await bind("locked", { protected: true })).status).toBe(200);
+    const bound = (await (
+      await fetch(`${BASE}/api/projects/locked/binding`)
+    ).json()) as { protected: boolean };
+    expect(bound.protected).toBe(true);
+    const bindings = JSON.parse(
+      await readFile(path.join(dataDir, ".docent", "bindings.json"), "utf8"),
+    ) as Record<string, { protected?: boolean }>;
+    expect(bindings.locked.protected).toBe(true);
+
+    // A PUT that says nothing about it keeps it — which is what makes
+    // switching branches a PUT of `{ branch }` and nothing else.
+    expect((await bind("locked", { path: "docs" })).status).toBe(200);
+    expect(
+      ((await (await fetch(`${BASE}/api/projects/locked/binding`)).json()) as {
+        protected: boolean;
+      }).protected,
+    ).toBe(true);
+
+    // Off again writes no field at all, so an unprotected binding is the same
+    // bytes it was before D104 existed.
+    expect((await bind("locked", { protected: false })).status).toBe(200);
+    expect(
+      ((await (await fetch(`${BASE}/api/projects/locked/binding`)).json()) as {
+        protected: boolean;
+      }).protected,
+    ).toBe(false);
+    const unlocked = JSON.parse(
+      await readFile(path.join(dataDir, ".docent", "bindings.json"), "utf8"),
+    ) as Record<string, Record<string, unknown>>;
+    expect("protected" in unlocked.locked).toBe(false);
+
+    await fetch(`${BASE}/api/projects/locked/binding`, { method: "DELETE" });
+    await fetch(`${BASE}/api/projects/locked`, { method: "DELETE" });
+  });
+
   it("refuses bindings it cannot trust", async () => {
     const cases: [Record<string, unknown>, string][] = [
+      [{ owner: "acme", repo: "diagrams", protected: "yes" }, "invalid protected"],
       [{ owner: "-bad", repo: "diagrams" }, "invalid owner"],
       [{ owner: "acme", repo: "" }, "invalid repo"],
       [{ owner: "acme", repo: "diagrams", path: "../etc" }, "invalid path"],

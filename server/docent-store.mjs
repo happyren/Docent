@@ -34,7 +34,7 @@
  *   GET    /api/projects                        → [{ id, scenes, updatedAt, bound?, canWrite? }]
  *   PUT    /api/projects/:project               → { id }            (create)
  *   DELETE /api/projects/:project               → { ok }            (recursive)
- *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, baseBranch, apiBase, hasToken, canWrite }
+ *   GET    /api/projects/:project/binding       → { owner, repo, path, branch, baseBranch, apiBase, protected, hasToken, canWrite }
  *   PUT    /api/projects/:project/binding       → { ok, canWrite, baseBranch, warning?, pulled? }  (token write-only)
  *   DELETE /api/projects/:project/binding       → { ok }            (working copy stays)
  *   GET    /api/projects/:project/branches      → [{ name, isBase, isActive }]
@@ -468,6 +468,10 @@ const publicBinding = (binding, hasToken) => ({
   branch: binding.branch,
   baseBranch: baseBranchOf(binding),
   apiBase: binding.apiBase,
+  // Whether the base branch is locked (D104). Stored only when it is on, so
+  // absent reads as false — every binding written before this is unprotected,
+  // exactly as it behaved.
+  protected: binding.protected === true,
   hasToken,
   canWrite: typeof binding.canWrite === "boolean" ? binding.canWrite : null,
   // What this binding sends to GitHub beside the scenes (D49) — both off
@@ -575,7 +579,16 @@ function normalizeBinding(input) {
     }
     review = { images: input.review.images === true, sidecars: input.review.sidecars === true };
   }
-  return { owner, repo, path: repoPath, branch, baseBranch, apiBase, review };
+  // The trunk lock (D104): absent keeps whatever is stored, so switching
+  // branches — a PUT of `{ branch }` and nothing else — never unlocks anything.
+  let locked = null;
+  if (input.protected !== undefined && input.protected !== null) {
+    if (typeof input.protected !== "boolean") {
+      throw bad("invalid protected — true or false");
+    }
+    locked = input.protected;
+  }
+  return { owner, repo, path: repoPath, branch, baseBranch, apiBase, protected: locked, review };
 }
 
 /** Optional on update: absent or empty means "keep whatever is stored". */
@@ -642,6 +655,9 @@ async function putBinding(project, body) {
       : "") ||
     probe.defaultBranch ||
     branch;
+  // The lock is sticky the way the base and the review flags are: what the
+  // client stated, else what this binding already recorded (D104).
+  const locked = requested.protected ?? stored?.protected === true;
   // Field order is the order the desktop store's struct declares, so the
   // dotfile stays byte-comparable across the two implementations. Unknown
   // `canWrite` is stored as an absent field rather than an explicit null, so a
@@ -653,6 +669,9 @@ async function putBinding(project, body) {
     branch,
     baseBranch,
     apiBase: requested.apiBase,
+    // Stored only when the lock is on, so a binding that never asked for one
+    // is the same bytes it always was.
+    ...(locked ? { protected: true } : {}),
     ...(probe.canWrite === null ? {} : { canWrite: probe.canWrite }),
   };
   // Stored only when a flag is on, so a binding that never asked for

@@ -875,6 +875,12 @@ fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
         .review
         .or_else(|| bindings.get(project).and_then(|stored| stored.review))
         .filter(|review| review.any());
+    // The trunk lock (D104), on the same terms: absent keeps what was
+    // recorded, and only an on lock is written down.
+    binding.protected = binding
+        .protected
+        .or_else(|| bindings.get(project).and_then(|stored| stored.protected))
+        .filter(|on| *on);
     bindings.insert(project.to_string(), binding);
     github::save_bindings(&context.data_dir, &bindings).map_err(internal)?;
     if let Some(token) = new_token {

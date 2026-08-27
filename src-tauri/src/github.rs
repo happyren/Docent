@@ -114,6 +114,11 @@ pub struct Binding {
     pub base_branch: Option<String>,
     #[serde(rename = "apiBase")]
     pub api_base: String,
+    /// Whether the base branch is locked (D104). Stored only when the lock is
+    /// on — `None` is the unprotected default every binding written before this
+    /// keeps — so the dotfile stays byte-equal to the reference store's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protected: Option<bool>,
     /// What the last bind-time probe learned about writing to this repository.
     /// Absent means nothing has been learned — a binding written before this
     /// existed, one stored without a token, or a probe that could not reach
@@ -156,6 +161,7 @@ pub struct PublicBinding<'a> {
     base_branch: &'a str,
     #[serde(rename = "apiBase")]
     api_base: &'a str,
+    protected: bool,
     #[serde(rename = "hasToken")]
     has_token: bool,
     #[serde(rename = "canWrite")]
@@ -172,6 +178,7 @@ impl Binding {
             branch: &self.branch,
             base_branch: self.base(),
             api_base: &self.api_base,
+            protected: self.protected == Some(true),
             has_token,
             can_write: self.can_write,
             review: self.review.unwrap_or_default(),
@@ -411,6 +418,14 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
             ))
         }
     };
+    // The trunk lock (D104): absent keeps whatever is stored, so switching
+    // branches — a PUT of `{ branch }` and nothing else — never unlocks
+    // anything.
+    let protected = match input.get("protected") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Bool(on)) => Some(*on),
+        Some(_) => return Err(Failure::bad("invalid protected — true or false")),
+    };
     Ok(Binding {
         owner,
         repo,
@@ -418,6 +433,7 @@ pub fn normalize_binding(input: &serde_json::Value) -> Result<Binding> {
         branch,
         base_branch,
         api_base,
+        protected,
         // Never taken from the request body: only a probe may set this.
         can_write: None,
         review,
@@ -1474,6 +1490,7 @@ mod tests {
             branch: "main".into(),
             base_branch: None,
             api_base: "https://api.github.com".into(),
+            protected: None,
             can_write: None,
             review: None,
         }
@@ -1577,6 +1594,50 @@ mod tests {
             assert_eq!(err.status, 400);
             assert!(err.message.starts_with(expected), "{}", err.message);
         }
+    }
+
+    /// The trunk lock (D104) is a passthrough: taken from the body, written
+    /// only when it is on, and answered as a plain boolean.
+    #[test]
+    fn protection_is_stored_only_when_it_is_on_and_always_answered() {
+        let minimal = normalize_binding(&serde_json::json!({ "owner": "acme", "repo": "r" }))
+            .expect("minimal binding");
+        assert_eq!(minimal.protected, None, "absent stays absent");
+        for (body, expected) in [
+            (serde_json::json!({"owner":"a","repo":"r","protected":true}), Some(true)),
+            (serde_json::json!({"owner":"a","repo":"r","protected":false}), Some(false)),
+            (serde_json::json!({"owner":"a","repo":"r","protected":null}), None),
+        ] {
+            assert_eq!(normalize_binding(&body).expect("binding").protected, expected);
+        }
+        let err = normalize_binding(&serde_json::json!({"owner":"a","repo":"r","protected":"yes"}))
+            .expect_err("refused");
+        assert_eq!(err.status, 400);
+        assert!(err.message.starts_with("invalid protected"), "{}", err.message);
+
+        // On disk: absent unless the lock is on, so an unprotected binding is
+        // the same bytes the reference store writes.
+        let mut binding = binding("docs");
+        assert!(!serde_json::to_string(&binding).unwrap().contains("protected"));
+        binding.protected = Some(true);
+        let json = serde_json::to_string(&binding).unwrap();
+        assert!(json.contains(r#""apiBase":"https://api.github.com","protected":true"#), "{json}");
+        assert_eq!(
+            serde_json::from_str::<Binding>(&json).unwrap().protected,
+            Some(true),
+            "and it round-trips",
+        );
+
+        // …while the API answers it either way.
+        assert_eq!(
+            serde_json::to_value(binding.public(true)).unwrap()["protected"],
+            serde_json::json!(true)
+        );
+        binding.protected = None;
+        assert_eq!(
+            serde_json::to_value(binding.public(true)).unwrap()["protected"],
+            serde_json::json!(false)
+        );
     }
 
     #[test]
