@@ -694,6 +694,7 @@ export interface SceneMenuActions {
   onOpenLegend: () => void;
   onExportMermaid: () => void;
   onExportSidecar: () => void;
+  onExportPdf: () => void;
   onArrangeTiers: () => void;
   /** The formatter (S20, D73) — re-lays out what is in scope, meaning untouched. */
   onTidy: () => void;
@@ -2680,6 +2681,9 @@ export function ExcalidrawCanvas({
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onExportSidecar}>
               Export semantic JSON…
+            </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onExportPdf}>
+              Export PDF…
             </MainMenu.Item>
             <MainMenu.Item onSelect={menuActions.onArrangeTiers}>
               Arrange detail tiers

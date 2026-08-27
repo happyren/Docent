@@ -90,6 +90,16 @@ export function downloadSceneFile(name: string, contents: string): void {
   URL.revokeObjectURL(url);
 }
 
+/** The binary twin of `downloadSceneFile` — a PDF is bytes, not text (D105). */
+export function downloadBinaryFile(name: string, contents: Uint8Array, mime: string): void {
+  const url = URL.createObjectURL(new Blob([contents as unknown as BlobPart], { type: mime }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 export function ensureExtension(name: string): string {
   return name.endsWith(".excalidraw") ? name : `${name}.excalidraw`;
 }

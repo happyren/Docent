@@ -6,10 +6,11 @@ import { connectDesktopAgentBridge } from "../agent/desktopBridge";
 import { UNSAVED_CHANGES, type AgentShellHooks } from "../agent/execute";
 import { CameraEngine } from "../camera/engine";
 import { CommandAPI } from "../command/api";
-import { exportFrameSidecar, exportScene, type ExportContext } from "../export";
+import { exportFrameSidecar, exportPdf, exportScene, type ExportContext } from "../export";
 import { OverlayLayer } from "../overlay/OverlayLayer";
 import { OverlayStore } from "../overlay/state";
 import {
+  downloadBinaryFile,
   downloadSceneFile,
   ensureExtension,
   pickSaveTarget,
@@ -569,6 +570,15 @@ export function App() {
     const { sidecar } = exportScene(canvasHandle.getSceneSnapshot(), exportContext());
     downloadSceneFile(`${exportBaseName}.docent.json`, sidecar);
   }, [exportBaseName, exportContext]);
+
+  // One page per frame, the outline as the table of contents (D105).
+  const exportPdfFile = useCallback(() => {
+    const canvasHandle = canvasRef.current;
+    if (!canvasHandle) return;
+    void exportPdf(canvasHandle, canvasHandle.getSceneSnapshot(), exportBaseName)
+      .then((bytes) => downloadBinaryFile(`${exportBaseName}.pdf`, bytes, "application/pdf"))
+      .catch((err) => void alertDialog(String(err instanceof Error ? err.message : err)));
+  }, [exportBaseName]);
 
   const handleReady = useCallback((handle: DocentCanvasHandle) => {
     canvasRef.current = handle;
@@ -1377,6 +1387,7 @@ export function App() {
             onOpenPortfolio: () => openPortfolio("browse"),
             onExportMermaid: exportMermaidFile,
             onExportSidecar: exportSidecarFile,
+            onExportPdf: exportPdfFile,
             onArrangeTiers: arrangeTiers,
             onTidy: tidyDiagram,
             onToggleDetailMarkers: () => setDetailMarkers((v) => !v),
