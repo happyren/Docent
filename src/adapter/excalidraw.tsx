@@ -418,6 +418,22 @@ export interface DocentCanvasHandle {
   captureScene(): unknown;
   /** Put a captured scene back, as one undo step of its own. */
   restoreScene(captured: unknown): void;
+
+  /**
+   * One frame as its own picture (D106): the frame's contents cropped to
+   * its box plus a small margin, at a scale chosen for legibility and
+   * capped so a big frame is not a big file. Null for an unknown frame.
+   * Rides the same `exportToCanvas` surface the review's crops do (B1).
+   */
+  renderFrameImage(
+    frameId: string,
+    options?: FrameImageOptions,
+  ): Promise<FrameImage | null>;
+  /**
+   * The diagram's first page (D105): the legend, the unframed Layer-1
+   * components, and the tier-1 frames whole. Null for an empty scene.
+   */
+  renderOverviewImage(options?: FrameImageOptions): Promise<FrameImage | null>;
 }
 
 /**
@@ -587,6 +603,86 @@ export async function renderSceneCrop(
     }
   }
   return canvas.toDataURL("image/png");
+}
+
+/** One rendered raster and the pixels it actually has (D106). */
+export interface FrameImage {
+  blob: Blob;
+  width: number;
+  height: number;
+}
+
+export interface FrameImageOptions {
+  /** Device px per scene px. Omitted, the legibility rule below picks it. */
+  scale?: number;
+  mime?: "image/jpeg" | "image/png";
+  /** JPEG quality, 0..1. Ignored for PNG. */
+  quality?: number;
+}
+
+/**
+ * The raster scale rule (D106 — an image is sized to what it shows):
+ * text gets at least MIN_RENDER_SCALE device px per font px, a small
+ * frame is lifted until its long side reaches TARGET_RASTER_SIDE so a
+ * page is not a postage stamp, and nothing is enlarged past
+ * MAX_RENDER_SCALE. MAX_RASTER_SIDE outranks all of it: a huge frame
+ * comes back smaller rather than as a huge file.
+ */
+const MIN_RENDER_SCALE = 2;
+const MAX_RENDER_SCALE = 6;
+const TARGET_RASTER_SIDE = 2400;
+const MAX_RASTER_SIDE = 4000;
+/** Scene px of air around a frame's own box on its page. */
+const FRAME_RENDER_MARGIN = 24;
+/** Same, for the overview — Excalidraw pads it for us there. */
+const OVERVIEW_RENDER_PADDING = 40;
+/** Print default: JPEG is what the PDF embeds verbatim (D105). */
+const RENDER_MIME = "image/jpeg";
+const RENDER_QUALITY = 0.85;
+
+function renderScale(width: number, height: number, requested?: number): number {
+  const side = Math.max(1, width, height);
+  if (requested !== undefined && requested > 0) return requested;
+  const legible = Math.max(MIN_RENDER_SCALE, TARGET_RASTER_SIDE / side);
+  return Math.max(
+    0.05,
+    Math.min(legible, MAX_RENDER_SCALE, MAX_RASTER_SIDE / side),
+  );
+}
+
+/** `getDimensions` that applies a chosen scale — what both renderers pass. */
+function scaledDimensions(scale: number) {
+  return (width: number, height: number) => ({
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+    scale,
+  });
+}
+
+async function toFrameImage(
+  canvas: HTMLCanvasElement,
+  options: FrameImageOptions,
+): Promise<FrameImage> {
+  const mime = options.mime ?? RENDER_MIME;
+  const quality = options.quality ?? RENDER_QUALITY;
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, mime, quality);
+  });
+  if (!blob) throw new Error(`Could not rasterize the canvas as ${mime}`);
+  return { blob, width: canvas.width, height: canvas.height };
+}
+
+/** The texts a render is about to draw, for `loadFontsFor` (see above). */
+function textsToRender(
+  elements: readonly ExcalidrawElement[],
+): { fontFamily: number; text: string }[] {
+  const texts: { fontFamily: number; text: string }[] = [];
+  for (const el of elements) {
+    if (el.type !== "text") continue;
+    const text = el as ExcalidrawTextElement;
+    if (text.text) texts.push({ fontFamily: text.fontFamily, text: text.text });
+  }
+  return texts;
 }
 
 export interface SceneMenuActions {
@@ -1528,6 +1624,83 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         elements: captured as ExcalidrawElement[],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
+    },
+
+    renderFrameImage: async (frameId, options = {}) => {
+      const elements = liveElements(api);
+      const frame = elements.find(
+        (el) => el.id === frameId && el.type === "frame",
+      );
+      if (!frame) return null;
+      const box = {
+        x: frame.x - FRAME_RENDER_MARGIN,
+        y: frame.y - FRAME_RENDER_MARGIN,
+        width: Math.max(1, frame.width + FRAME_RENDER_MARGIN * 2),
+        height: Math.max(1, frame.height + FRAME_RENDER_MARGIN * 2),
+      };
+      // Same trick as the review's crops: a synthetic frame at the padded
+      // box, borrowing the real frame's id so Excalidraw keeps that
+      // frame's children (and only those) in the export.
+      const [cropFrame] = restoreElements(
+        [{ type: "frame", id: frame.id, ...box, name: "" }] as never,
+        null,
+      );
+      const scale = renderScale(box.width, box.height, options.scale);
+      const drawn = elements.filter((el) => el.id !== frame.id);
+      await loadFontsFor(textsToRender(drawn));
+      const canvas = await exportToCanvas({
+        elements: drawn,
+        appState: {
+          viewBackgroundColor: api.getAppState().viewBackgroundColor,
+          exportBackground: true,
+        },
+        files: api.getFiles(),
+        exportingFrame: cropFrame as never,
+        getDimensions: scaledDimensions(scale),
+      });
+      return toFrameImage(canvas, options);
+    },
+
+    renderOverviewImage: async (options = {}) => {
+      const elements = liveElements(api);
+      // Tier 1 is every frame nobody drills into (scene/tiers' rule, read
+      // here from the raw links because B1 keeps that reading in this
+      // module) plus everything living outside a frame — the legend and
+      // the unframed Layer-1 components among them (D105).
+      const detailed = new Set<string>();
+      for (const el of elements) {
+        const target = detailFrameIdOf(el, elements);
+        if (target) detailed.add(target);
+      }
+      const tier1Frames = new Set(
+        elements
+          .filter((el) => el.type === "frame" && !detailed.has(el.id))
+          .map((el) => el.id),
+      );
+      const byId = new Map(elements.map((el) => [el.id, el]));
+      const drawn = elements.filter((el) => {
+        if (el.type === "frame") return tier1Frames.has(el.id);
+        // A bound label rides with whatever contains it.
+        const containerId = el.type === "text" ? el.containerId : null;
+        const container = containerId ? byId.get(containerId) : undefined;
+        const frameId = container ? container.frameId : el.frameId;
+        return frameId === null || tier1Frames.has(frameId);
+      });
+      if (!drawn.length) return null;
+      const [minX, minY, maxX, maxY] = getCommonBounds(drawn);
+      const scale = renderScale(maxX - minX, maxY - minY, options.scale);
+      await loadFontsFor(textsToRender(drawn));
+      const canvas = await exportToCanvas({
+        elements: drawn,
+        appState: {
+          viewBackgroundColor: api.getAppState().viewBackgroundColor,
+          exportBackground: true,
+        },
+        files: api.getFiles(),
+        exportPadding: OVERVIEW_RENDER_PADDING,
+        getDimensions: scaledDimensions(scale),
+      });
+      return toFrameImage(canvas, options);
     },
 
     applyWrite: async (write) => {

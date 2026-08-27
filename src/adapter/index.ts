@@ -3,6 +3,8 @@ export type {
   CropMark,
   CropRect,
   DocentCanvasHandle,
+  FrameImage,
+  FrameImageOptions,
   SceneWrite,
   WriteArrow,
   WriteFrame,
