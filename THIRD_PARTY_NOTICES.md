@@ -66,3 +66,20 @@ Excalidraw and React bring their own dependencies (for example
 [Rough.js](https://roughjs.com), MIT, which draws the hand-sketched strokes).
 Their licenses ship inside the respective packages and are preserved
 unmodified in every Docent distribution.
+
+## Bundled typefaces
+
+Shipped verbatim under `public/fonts/` as latin-subset woff2 (D107), so a
+self-hosted install comes up with its own typography and never calls out to
+fonts.googleapis.com. Both are licensed under the
+[SIL Open Font License, Version 1.1](https://scripts.sil.org/OFL):
+
+- **Newsreader** — Copyright 2020 The Newsreader Project Authors
+  (https://github.com/productiontype/Newsreader). Used for titles.
+- **Spline Sans** — Copyright 2021 The Spline Sans Project Authors
+  (https://github.com/SorkinType/SplineSans). Used for body text and controls.
+
+The OFL permits redistribution of the font software, bundled or standalone,
+provided this notice travels with it. Neither font is sold on its own, and
+neither Reserved Font Name is used for a modified version — Docent ships both
+files exactly as published.
