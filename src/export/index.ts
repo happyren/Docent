@@ -34,3 +34,7 @@ export type { ExportContext } from "./mermaid";
 export { exportSidecar } from "./sidecar";
 export { exportFrameSidecar } from "./frame";
 export { applyLegend, legendToRecord } from "./legend";
+export { writePdf, wrapText } from "./pdf";
+export type { PdfPage } from "./pdf";
+export { exportPdf, printOrder } from "./print";
+export type { PrintPage, PrintRenderer } from "./print";
