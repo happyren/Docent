@@ -140,6 +140,13 @@ export interface PortEdge {
 /** A component as the port assignment sees it: a box and the shape drawn in it. */
 export interface PortNode extends Box {
   shape?: string;
+  /**
+   * Where the component's bottom actually lies when it reaches below the
+   * box — a symbol's caption extends the component under its icon (D83).
+   * A bottom port stands here, so the drawn line never crosses the words;
+   * the other sides stay the icon's, where the drawing is.
+   */
+  foot?: number;
 }
 
 /**
@@ -184,18 +191,22 @@ export function sideTowards(box: Box, to: Point): Side {
 }
 
 /** The port at `pos` along `side`: its outline point, its padded point, its leg. */
-function portAt(box: Box, shape: string | undefined, side: Side, pos: number, clearance: number): Port {
+function portAt(box: PortNode, shape: string | undefined, side: Side, pos: number, clearance: number): Port {
+  // A footed component's bottom is flat and below the icon (D83): the port
+  // stands on it directly, past the caption, not on the icon's outline.
+  const bottom = side === "bottom" && box.foot !== undefined ? box.foot : box.y + box.height;
   const onBox: Point =
     side === "top" ? [pos, box.y]
-    : side === "bottom" ? [pos, box.y + box.height]
+    : side === "bottom" ? [pos, bottom]
     : side === "left" ? [box.x, pos]
     : [box.x + box.width, pos];
   const outside: Point =
     side === "top" ? [pos, box.y - clearance]
-    : side === "bottom" ? [pos, box.y + box.height + clearance]
+    : side === "bottom" ? [pos, bottom + clearance]
     : side === "left" ? [box.x - clearance, pos]
     : [box.x + box.width + clearance, pos];
-  return { side, at: outlinePoint(box, shape, onBox), outside, dir: side === "left" || side === "right" ? 0 : 1 };
+  const at = side === "bottom" && box.foot !== undefined ? onBox : outlinePoint(box, shape, onBox);
+  return { side, at, outside, dir: side === "left" || side === "right" ? 0 : 1 };
 }
 
 /** The sides in the order a tie between two equal routes is broken (D78). */
@@ -424,8 +435,12 @@ export function routeEdge(
   }
 
   const blocks = near.map((o) => pad(o, clearance));
-  const fromPad = pad(from, clearance);
-  const toPad = pad(to, clearance);
+  // A footed end's caption strip is part of the component (D83): pad the
+  // box down to the foot, so a route from another side cannot cut under
+  // the icon and through its own words.
+  const footed = (n: PortNode): Box => (n.foot !== undefined ? { ...n, height: n.foot - n.y } : n);
+  const fromPad = pad(footed(from), clearance);
+  const toPad = pad(footed(to), clearance);
   const xs = new Set<number>([a[0], b[0], fromPad.x, fromPad.x + fromPad.width, toPad.x, toPad.x + toPad.width]);
   const ys = new Set<number>([a[1], b[1], fromPad.y, fromPad.y + fromPad.height, toPad.y, toPad.y + toPad.height]);
   for (const o of blocks) {

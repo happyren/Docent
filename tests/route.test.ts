@@ -731,3 +731,22 @@ it("a hub's fan never crosses itself (D75)", () => {
   for (const line of lines) expect(orthogonal(line.pts)).toBe(true);
 });
 });
+
+describe("a bottom port stands past the caption (D83)", () => {
+  it("routes a vertical pair from the foot, never through the words", () => {
+    const upper = { x: 0, y: 0, width: 80, height: 80, foot: 120 };
+    const lower = { x: 0, y: 300, width: 80, height: 80, foot: 420 };
+    const jobs = [{ id: "e", from: "a", to: "b" }];
+    const nodes = new Map([["a", upper], ["b", lower]]);
+    const ports = assignPorts(jobs, nodes, ROUTE_PAD, new Map([["e", { start: "bottom", end: "top" } as const]]));
+    const pe = ports.get("e")!;
+    // The start stands on the component's foot — below the caption strip —
+    // and the straight vertical line between the ports crosses no words.
+    expect(pe.start.side).toBe("bottom");
+    expect(pe.start.at[1]).toBe(120);
+    expect(pe.end.at[1]).toBe(300);
+    const route = routeEdge(upper, lower, [], ROUTE_PAD, pe);
+    // Axis-aligned clear pair: the fast path stands (D98) — from the foot.
+    expect(route).toBeNull();
+  });
+});

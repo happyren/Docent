@@ -55,7 +55,7 @@ export const GENRES: Readonly<Record<GenreId, GenreProfile>> = {
     ],
     when: "systems, services, and stores and how they talk — the default map",
     guidance:
-      "Architecture map (C4-shaped). Layer 1 is the context: people and outside systems at the edges, your system's containers as frames. Every component carries a kind — person, system, service, store, queue — and an intent saying why it exists. A container's inner mechanism goes a tier down: add_detail_layer on the component and draw its parts there. Edges say what travels (the label) and how (tags the legend maps, e.g. async). Name frames after the container and give each a narrative. Loop: draw, validate, tidy.",
+      "Architecture map (C4-shaped). Layer 1 is the context: people and outside systems at the edges, your system's containers as frames. Every component carries a kind — person, system, service, store, queue — and an intent saying why it exists. A container's inner mechanism goes a tier down: add_detail_layer on the component and draw its parts there. Edges say what travels (the label) and how (tags the legend maps, e.g. async). Infrastructure has icons: find_symbol before drawing any product or service as a plain shape. Name frames after the container and give each a narrative. Loop: draw, validate, tidy.",
   },
   request: {
     id: "request",
@@ -98,7 +98,7 @@ export const GENRES: Readonly<Record<GenreId, GenreProfile>> = {
     ],
     when: "pipelines: sources to consumers, contracts on the edges",
     guidance:
-      "Data flow. Sources, transforms, stores, consumers — one direction, no cycles: the layout will not fold time, and the lint flags a cycle. Every edge carries its contract: the label names what flows (the schema, the topic, the file); intents carry the finer print.",
+      "Data flow. Sources, transforms, stores, consumers — one direction, no cycles: the layout will not fold time, and the lint flags a cycle. Every edge carries its contract: the label names what flows (the schema, the topic, the file); intents carry the finer print. Sources, stores, and engines have icons: find_symbol before drawing them plain.",
   },
   lifecycle: {
     id: "lifecycle",

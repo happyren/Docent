@@ -1815,11 +1815,22 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         // Excalidraw keeps it at its port when the author moves the shape.
         const startFocus = kept.length > 1 ? bindingFocus(a, a.type, kept[0], kept[1]) : 0;
         const endFocus = kept.length > 1 ? bindingFocus(b, b.type, kept[kept.length - 1], kept[kept.length - 2]) : 0;
+        // The binding gap is how far the drawn end sits beyond the shape's
+        // outline — the constant for an ordinary port, more where the route
+        // starts past a symbol's caption (D83): Excalidraw re-derives the
+        // endpoint from outline + gap when the shape is dragged, and the
+        // words must stay clear then too.
+        const gapAt = (box: SceneBounds & { type: string }, at: [number, number]) => {
+          const [hx, hy] = outlinePoint(box, box.type, at);
+          return Math.max(GAP, Math.hypot(at[0] - hx, at[1] - hy));
+        };
+        const startGap = kept.length > 1 ? gapAt(a, kept[0]) : GAP;
+        const endGap = kept.length > 1 ? gapAt(b, kept[kept.length - 1]) : GAP;
         const [ox, oy] = kept[0];
         const points = kept.map(([px, py]): [number, number] => [px - ox, py - oy]);
         const xs = points.map((pt) => pt[0]);
         const ys = points.map((pt) => pt[1]);
-        return { x: ox, y: oy, points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), startFocus, endFocus };
+        return { x: ox, y: oy, points, width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), startFocus, endFocus, startGap, endGap };
       };
       const arrowElements: ExcalidrawElement[] = [];
       const boundTo = new Map<string, { id: string; type: "arrow" }[]>();
@@ -1859,8 +1870,8 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         const drawn = made.find((el) => el.id === arrow.id);
         if (!drawn) throw new Error("Failed to construct arrow");
         Object.assign(drawn, {
-          startBinding: { elementId: arrow.from, focus: line.startFocus, gap: GAP },
-          endBinding: { elementId: arrow.to, focus: line.endFocus, gap: GAP },
+          startBinding: { elementId: arrow.from, focus: line.startFocus, gap: line.startGap },
+          endBinding: { elementId: arrow.to, focus: line.endFocus, gap: line.endGap },
         });
         arrowElements.push(...made);
         for (const endId of [arrow.from, arrow.to]) {

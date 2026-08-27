@@ -1650,7 +1650,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   const around = (from: string, to: string) => obstacles.filter((o) => o.id !== from && o.id !== to);
   // Where an edge meets each end: the port box when there is one.
   const endBoxes = new Map(
-    [...finalBoxes].map(([id, box]) => [id, box.port ? { ...box.port, id, shape: box.shape } : box] as const),
+    [...finalBoxes].map(([id, box]) => {
+      if (!box.port) return [id, box] as const;
+      // A symbol's caption extends the component below its icon (D83): the
+      // bottom port stands at the component's foot, past the words.
+      const foot = box.y + box.height;
+      return [id, { ...box.port, id, shape: box.shape, ...(foot > box.port.y + box.port.height + 1 ? { foot } : {}) }] as const;
+    }),
   );
   // The edges this write is responsible for: the ones it draws, the existing
   // ones whose ends it moves, and — since a tidy re-routes every bound edge

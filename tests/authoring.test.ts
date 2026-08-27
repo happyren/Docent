@@ -8,7 +8,7 @@ import { buildSceneGraph } from "../src/scene/graph";
 import { describeChange } from "../src/scene/diff";
 import { houseStyle, resolveLook } from "../src/authoring/style";
 import { backEdges, columnsPerBand, countCrossings, crossingsBetweenLayers, edgeLabelSize, GAP_X, GAP_Y, GRID, layeredLayout, placeInFrame, sizeAtWidth, sizeForLabel, snapUp } from "../src/authoring/layout";
-import { absolutePoints, CORNER_RADIUS, polylineThroughBox, routeEdge, type Point } from "../src/authoring/route";
+import { absolutePoints, CORNER_RADIUS, NUDGE, polylineThroughBox, routeEdge, type Point } from "../src/authoring/route";
 import { idSource, lint, plan, PlanError, simulate } from "../src/authoring/ops";
 import { tidyOps } from "../src/authoring/tidy";
 
@@ -894,5 +894,56 @@ describe("lint (D62, D63)", () => {
     expect(messages.some((m) => m.includes("has no label or intent"))).toBe(true);
     expect(messages.every((m) => !m.includes("no narrative"))).toBe(true);
     expect(summary).toMatch(/warning/);
+  });
+});
+
+describe("twin edges from one shape stay apart (D75)", () => {
+  const loose = (id: string, x: number, y: number, label: string) => [
+    { ...base, id, type: "rectangle", x, y, width: 160, height: 80, boundElements: [{ id: `${id}_t`, type: "text" }] },
+    { ...base, id: `${id}_t`, type: "text", x: x + 10, y: y + 20, width: 140, height: 20, text: label, containerId: id, fontFamily: 5, fontSize: 20 },
+  ];
+  it("two routed edges to stacked targets keep the nudge gap on shared runs", () => {
+    const scene = snapshotFromRawElements([
+      ...loose("hub", 0, 0, "Hub"),
+      ...loose("top", 480, 240, "Top"),
+      ...loose("bot", 480, 520, "Bot"),
+    ] as never);
+    const result = plan(
+      [
+        { op: "add_edge", ref: "$e1", from: "hub", to: "top", label: "ICOM sync" },
+        { op: "add_edge", ref: "$e2", from: "hub", to: "bot", label: "MDT sync" },
+      ],
+      scene,
+      idSource(31),
+    );
+    const abs = (id: string): [number, number][] => {
+      const ar = result.write.arrows!.find((a) => a.id === result.ids[id])! as unknown as {
+        ends?: { start: [number, number]; end: [number, number] };
+        via?: [number, number][];
+      };
+      return ar.ends ? [ar.ends.start, ...(ar.via ?? []), ar.ends.end] : [];
+    };
+    const a = abs("$e1");
+    const b = abs("$e2");
+    // Both oblique pairs must route (D98) — no bare diagonals.
+    expect(a.length).toBeGreaterThanOrEqual(2);
+    expect(b.length).toBeGreaterThanOrEqual(2);
+    // Any pair of colinear runs (one from each edge) sharing more than a
+    // corner's worth of length must sit at least the nudge gap apart —
+    // twin edges read as two strokes, not one doubled line (D75).
+    const segs = (pts: [number, number][]) => {
+      const out: { vertical: boolean; at: number; lo: number; hi: number }[] = [];
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [x1, y1] = pts[i]; const [x2, y2] = pts[i + 1];
+        if (Math.abs(x1 - x2) < 1 && Math.abs(y1 - y2) > 24) out.push({ vertical: true, at: x1, lo: Math.min(y1, y2), hi: Math.max(y1, y2) });
+        if (Math.abs(y1 - y2) < 1 && Math.abs(x1 - x2) > 24) out.push({ vertical: false, at: y1, lo: Math.min(x1, x2), hi: Math.max(x1, x2) });
+      }
+      return out;
+    };
+    for (const s1 of segs(a)) for (const s2 of segs(b)) {
+      if (s1.vertical !== s2.vertical) continue;
+      const shared = Math.min(s1.hi, s2.hi) - Math.max(s1.lo, s2.lo);
+      if (shared > 24) expect(Math.abs(s1.at - s2.at)).toBeGreaterThanOrEqual(NUDGE - 0.01);
+    }
   });
 });

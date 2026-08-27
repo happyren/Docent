@@ -297,3 +297,49 @@ describe("symbols lay out like anything else (D85)", () => {
     expect(overlaps(boxes[0], boxes[1])).toBe(false);
   });
 });
+
+describe("an edge keeps clear of its own caption (D83, D72)", () => {
+  it("routes out of a symbol without crossing the caption under its icon", () => {
+    // Two lambdas stacked: the edge must leave the upper one downward —
+    // and the caption sits exactly there.
+    const result = plan(
+      [
+        { op: "add_node", ref: "$a", symbol: "aws/lambda", label: "Upper" },
+        { op: "add_node", ref: "$b", symbol: "aws/lambda", label: "Lower" },
+        { op: "add_edge", ref: "$e", from: "$a", to: "$b", label: "invokes" },
+        { op: "layout", frame: null },
+      ],
+      snapshotFromRawElements([] as never),
+      idSource(21),
+    );
+    const shapes = new Map((result.write.symbols ?? []).map((s) => [s.id, s]));
+    const a = shapes.get(result.ids.$a)!;
+    const b = shapes.get(result.ids.$b)!;
+    const arrowEl = result.write.arrows!.find((ar) => ar.id === result.ids.$e)! as unknown as {
+      ends?: { start: [number, number]; end: [number, number] };
+      via?: [number, number][];
+    };
+    // The caption strip: the component's box below the icon.
+    // WriteSymbol carries the icon (the carrier box) and labelBox (caption).
+    const strip = (s: typeof a) => {
+      const lb = (s as unknown as { labelBox: { x: number; y: number; width: number; height: number } }).labelBox;
+      return { x: lb.x, y: lb.y, width: lb.width, height: lb.height };
+    };
+    const pts: [number, number][] = arrowEl.ends ? [arrowEl.ends.start, ...(arrowEl.via ?? []), arrowEl.ends.end] : [];
+    const crosses = (box: { x: number; y: number; width: number; height: number }) => {
+      if (box.height <= 0) return false;
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [x1, y1] = pts[i]; const [x2, y2] = pts[i + 1];
+        // conservative: segment's bbox strictly inside test via sampling
+        for (let t = 0.02; t < 1; t += 0.04) {
+          const x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+          if (x > box.x + 1 && x < box.x + box.width - 1 && y > box.y + 1 && y < box.y + box.height - 1) return true;
+        }
+      }
+      return false;
+    };
+    expect(pts.length).toBeGreaterThanOrEqual(2);
+    expect(crosses(strip(a))).toBe(false);
+    expect(crosses(strip(b))).toBe(false);
+  });
+});
