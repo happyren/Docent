@@ -203,12 +203,28 @@ body {
 }
 
 /*
- * Desktop shell only (S13): the library sidebar opens from the native View
+ * Desktop shell only (S13): the library sidebar opens from the native Diagram
  * menu there, so upstream's on-canvas trigger — the label wrapping the
  * "Library" checkbox — is redundant chrome. The web build never carries this
  * class and keeps the button.
  */
 .docent-desktop .sidebar-trigger__label-element {
+  display: none;
+}
+
+/*
+ * The menu moved into the menu bar (D109), so on the desktop the in-canvas
+ * hamburger is furniture: everything it opened is a native item now, with the
+ * platform's own chords. This one display rule is the narrowest touch D107's
+ * discipline admits — upstream publishes no prop for it, so the hook is
+ * `[data-testid="main-menu-trigger"]`, the stable handle its own test suite
+ * addresses that button by. If an upgrade renames it the rule stops matching
+ * and the hamburger simply comes back: a spare menu, never a broken app.
+ *
+ * The web keeps the hamburger untouched — there is no bar there to move into,
+ * and it remains the whole menu.
+ */
+.docent-desktop [data-testid="main-menu-trigger"] {
   display: none;
 }
 
@@ -2048,6 +2064,290 @@ body {
   z-index: 45;
   -webkit-app-region: drag;
   app-region: drag;
+}
+
+/* ── The tools dock left (D110) ────────────────────────────────────────────
+   Upstream draws its drawing toolbar as a horizontal island across the top;
+   Docent stands it on the left edge, which is where every tool a drawing
+   craft respects is kept. This is a styling reflow of upstream's own
+   container through its stable classes — `.App-toolbar` (the island) and the
+   `.Stack_horizontal` of tool buttons inside it, with three small rules for
+   what hangs off them — and it is deliberately SMALL, because it is honestly
+   brittle:
+
+   UPSTREAM-VERSION-SENSITIVE. `@excalidraw/excalidraw` is pinned exact
+   (I7/D12), and those class names are what the reflow rests on. If an
+   upgrade moves them, every rule below stops matching and the toolbar
+   returns to upstream's own layout across the top — the drawing is
+   untouched, nothing is unreachable, and the promise this block makes is
+   exactly that: it degrades to upstream, it never breaks.
+
+   Nothing here reaches into upstream's markup for anything but position;
+   colour, radius and shadow are still the Island's own, which A27 already
+   dressed through the variables it publishes (I1). */
+.docent-app {
+  /* The column: where its head sits, how wide a strip it claims (16 of
+     gutter, 44 of island, 12 of air), and what the collapse chip at its head
+     takes out of it — 44 of island and 12 of air again, the island being
+     square. The foot keeps the same 72 clear of upstream's zoom controls. */
+  --docent-rail-top: 16px;
+  --docent-rail-inset: 72px;
+  --docent-rail-chip: 56px;
+}
+
+/* Under the traffic lights, never beside them (D108): on the borderless macOS
+   window the column's head drops below them, so nothing in it ever has to be
+   reached past a window control. */
+.docent-overlay-titlebar {
+  --docent-rail-top: 48px;
+}
+
+.docent-app .App-toolbar {
+  position: fixed;
+  left: 16px;
+  /* Centred in the column rather than on the viewport, so `top` is a floor:
+     `margin-block: auto` splits the slack, and a window too short to split it
+     leaves the rail at the floor instead of climbing out of the column. */
+  top: calc(var(--docent-rail-top) + var(--docent-rail-chip));
+  bottom: var(--docent-rail-inset);
+  /* Both are shrink-to-fit: the island is as wide as one button and as tall
+     as the tools it holds, and nothing else. */
+  width: max-content;
+  height: max-content;
+  /* The cap is what keeps `top` a floor: an island taller than the column
+     would otherwise take negative margins and climb out of it. A window too
+     short for every tool scrolls the rail rather than hiding one. */
+  max-height: calc(
+    100dvh - var(--docent-rail-top) - var(--docent-rail-chip) -
+      var(--docent-rail-inset)
+  );
+  margin-block: auto;
+  overflow-y: auto;
+}
+
+/* Upstream hangs its extra-tools menu off the toolbar's right edge, which on
+   a 44px rail is 160px off the left of the screen — and the scroll above
+   would clip it besides. Fixed to the column instead: beside the rail, always
+   on screen, and out of the scroller's reach. */
+.docent-app .App-toolbar .App-toolbar__extra-tools-dropdown {
+  position: fixed;
+  top: auto;
+  bottom: var(--docent-rail-inset);
+  /* The gutter, the island, and air. */
+  left: calc(16px + 44px + 8px);
+  right: auto;
+}
+
+/* Vertical, at the same 36px hit targets upstream gives the buttons. */
+.docent-app .App-toolbar > .Stack_horizontal {
+  grid-auto-flow: row;
+  justify-items: center;
+}
+
+/* The dividers turn with the stack. */
+.docent-app .App-toolbar .App-toolbar__divider {
+  width: 24px;
+  height: 1px;
+}
+
+/* The hint reads as a caption at the foot of the column rather than down a
+   44px one — fixed there, so it is neither squeezed by the rail nor counted
+   as something the rail could scroll to. It takes no pointer either way, so
+   it can sit over the paper. */
+.docent-app .App-toolbar .HintViewer {
+  position: fixed;
+  top: auto;
+  bottom: var(--docent-rail-inset);
+  left: 16px;
+  width: max-content;
+  max-width: 44ch;
+  text-align: left;
+}
+
+/* The strip the column stands in is declared to upstream as unusable, the way
+   D108 declares the traffic lights (I1): `--sal` is upstream's own
+   safe-area-inset-left, and its `FixedSideContainer` pads itself by it — so
+   the shape panel and the hamburger step aside without a selector reaching
+   into either. Claimed whether or not the tools are showing, because the
+   collapse chip is the same 44px island standing in the same column. */
+.docent-app .excalidraw {
+  --sal: calc(
+    env(safe-area-inset-left, 0px) + var(--docent-safe-left) +
+      var(--docent-rail-inset)
+  );
+}
+
+/* Collapsed, the paper is the whole window. */
+.docent-tools-collapsed .App-toolbar {
+  display: none;
+}
+
+/* Docent's own chip at the head of the rail — the one thing left when the
+   tools are away, and the way back. An island like every other (D107). It
+   stands where upstream's hamburger used to, which the strip above has just
+   moved aside; the foot of the column belongs to upstream's zoom controls. */
+.docent-tools-chip {
+  position: fixed;
+  left: 16px;
+  top: var(--docent-rail-top);
+  z-index: 5;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-island);
+  background: var(--docent-surface);
+  box-shadow: var(--docent-shadow);
+  color: var(--docent-muted);
+  cursor: pointer;
+}
+
+.docent-tools-chip svg {
+  width: 20px;
+  height: 20px;
+}
+
+.docent-tools-chip:hover {
+  color: var(--docent-accent-text);
+  border-color: var(--docent-accent-line);
+}
+
+.docent-tools-chip:focus-visible {
+  outline: 2px solid var(--docent-accent);
+  outline-offset: 1px;
+}
+
+/* Away, and the chip says so: the accent, spent on one 20px glyph. */
+.docent-tools-collapsed .docent-tools-chip {
+  color: var(--docent-accent-text);
+}
+
+/* ── The command palette (D111) ────────────────────────────────────────────
+   Cmd+K over the canvas. A modal in the house's own terms — the raised
+   ground, the one hairline, the one shadow — sitting high rather than
+   centred, because a list that grows downward should not move what is
+   already read. */
+.docent-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--docent-scrim);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  z-index: 50;
+}
+
+.docent-palette {
+  width: min(560px, 92vw);
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--docent-raised);
+  color: var(--docent-body);
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-modal);
+  box-shadow: var(--docent-shadow);
+  overflow: hidden;
+}
+
+.docent-palette-input {
+  flex: none;
+  background: none;
+  border: none;
+  /* The one gradient hairline the house rules a header off with (D107). */
+  background-image: linear-gradient(
+    90deg,
+    var(--docent-accent-line),
+    transparent 55%
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 100%;
+  color: var(--docent-fg);
+  font-family: var(--docent-font-body);
+  font-size: 16px;
+  padding: 14px 16px;
+  outline: none;
+}
+
+.docent-palette-input::placeholder {
+  color: var(--docent-faint);
+}
+
+.docent-palette-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.docent-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: var(--docent-radius-row);
+  font-size: 13.5px;
+  color: var(--docent-body);
+  cursor: pointer;
+}
+
+.docent-palette-row.is-active {
+  background: var(--docent-accent-wash-strong);
+  color: var(--docent-fg);
+}
+
+.docent-palette-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A scene is its path, and the folder is the context, not the name (D92). */
+.docent-palette-row.is-scene .docent-palette-label {
+  font-family: var(--docent-font-mono);
+  font-size: 12.5px;
+}
+
+.docent-palette-folder {
+  color: var(--docent-faint);
+}
+
+.docent-palette-hit {
+  background: none;
+  color: var(--docent-accent-text);
+  font-weight: 600;
+}
+
+.docent-palette-hint {
+  flex: none;
+  color: var(--docent-muted);
+  font-size: var(--docent-meta-size);
+  letter-spacing: var(--docent-meta-tracking);
+}
+
+.docent-palette-shortcut {
+  flex: none;
+  color: var(--docent-muted);
+  font-family: var(--docent-font-mono);
+  font-size: 11px;
+  padding: 2px 6px;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-control);
+}
+
+.docent-palette-empty {
+  margin: 0;
+  padding: 18px 16px;
+  color: var(--docent-muted);
+  font-size: 13px;
 }
 
 /* Undo is the offer, not the point: an accent outline, never a fill. */

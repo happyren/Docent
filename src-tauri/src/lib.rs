@@ -5,9 +5,10 @@
 //! reaches the page only by calling one function the page itself registers.
 //! Everything else the app does, it does exactly as it does on the web.
 //!
-//! On the desktop the actions live in the native menu bar, so the page hides
-//! its own copies of them; on the web nothing is injected and the in-canvas
-//! menu is the only menu.
+//! On the desktop the actions live in the native menu bar (D109) — File,
+//! Diagram, Project — so the page hides its own hamburger and the bar
+//! dispatches into the one command table the page already keeps (B4). On the
+//! web nothing is injected and the in-canvas menu is the only menu.
 //!
 //! The MCP agent endpoint (S15, A7) is a loopback pipe: `mcp.rs` accepts
 //! JSON-RPC and relays raw bodies to the page, which runs the one shared
@@ -38,7 +39,9 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry}
 ///
 /// File reads as it does in a document app, but the document store is the
 /// portfolio: Open browses it, Save writes back into it, and the two items
-/// that cross to a loose file on disk say so — Import and Export.
+/// that cross to a loose file on disk say so — Import and Export. The three
+/// submenus are File, Diagram and Project (D109), and this list is written in
+/// that order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
     New,
@@ -47,39 +50,43 @@ enum MenuAction {
     Save,
     SaveAs,
     ExportFile,
+    ExportMermaid,
+    ExportSidecar,
     Present,
     Library,
     Legend,
     Arrange,
     Tidy,
     DetailMarkers,
+    Portfolio,
+    ConnectAgent,
     Plugins,
     AgentEdit,
-    ExportMermaid,
-    ExportSidecar,
     CheckUpdates,
     AgentEndpoint,
 }
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 18] = [
+    const ALL: [Self; 20] = [
         Self::New,
         Self::Open,
         Self::Import,
         Self::Save,
         Self::SaveAs,
         Self::ExportFile,
+        Self::ExportMermaid,
+        Self::ExportSidecar,
         Self::Present,
         Self::Library,
         Self::Legend,
         Self::Arrange,
         Self::Tidy,
         Self::DetailMarkers,
+        Self::Portfolio,
+        Self::ConnectAgent,
         Self::Plugins,
         Self::AgentEdit,
-        Self::ExportMermaid,
-        Self::ExportSidecar,
         Self::CheckUpdates,
         Self::AgentEndpoint,
     ];
@@ -94,16 +101,18 @@ impl MenuAction {
             Self::Save => "save",
             Self::SaveAs => "save-as",
             Self::ExportFile => "export-file",
+            Self::ExportMermaid => "export-mermaid",
+            Self::ExportSidecar => "export-sidecar",
             Self::Present => "present",
             Self::Library => "library",
             Self::Legend => "legend",
             Self::Arrange => "arrange",
             Self::Tidy => "tidy",
             Self::DetailMarkers => "detail-markers",
+            Self::Portfolio => "portfolio",
+            Self::ConnectAgent => "connect-agent",
             Self::Plugins => "plugins",
             Self::AgentEdit => "agent-edit",
-            Self::ExportMermaid => "export-mermaid",
-            Self::ExportSidecar => "export-sidecar",
             Self::CheckUpdates => "check-updates",
             Self::AgentEndpoint => "agent-endpoint",
         }
@@ -117,16 +126,18 @@ impl MenuAction {
             Self::Save => "Save",
             Self::SaveAs => "Save As…",
             Self::ExportFile => "Export Scene File…",
+            Self::ExportMermaid => "Export Mermaid…",
+            Self::ExportSidecar => "Export Semantic JSON…",
             Self::Present => "Present",
-            Self::Library => "Library",
+            Self::Library => "Shape Library",
             Self::Legend => "Legend…",
             Self::Arrange => "Arrange Detail Tiers",
             Self::Tidy => "Tidy Diagram",
             Self::DetailMarkers => "Detail Markers",
+            Self::Portfolio => "Portfolio…",
+            Self::ConnectAgent => "Connect Agent Bridge",
             Self::Plugins => "Plugins…",
             Self::AgentEdit => "Agent Can Edit",
-            Self::ExportMermaid => "Mermaid…",
-            Self::ExportSidecar => "Semantic JSON…",
             Self::CheckUpdates => "Check for Updates…",
             Self::AgentEndpoint => "Agent Endpoint…",
         }
@@ -151,6 +162,8 @@ impl MenuAction {
             | Self::Legend
             | Self::Arrange
             | Self::DetailMarkers
+            | Self::Portfolio
+            | Self::ConnectAgent
             | Self::Plugins
             | Self::AgentEdit
             | Self::ExportMermaid
@@ -373,11 +386,17 @@ fn check_item(
     )
 }
 
-/// The whole menu bar, replacing Tauri's default. Edit is load-bearing rather
-/// than decorative: the system webview takes its clipboard commands from the
-/// menu, so without those items Cmd/Ctrl+C, +X and +V do nothing in text
-/// inputs. Fullscreen, Services and Hide are macOS-only in the menu backend —
-/// elsewhere they would render as entries that do nothing.
+/// The whole menu bar, replacing Tauri's default (D109). Docent's own three
+/// submenus are File, Diagram and Project — the app's commands, where a
+/// desktop app's commands belong, and every one of them dispatching into the
+/// page's one command table (B4) rather than into a copy of it.
+///
+/// Edit is load-bearing rather than decorative: the system webview takes its
+/// clipboard commands from the menu, so without those items Cmd/Ctrl+C, +X and
+/// +V do nothing in text inputs. Fullscreen, Services and Hide are macOS-only
+/// in the menu backend — elsewhere they would render as entries that do
+/// nothing. Every platform gets the same bar; only where it is drawn differs,
+/// which is the windowing system's business and not Docent's.
 fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let about = PredefinedMenuItem::about(
         app,
@@ -391,6 +410,11 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         }),
     )?;
 
+    // The exports join File rather than standing as a menu of their own
+    // (D109): they are ways of writing the document out, which is what a File
+    // menu is for. The PDF is the one export missing here — it is bytes
+    // (D105) and the shell's file channel writes text, so the page offers it
+    // where a browser download works and nowhere it would fail.
     let file = Submenu::with_items(
         app,
         "File",
@@ -404,6 +428,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item(app, MenuAction::SaveAs)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::ExportFile)?,
+            &item(app, MenuAction::ExportMermaid)?,
+            &item(app, MenuAction::ExportSidecar)?,
             // macOS keeps Quit in the application menu; the others have none.
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
@@ -427,21 +453,19 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
-    let view = Submenu::with_items(
+    // What is done to the drawing, and what is done with it.
+    let diagram = Submenu::with_items(
         app,
-        "View",
+        "Diagram",
         true,
         &[
             &item(app, MenuAction::Present)?,
             &item(app, MenuAction::Library)?,
             &PredefinedMenuItem::separator(app)?,
-            &item(app, MenuAction::Legend)?,
-            &item(app, MenuAction::Arrange)?,
             &item(app, MenuAction::Tidy)?,
+            &item(app, MenuAction::Arrange)?,
+            &item(app, MenuAction::Legend)?,
             &check_item(app, MenuAction::DetailMarkers, true)?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(app, MenuAction::Plugins)?,
-            &check_item(app, MenuAction::AgentEdit, true)?,
             #[cfg(target_os = "macos")]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(target_os = "macos")]
@@ -449,13 +473,18 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         ],
     )?;
 
-    let export = Submenu::with_items(
+    // The portfolio and what plugs into it — the app's world outside this one
+    // drawing (S12, S15, S17).
+    let project = Submenu::with_items(
         app,
-        "Export",
+        "Project",
         true,
         &[
-            &item(app, MenuAction::ExportMermaid)?,
-            &item(app, MenuAction::ExportSidecar)?,
+            &item(app, MenuAction::Portfolio)?,
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, MenuAction::ConnectAgent)?,
+            &item(app, MenuAction::Plugins)?,
+            &check_item(app, MenuAction::AgentEdit, true)?,
         ],
     )?;
 
@@ -512,8 +541,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             )?,
             &file,
             &edit,
-            &view,
-            &export,
+            &diagram,
+            &project,
             &window,
             // Last on every platform, which is where both conventions put it.
             &help,
@@ -856,23 +885,25 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 16] = [
+    const FRONTEND_IDS: [&str; 18] = [
         "new",
         "open",
         "import",
         "save",
         "save-as",
         "export-file",
+        "export-mermaid",
+        "export-sidecar",
         "present",
         "library",
         "legend",
         "arrange",
         "tidy",
         "detail-markers",
+        "portfolio",
+        "connect-agent",
         "plugins",
         "agent-edit",
-        "export-mermaid",
-        "export-sidecar",
     ];
 
     #[test]
@@ -924,10 +955,26 @@ mod tests {
         }
     }
 
+    /// D109: the three submenus Docent contributes are File, Diagram and
+    /// Project, and every item in them is one the page answers.
+    #[test]
+    fn the_bar_carries_the_commands_the_amendment_names() {
+        for id in [
+            // File
+            "open", "save", "save-as", "export-mermaid", "export-sidecar",
+            // Diagram
+            "present", "tidy", "arrange", "legend", "detail-markers",
+            // Project
+            "portfolio", "connect-agent", "plugins",
+        ] {
+            assert!(is_frontend_menu_id(id), "{id} is not in the bar");
+        }
+    }
+
     #[test]
     fn tidy_is_a_page_item_on_the_format_document_chord() {
         // D73: ⌥⇧F everywhere an editor has it, answered by the page like
-        // any other View item — the menu is only the way in.
+        // any other Diagram item — the menu is only the way in.
         assert_eq!(MenuAction::Tidy.id(), "tidy");
         assert_eq!(MenuAction::Tidy.label(), "Tidy Diagram");
         assert_eq!(MenuAction::Tidy.accelerator(), Some("Alt+Shift+F"));
