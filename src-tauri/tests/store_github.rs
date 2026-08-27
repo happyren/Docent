@@ -1161,6 +1161,8 @@ fn binds_a_project_and_the_token_never_comes_back_out() {
             // probe that learned the write bit (D28).
             "baseBranch": "main",
             "apiBase": fixture.github.url,
+            // The trunk lock (D104) is off unless the binding asked for one.
+            "protected": false,
             "hasToken": true,
             // The bind-time probe found a token that can write, and says so.
             "canWrite": true,
@@ -1255,10 +1257,60 @@ fn defaults_the_branch_and_the_api_base() {
             "branch": "main",
             "baseBranch": "main",
             "apiBase": "https://api.github.com",
+            "protected": false,
             "hasToken": false,
             "canWrite": serde_json::Value::Null,
             "review": { "images": false, "sidecars": false },
         })
+    );
+}
+
+/// The trunk lock (D104) is a field the store carries and nothing more: it
+/// comes in on the PUT, lands in the dotfile only when it is on, and comes
+/// back out on the GET — the same passthrough the reference store performs.
+#[test]
+fn a_binding_carries_the_trunk_lock_both_ways() {
+    let fixture = Fixture::new();
+    assert_eq!(put(fixture.port(), "/api/projects/locked", None).status, 201);
+    assert_eq!(
+        fixture
+            .bind("locked", serde_json::json!({ "protected": true }))
+            .status,
+        200
+    );
+    assert_eq!(fixture.binding_of("locked")["protected"], true);
+    assert_eq!(fixture.bindings()["locked"]["protected"], true);
+
+    // A PUT that says nothing about it keeps it — which is what makes
+    // switching branches a PUT of `{ branch }` and nothing else.
+    assert_eq!(
+        fixture
+            .bind("locked", serde_json::json!({ "path": "docs" }))
+            .status,
+        200
+    );
+    assert_eq!(fixture.binding_of("locked")["protected"], true);
+
+    // Turning it off writes no field at all, so an unprotected binding is the
+    // same bytes it was before D104 existed.
+    assert_eq!(
+        fixture
+            .bind("locked", serde_json::json!({ "protected": false }))
+            .status,
+        200
+    );
+    assert_eq!(fixture.binding_of("locked")["protected"], false);
+    assert_eq!(fixture.bindings()["locked"].get("protected"), None);
+
+    let refused = fixture.bind("locked", serde_json::json!({ "protected": "yes" }));
+    assert_eq!(refused.status, 400);
+    assert!(
+        refused.json()["error"]
+            .as_str()
+            .expect("an error")
+            .starts_with("invalid protected"),
+        "{}",
+        refused.body
     );
 }
 

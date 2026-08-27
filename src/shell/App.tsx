@@ -29,7 +29,7 @@ import {
   loadScene as loadPortfolioScene,
   saveScene as savePortfolioScene,
 } from "../portfolio/client";
-import { notePortfolioSave } from "../portfolio/autoCommit";
+import { notePortfolioSave, suggestedBranch } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
 import { EMPTY_SCENE, PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
 import { PluginsModal } from "./PluginsModal";
@@ -96,6 +96,15 @@ export function App() {
   agentCanEditRef.current = agentCanEdit;
   const [agentWorking, setAgentWorking] = useState(false);
   const [agentReport, setAgentReport] = useState<{ line: string; undo: (() => void) | null } | null>(null);
+  // The trunk lock (D104): the open scene's project is bound, its base branch
+  // is protected, and it is sitting on it. Null everywhere else — a loose file,
+  // an unbound project, a draft branch.
+  const [trunkLock, setTrunkLock] = useState<{
+    project: string;
+    branch: string;
+  } | null>(null);
+  const trunkLockRef = useRef(trunkLock);
+  trunkLockRef.current = trunkLock;
   // Spoken narration (S18, D52): one controller, fed by the narration sink
   // and the presentation's waypoint. Only a shell with plugins can speak.
   const speech = useMemo(() => new SpeechController(new WebAudioSink()), []);
@@ -197,11 +206,10 @@ export function App() {
               restoreScene: (captured) => canvas.restoreScene(captured),
               canEdit: () => agentCanEditRef.current,
               // The orange frame (D61): view-only while a batch runs, so the
-              // two never edit the same element at once.
-              working: (on) => {
-                setAgentWorking(on);
-                canvas.setViewMode(on);
-              },
+              // two never edit the same element at once. The switch itself is
+              // asserted below, where the trunk lock (D104) shares it — a
+              // batch ending must not unlock a protected trunk.
+              working: setAgentWorking,
               report: (line, undo) => setAgentReport({ line, undo }),
             },
           )
@@ -264,6 +272,18 @@ export function App() {
     if (!presentation.active) presentation.enter();
   };
 
+  /**
+   * The one view-only switch, asserted from every reason there is to hold it
+   * down: the agent's turn (D61), a presentation (D54), and the protected
+   * trunk (D104) — which is the same mechanism without the orange frame, and
+   * outlives both of the others. Re-asserted rather than toggled, because an
+   * agent batch ending or a presentation exiting each turn it off on their way
+   * out and neither of them knows about the lock.
+   */
+  useEffect(() => {
+    canvas?.setViewMode(agentWorking || presentation.active || trunkLock !== null);
+  }, [canvas, agentWorking, presentation.active, trunkLock]);
+
   /** Scene point at the middle of the current viewport. */
   const viewportCenter = useCallback(() => {
     const c = canvasRef.current;
@@ -305,6 +325,31 @@ export function App() {
 
   const drill = useDrill(canvas, camera, structuralUp, deepestFrameId);
 
+  /**
+   * Whether this scene is on a locked trunk (D104): a bound project whose base
+   * branch is protected, sitting on that base. Never fatal — a store that
+   * cannot answer leaves the canvas exactly as editable as it was.
+   */
+  const refreshTrunkLock = useCallback(
+    async (source: { project: string; scene: string } | null) => {
+      if (!source) {
+        setTrunkLock(null);
+        return;
+      }
+      try {
+        const binding = await getPortfolioBinding(source.project);
+        setTrunkLock(
+          binding && binding.protected && binding.branch === binding.baseBranch
+            ? { project: source.project, branch: binding.branch }
+            : null,
+        );
+      } catch {
+        setTrunkLock(null);
+      }
+    },
+    [],
+  );
+
   // Refresh stays in the current scene: portfolio opens/saves stamp
   // ?project=&scene= into the URL (replaceState — no history spam), and
   // local file flows clear them. Reload then restores via the existing
@@ -320,8 +365,11 @@ export function App() {
         url.searchParams.delete("scene");
       }
       window.history.replaceState(null, "", url);
+      // Every path that changes where the canvas came from passes through
+      // here, which makes it the one place the lock has to be re-asked (D104).
+      void refreshTrunkLock(source);
     },
-    [],
+    [refreshTrunkLock],
   );
 
   const markClean = useCallback((name: string | null) => {
@@ -365,6 +413,16 @@ export function App() {
     if (!c || !api) return;
     if (!api.canEdit()) {
       setAgentReport({ line: "Tidy is off while View → Agent Can Edit is unchecked", undo: null });
+      return;
+    }
+    // The formatter is a write like any other (D73), and the trunk is locked
+    // against writes (D104) — not against reading the diagram.
+    const lock = trunkLockRef.current;
+    if (lock) {
+      setAgentReport({
+        line: `${lock.branch} is protected — create a branch to edit`,
+        undo: null,
+      });
       return;
     }
     const snapshot = c.getSceneSnapshot();
@@ -581,6 +639,33 @@ export function App() {
   }, []);
 
   /**
+   * The way out of the lock, in one click (D104): the branch the checkpointer
+   * would have suggested anyway, cut through the same store route the
+   * portfolio's ＋ Branch uses — which moves the project onto it, which is
+   * what lifts the lock.
+   */
+  const [cutting, setCutting] = useState(false);
+  const cutDraftBranch = useCallback(() => {
+    const lock = trunkLockRef.current;
+    if (!lock || cutting) return;
+    setCutting(true);
+    void (async () => {
+      const name = suggestedBranch();
+      try {
+        await createPortfolioBranch(lock.project, name);
+        flashNote(`drafting on ${name}`);
+        await refreshTrunkLock(portfolioSourceRef.current);
+      } catch (err) {
+        await alertDialog(
+          `Could not create ${name}: ${err instanceof Error ? err.message : err}`,
+        );
+      } finally {
+        setCutting(false);
+      }
+    })();
+  }, [cutting, flashNote, refreshTrunkLock]);
+
+  /**
    * Follow a scene link (D96): the jump, under the guard `open_scene` keeps,
    * with the way back recorded before the target opens. `at` is where to
    * arrive when the target still holds it — gone or absent, the overview
@@ -759,10 +844,19 @@ export function App() {
       },
       binding: async (project) => {
         const binding = await getPortfolioBinding(project);
-        return binding ? { branch: binding.branch, baseBranch: binding.baseBranch } : null;
+        return binding
+          ? {
+              branch: binding.branch,
+              baseBranch: binding.baseBranch,
+              // What makes the refusal a rule rather than advice (D104).
+              protected: binding.protected,
+            }
+          : null;
       },
       createBranch: async (project, name) => {
         await createPortfolioBranch(project, name);
+        // The project moved off its base, so the lock has just lifted.
+        await refreshTrunkLock(portfolioSourceRef.current);
       },
     },
   };
@@ -1343,6 +1437,20 @@ export function App() {
             <span className="docent-agent-frame-label">Agent is drawing — hold on</span>
           </div>
         )}
+        {/* Why the canvas will not take an edit, and the way forward beside it
+            (D104). Not during a presentation: that has its own chrome, and a
+            presentation is a reading, which the lock has no quarrel with. */}
+        {trunkLock && !presentation.active && (
+          <div className="docent-trunk-lock" aria-live="polite">
+            <span className="docent-trunk-lock-text">
+              <code>{trunkLock.branch}</code> is protected — create a branch to
+              edit
+            </span>
+            <button disabled={cutting} onClick={cutDraftBranch}>
+              {cutting ? "Creating…" : "Create a branch"}
+            </button>
+          </div>
+        )}
         {agentReport && !agentWorking && (
           <div className="docent-agent-report">
             <span className="docent-agent-report-text">{agentReport.line}</span>
@@ -1414,9 +1522,21 @@ export function App() {
           onSaveScene={savePortfolioSceneAs}
           suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^[^/]*\//, "")}
           intent={portfolioIntent}
-          onClose={() => setPortfolioOpen(false)}
+          onClose={() => {
+            setPortfolioOpen(false);
+            // A branch cut, a branch switched, a binding protected: the strip
+            // is where the lock changes, so this is when to re-ask (D104).
+            void refreshTrunkLock(portfolioSourceRef.current);
+          }}
           onShowChange={showPortfolioChange}
           onSceneMoved={notePortfolioMove}
+          onSceneReverted={async (project, scene) => {
+            // Only the scene on screen, and only through the one loader (D103):
+            // the canvas must not go on editing a copy that was just replaced.
+            const source = portfolioSourceRef.current;
+            if (source?.project !== project || source.scene !== scene) return;
+            await openPortfolioScene(project, scene, { keepTrail: true });
+          }}
         />
       )}
       {pluginsOpen && hasPlugins() && (

@@ -587,9 +587,43 @@ body {
 
 /* What the last verb — or the background checkpoint — just did. */
 .docent-portfolio-sync-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   opacity: 0.75;
   white-space: nowrap;
+  /* A store's refusal is a sentence, not a word: it may take the room the row
+     has left and no more (D102). */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A verb that failed says so where it was asked, in the warning colour the
+   rest of the strip already uses for trouble (D102). */
+.docent-portfolio-sync-note.is-failed {
+  color: #ffb86b;
+  opacity: 1;
+}
+
+/* The spinner a control wears while its own verb is in flight (D102). */
+.docent-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: docent-spin 0.7s linear infinite;
+}
+
+@keyframes docent-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .docent-portfolio-conflict {
@@ -909,6 +943,12 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* Reverting discards work (D103), so the one action that does wears the
+   warning colour rather than the neutral one Move… uses. */
+.docent-portfolio-revert:hover {
+  color: #ffb86b;
+}
+
 .docent-scene-card {
   display: flex;
   flex-direction: column;
@@ -946,6 +986,18 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+/* Two hover actions now share the caption with the name (D103), and on a
+   narrow card something has to give: the timestamp, never the name. */
+.docent-scene-caption .docent-portfolio-name {
+  min-width: 3.5em;
+}
+
+.docent-scene-caption .docent-portfolio-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
   min-width: 0;
 }
 
@@ -1571,6 +1623,46 @@ body {
   font-weight: 600;
   letter-spacing: 0.02em;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* The trunk lock (D104): the same view-only canvas the agent frame uses, said
+   quietly rather than in orange — nobody is working, the branch is simply not
+   one to edit — with the way forward beside it. */
+.docent-trunk-lock {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(27, 27, 31, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--docent-fg);
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.docent-trunk-lock-text code {
+  font-size: 12px;
+}
+
+.docent-trunk-lock button {
+  background: #2a2a30;
+  color: var(--docent-fg);
+  border: 1px solid #3a3a42;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.docent-trunk-lock button:hover:not(:disabled) {
+  border-color: #5a5a66;
 }
 
 .docent-agent-report {

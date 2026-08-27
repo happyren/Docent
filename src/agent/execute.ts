@@ -293,10 +293,62 @@ export interface AgentShellHooks {
     /** Create an empty scene in a project and open it. */
     createScene(project: string, scene: string): Promise<void>;
     /** Where the open scene's project stands with GitHub, or null when unbound. */
-    binding(project: string): Promise<{ branch: string; baseBranch: string } | null>;
+    binding(project: string): Promise<{
+      branch: string;
+      baseBranch: string;
+      /** Whether the base branch is locked against edits (D104). */
+      protected?: boolean;
+    } | null>;
     /** Cut a branch off the active one and move the project onto it. */
     createBranch(project: string, name: string): Promise<void>;
   };
+}
+
+/**
+ * The trunk lock (D104): a bound project whose base branch is protected,
+ * sitting on that base. What D63 asks of an agent politely — branch before
+ * you draw — is a rule wherever a person turned this on.
+ */
+type OpenBinding = Awaited<
+  ReturnType<NonNullable<AgentShellHooks["authoring"]>["binding"]>
+>;
+
+const trunkLocked = (binding: OpenBinding): binding is NonNullable<OpenBinding> =>
+  binding !== null &&
+  binding.protected === true &&
+  binding.branch === binding.baseBranch;
+
+const protectedTrunk = (branch: string) =>
+  `${branch} is protected — create_branch({name:'docent/…'}) first, then edit there`;
+
+/**
+ * Every tool that writes the scene document. They all land on the same two
+ * Command API calls (`edit` and `tidy`), so this is the one gate the lock
+ * needs — and the refusal carries the way forward, which a gate further down
+ * could not say.
+ */
+const WRITES = new Set([
+  "add_node",
+  "add_edge",
+  "update",
+  "remove",
+  "add_frame",
+  "add_detail_layer",
+  "define_kind",
+  "layout",
+  "edit",
+  "use_genre",
+  "define_scenario",
+  "tidy",
+]);
+
+/** What the open scene's project records, or null where nothing is bound. */
+async function openBinding(shell: AgentShellHooks): Promise<OpenBinding> {
+  // No authoring surface, no store to ask — and nothing this could refuse.
+  if (!shell.authoring) return null;
+  const scene = shell.currentScene();
+  if (!scene) return null;
+  return shell.authoring.binding(scene.project).catch(() => null);
 }
 
 /** An edit's answer with the way forward. */
@@ -468,6 +520,11 @@ export async function execute(
   tool: string,
   params: Record<string, unknown>,
 ): Promise<unknown> {
+  // The lock, asked once, before any write reaches the canvas (D104).
+  if (WRITES.has(tool)) {
+    const binding = await openBinding(shell);
+    if (trunkLocked(binding)) throw new Error(protectedTrunk(binding.branch));
+  }
   switch (tool) {
     case "get_scene_graph": {
       // The legend-applied semantic view (D43): the sidecar's entity model
@@ -527,16 +584,29 @@ export async function execute(
         graph.frames.find((f) => f.sourceId === sourceId)?.id ?? sourceId;
       const p = shell.presentation.state();
       const scene = shell.currentScene();
-      const binding = scene && shell.authoring ? await shell.authoring.binding(scene.project).catch(() => null) : null;
+      const binding = await openBinding(shell);
+      // Two reasons the canvas may not take a write, and the answer names
+      // whichever one is holding: the person's switch (D61), or the protected
+      // trunk (D104) — which comes with the way off it.
+      const locked = trunkLocked(binding);
+      const canEdit = commands.canEdit() && !locked;
       return {
         scene,
-        canEdit: commands.canEdit(),
+        canEdit,
+        ...(canEdit
+          ? {}
+          : {
+              why: locked
+                ? protectedTrunk(binding.branch)
+                : "the person has switched agent editing off — View → Agent can edit",
+            }),
         ...(binding
           ? {
               git: {
                 branch: binding.branch,
                 baseBranch: binding.baseBranch,
                 onBase: binding.branch === binding.baseBranch,
+                protected: binding.protected === true,
               },
             }
           : {}),

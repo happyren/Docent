@@ -410,9 +410,88 @@ describe("agent reading (D43, D45)", () => {
     expect(await execute(fakeCommands(), shell, "create_branch", { name: "docent/retry" })).toMatchObject({ branch: "docent/retry" });
     await execute(fakeCommands(), shell, "create_scene", { project: "work", scene: "new" });
     expect(log).toEqual(["save", "branch:work:docent/retry", "create:work/new"]);
-    const view = (await execute(fakeCommands(), shell, "get_view", {})) as { canEdit: boolean; git: { onBase: boolean } };
+    const view = (await execute(fakeCommands(), shell, "get_view", {})) as { canEdit: boolean; why?: string; git: { onBase: boolean } };
     expect(view.canEdit).toBe(true);
-    expect(view.git).toEqual({ branch: "main", baseBranch: "main", onBase: true });
+    expect(view.why).toBeUndefined();
+    // On the base branch, but nobody locked it (D104), so an edit is only the
+    // impolite way to work rather than a refusal.
+    expect(view.git).toEqual({ branch: "main", baseBranch: "main", onBase: true, protected: false });
+  });
+
+  /**
+   * The trunk lock (D104): where a person protected the base branch, the
+   * politeness D63 asks for becomes the rule, and every write says the same
+   * way forward instead of landing.
+   */
+  it("refuses every write on a protected base branch, with the branch as the way forward", async () => {
+    const log: string[] = [];
+    const { shell } = fakeShell({ scene: { project: "work", scene: "payments" } });
+    let branch = "main";
+    shell.authoring = {
+      saveScene: async () => ({ project: "work", scene: "payments" }),
+      createScene: async () => {},
+      binding: async () => ({ branch, baseBranch: "main", protected: true }),
+      createBranch: async (_project, name) => {
+        log.push(`branch:${name}`);
+        branch = name;
+      },
+    };
+
+    // The canvas would take the write; the trunk is what refuses it.
+    const view = (await execute(fakeCommands(), shell, "get_view", {})) as {
+      canEdit: boolean;
+      why: string;
+      git: { protected: boolean };
+    };
+    expect(view.canEdit).toBe(false);
+    expect(view.why).toMatch(/main is protected — create_branch/);
+    expect(view.git.protected).toBe(true);
+
+    // Every tool that writes the document, one gate, one sentence.
+    for (const [tool, params] of [
+      ["add_node", { label: "Retry queue" }],
+      ["update", { id: "n_a", label: "x" }],
+      ["remove", { id: "n_a" }],
+      ["add_frame", { name: "A" }],
+      ["add_detail_layer", { id: "n_a" }],
+      ["define_kind", { kind: "queue" }],
+      ["layout", { frame: "f_core" }],
+      ["edit", { ops: [{ op: "add_node", label: "B" }] }],
+      ["use_genre", { genre: "architecture" }],
+      ["define_scenario", { name: "checkout", path: ["n_a"] }],
+      ["tidy", { all: true }],
+    ] as [string, Record<string, unknown>][]) {
+      await expect(
+        execute(fakeCommands(), shell, tool, params),
+        tool,
+      ).rejects.toThrow(/main is protected — create_branch\(\{name:'docent\/…'\}\) first/);
+    }
+
+    // Reading is untouched, and so is the way out.
+    expect(await execute(fakeCommands(), shell, "get_outline", {})).toBeTruthy();
+    expect(
+      await execute(fakeCommands(), shell, "create_branch", { name: "docent/retry" }),
+    ).toMatchObject({ branch: "docent/retry" });
+    expect(log).toEqual(["branch:docent/retry"]);
+
+    // Off the base, the lock says nothing at all.
+    const after = (await execute(fakeCommands(), shell, "get_view", {})) as { canEdit: boolean };
+    expect(after.canEdit).toBe(true);
+    expect(
+      await execute(fakeCommands(), shell, "add_node", { label: "Retry queue" }),
+    ).toMatchObject({ applied: true });
+  });
+
+  /** An unprotected binding is the shell's switch and nothing else (D61). */
+  it("names the person's switch when that is what is holding", async () => {
+    const { shell } = fakeShell();
+    const commands = { ...fakeCommands(), canEdit: () => false } as CommandAPI;
+    const view = (await execute(commands, shell, "get_view", {})) as {
+      canEdit: boolean;
+      why: string;
+    };
+    expect(view.canEdit).toBe(false);
+    expect(view.why).toMatch(/View → Agent can edit/);
   });
 });
 

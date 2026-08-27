@@ -51,6 +51,12 @@ export interface Binding {
    */
   baseBranch: string;
   apiBase: string;
+  /**
+   * Whether the base branch is locked (D104): while the project sits on it,
+   * the canvas is view-only and the way forward is a branch. False on every
+   * binding that never asked for one.
+   */
+  protected: boolean;
   hasToken: boolean;
   /**
    * Whether the stored token may write to the repository, as the last
@@ -105,6 +111,8 @@ export interface BindingInput {
   token?: string;
   /** Omitted keeps whatever the binding recorded. */
   review?: ReviewOptions;
+  /** The trunk lock (D104) — omitted keeps what is stored, like `review`. */
+  protected?: boolean;
 }
 
 /** One branch of the bound repository (D28). */

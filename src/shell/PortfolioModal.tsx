@@ -19,13 +19,20 @@
  * synchronization itself: where this copy stands, pull, push, and the
  * per-scene questions a pull could not answer on its own.
  *
+ * Every verb in that strip reaches the network, so every one of them shows its
+ * work (D102): the control wears the verb and a spinner, the whole strip is
+ * disabled until the answer, and whatever the store said — a refusal included —
+ * lands beside the control that asked. A changed scene can also be taken back
+ * to the base copy the store already keeps (D103, D47), with the semantic
+ * changelog of what would go said first (D46).
+ *
  * A scene's name is a path (D92), so the grid is a tree (D93): folders that
  * open and close, scenes created into them or moved between them, and a
  * folder deleted with the scenes in it. A folder is nothing but the prefix
  * its scenes share — the store keeps no empty directory — so a folder made
  * here is staging until its first scene lands, and says so.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   createBranch,
   createProject,
@@ -36,6 +43,7 @@ import {
   listBranches,
   listProjects,
   listScenes,
+  loadBase,
   loadScene,
   openPullRequest,
   pull,
@@ -87,6 +95,8 @@ import {
   reviewProject,
   type PushedReview,
 } from "../review/session";
+import { snapshotFromSceneJSON } from "../adapter/snapshot";
+import { describeMeaningChange } from "../scene/diff";
 import { alertDialog, confirmDialog } from "./dialogs";
 import { ReviewPanel, type ReviewJump } from "./ReviewPanel";
 import { portfolioThumbnail } from "./sceneThumbnails";
@@ -142,6 +152,107 @@ function SceneThumb({
 }
 
 /**
+ * The strip's verbs, one at a time (D102). A control is named `<row>:<verb>`,
+ * which is both what wears the spinner and — by its row — where the answer
+ * lands, so a refusal appears beside the control that asked rather than in a
+ * box over the modal.
+ */
+interface Verbs {
+  /** The control whose verb is in flight, or null when none is. */
+  running: string | null;
+  /** True while any verb runs: every control in the strip is disabled. */
+  busy: boolean;
+  /** What was last said in this row, or nothing. */
+  saidIn(row: string): { text: string; failed: boolean } | null;
+  /** Say something beside a control without running a verb. */
+  say(control: string, text: string | null): void;
+  /** Fire a verb, unless one is already in flight. */
+  run(control: string, action: () => Promise<string | null>): void;
+}
+
+function useVerbs(): Verbs {
+  const [running, setRunning] = useState<string | null>(null);
+  const [said, setSaid] = useState<
+    { at: string; text: string; failed: boolean } | null
+  >(null);
+  // The guard is the ref, not the disabled attribute: state lands a render
+  // later, and two clicks inside one frame both read the old value. Disabling
+  // is what the eye sees; this is what the click actually hits.
+  const flight = useRef<string | null>(null);
+
+  const say = useCallback((at: string, text: string | null) => {
+    setSaid(text === null ? null : { at, text, failed: false });
+  }, []);
+
+  const run = useCallback((at: string, action: () => Promise<string | null>) => {
+    if (flight.current !== null) return;
+    flight.current = at;
+    setRunning(at);
+    setSaid(null);
+    void (async () => {
+      try {
+        const text = await action();
+        setSaid(text === null ? null : { at, text, failed: false });
+      } catch (err) {
+        // The store's own words, where the asking happened (D102).
+        setSaid({
+          at,
+          text: err instanceof Error ? err.message : String(err),
+          failed: true,
+        });
+      } finally {
+        flight.current = null;
+        setRunning(null);
+      }
+    })();
+  }, []);
+
+  const saidIn = useCallback(
+    (row: string) => (said?.at.startsWith(`${row}:`) ? said : null),
+    [said],
+  );
+
+  return { running, busy: running !== null, saidIn, say, run };
+}
+
+/** A control's face while its own verb runs (D102): the verb, and a spinner. */
+function Verb({
+  verbs,
+  control,
+  doing,
+  children,
+}: {
+  verbs: Verbs;
+  control: string;
+  doing: string;
+  children: ReactNode;
+}) {
+  if (verbs.running !== control) return <>{children}</>;
+  return (
+    <>
+      <span className="docent-spinner" aria-hidden="true" />
+      {doing}
+    </>
+  );
+}
+
+/** What the row's last verb said — the store's message, or a note (D102). */
+function Said({ said }: { said: { text: string; failed: boolean } | null }) {
+  if (!said) return null;
+  return (
+    <span
+      className={
+        "docent-portfolio-sync-note" + (said.failed ? " is-failed" : "")
+      }
+      role={said.failed ? "alert" : undefined}
+      title={said.text}
+    >
+      {said.text}
+    </span>
+  );
+}
+
+/**
  * What the tree's rows need from the modal (D93). One object rather than a
  * dozen props: the rows recurse, and every level asks for the same things.
  */
@@ -156,6 +267,11 @@ interface TreeHandlers {
   removeScene: (scene: string) => void;
   /** Ask where this scene is going — the row below the tree answers. */
   moveScene: (scene: string) => void;
+  /**
+   * Take this scene back to its base copy (D103), or null on a project with
+   * no base to go back to — an unbound one.
+   */
+  revertScene: ((scene: string) => void) | null;
   /** Aim the name field at a folder, with the path already typed. */
   newSceneIn: (folder: string) => void;
   newFolderIn: (folder: string) => void;
@@ -199,6 +315,21 @@ function SceneCard({ node, tree }: { node: SceneNode; tree: TreeHandlers }) {
           </span>
         )}
         <span className="docent-portfolio-meta">{fmtTime(node.info.updatedAt)}</span>
+        {/* Only where there is a "before" to go back to (D103): a bound
+            project, on a scene that changed since the last sync. */}
+        {tree.revertScene && (badge === "modified" || badge === "new") && (
+          <button
+            className="docent-portfolio-move docent-portfolio-revert"
+            title="Take this scene back to its last synced state"
+            disabled={tree.busy}
+            onClick={(e) => {
+              e.stopPropagation();
+              tree.revertScene?.(node.path);
+            }}
+          >
+            Revert…
+          </button>
+        )}
         <button
           className="docent-portfolio-move"
           title="Move this scene to another folder"
@@ -346,6 +477,9 @@ const EMPTY_FORM = {
   // The opt-in review artifacts (D49): off until asked for.
   reviewImages: false,
   reviewSidecars: false,
+  // The trunk lock (D104): on for a binding being created here, and whatever
+  // it already was for one being edited.
+  protectedTrunk: true,
 };
 
 /**
@@ -394,23 +528,22 @@ const conflictsOf = (sync: SyncStatus | null) =>
  *
  * Every action here changes what the scene grid should be showing, so each one
  * ends in `onChanged`, which re-reads the binding, the scene listing, and the
- * thumbnails.
+ * thumbnails — and each one runs through the strip's one verb at a time (D102).
  */
 function BranchRow({
   project,
   binding,
-  disabled,
+  verbs,
   onChanged,
 }: {
   project: string;
   binding: Binding;
-  disabled: boolean;
+  verbs: Verbs;
   onChanged: () => Promise<void>;
 }) {
   const [branches, setBranches] = useState<BranchInfo[] | null>(null);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let live = true;
@@ -441,40 +574,33 @@ function BranchRow({
     ];
   }, [branches, binding.branch, binding.baseBranch]);
 
-  const act = (action: () => Promise<void>) =>
-    void (async () => {
-      setBusy(true);
-      try {
-        await action();
-      } catch (err) {
-        await alertDialog(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
-    })();
-
   const pick = (branch: string) => {
     if (branch === binding.branch) return;
-    act(async () => {
-      await switchBranch(project, branch);
+    verbs.run("branch:switch", async () => {
+      const moved = await switchBranch(project, branch);
       await onChanged();
+      return moved.pulled
+        ? `on ${branch} — ${moved.pulled} scene${moved.pulled === 1 ? "" : "s"} pulled`
+        : `on ${branch}`;
     });
   };
 
-  const cut = () =>
-    act(async () => {
-      const wanted = name.trim();
-      if (!wanted) return;
+  const cut = () => {
+    const wanted = name.trim();
+    if (!wanted) return;
+    verbs.run("branch:create", async () => {
       // The store switches the binding to the new branch as part of creating
       // it, so there is nothing to do here but re-read everything.
       await createBranch(project, wanted);
       setNaming(false);
       setName("");
       await onChanged();
+      return `drafting on ${wanted}`;
     });
+  };
 
   const propose = () =>
-    act(async () => {
+    verbs.run("branch:pr", async () => {
       // Prefilled with what this session pushed (D46, D49): the changelog
       // per push, and the review pictures when the binding asked for them.
       const body = pullRequestBody(binding, pushesOf(project));
@@ -486,9 +612,10 @@ function BranchRow({
       // would have swallowed too.
       window.open(pull.url, "_blank");
       await alertDialog(`Pull request #${pull.number} opened:\n\n${pull.url}`);
+      return `pull request #${pull.number} opened`;
     });
 
-  const working = busy || disabled;
+  const working = verbs.busy;
   const drafting = binding.branch !== binding.baseBranch;
 
   return (
@@ -506,6 +633,13 @@ function BranchRow({
           </option>
         ))}
       </select>
+      {/* A select cannot wear a spinner, so the verb stands beside it. */}
+      {verbs.running === "branch:switch" && (
+        <span className="docent-portfolio-sync-note">
+          <span className="docent-spinner" aria-hidden="true" />
+          Switching…
+        </span>
+      )}
       {naming ? (
         <>
           <input
@@ -520,7 +654,9 @@ function BranchRow({
             }}
           />
           <button disabled={working || !name.trim()} onClick={cut}>
-            Create
+            <Verb verbs={verbs} control="branch:create" doing="Creating…">
+              Create
+            </Verb>
           </button>
           <button disabled={working} onClick={() => setNaming(false)}>
             Cancel
@@ -546,9 +682,12 @@ function BranchRow({
           title={`Open a pull request from ${binding.branch} into ${binding.baseBranch}`}
           onClick={propose}
         >
-          Open PR
+          <Verb verbs={verbs} control="branch:pr" doing="Opening PR…">
+            Open PR
+          </Verb>
         </button>
       )}
+      <Said said={verbs.saidIn("branch")} />
     </div>
   );
 }
@@ -566,61 +705,56 @@ function SyncRow({
   project,
   binding,
   sync,
-  disabled,
+  verbs,
   onChanged,
   onReview,
 }: {
   project: string;
   binding: Binding;
   sync: SyncStatus | null;
-  disabled: boolean;
+  verbs: Verbs;
   onChanged: () => void;
   /** Open the Review view (D48) for this project. */
   onReview: () => void;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
-
   // What the background checkpoint did, said where the manual verbs say their
   // own results — the author should not have to guess whether it is running.
+  const say = verbs.say;
   useEffect(
     () =>
       onAutoCommit((event) => {
         if (event.project !== project) return;
-        setNote(
+        say(
+          "sync:auto",
           event.kind === "committed"
             ? `auto-committed ${event.commit?.slice(0, 7) ?? ""}`.trim()
             : `drafting on ${event.branch}`,
         );
         onChanged();
       }),
-    [project, onChanged],
+    [project, onChanged, say],
   );
 
   /**
    * Run one verb, holding the project so the background checkpoint cannot
-   * overlap it, and saying loudly whatever the store refused with.
+   * overlap it. What the store answered — or refused with — is what the row
+   * says afterwards (D102).
    */
-  const act = (label: string, action: () => Promise<string | null>) =>
-    void (async () => {
-      if (!beginSync(project)) return;
-      setBusy(true);
+  const act = (control: string, action: () => Promise<string | null>) =>
+    verbs.run(control, async () => {
+      if (!beginSync(project)) {
+        return "the checkpointer has this project — try again in a moment";
+      }
       try {
-        setNote(await action());
-      } catch (err) {
-        setNote(null);
-        await alertDialog(
-          `${label} failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        return await action();
       } finally {
         endSync(project);
-        setBusy(false);
         onChanged();
       }
-    })();
+    });
 
   const doPull = () =>
-    act("Pull", async () => {
+    act("sync:pull", async () => {
       const result = await pull(project);
       const said = [
         result.updated.length > 0 && `${result.updated.length} updated`,
@@ -632,7 +766,7 @@ function SyncRow({
     });
 
   const doPush = () =>
-    act("Push", async () => {
+    act("sync:push", async () => {
       // The review first (S16): the semantic diff of every changed scene
       // against its base copy is what the commit message says (D46), and
       // what the opt-in artifacts are made from (D49).
@@ -682,12 +816,12 @@ function SyncRow({
     });
 
   const answer = (scene: string, resolution: "keep-local" | "take-remote") =>
-    act("Resolve", async () => {
+    act(`sync:resolve:${scene}:${resolution}`, async () => {
       await resolveConflict(project, scene, resolution);
       return `${scene}: ${resolution === "keep-local" ? "kept yours" : "took theirs"}`;
     });
 
-  const working = busy || disabled;
+  const working = verbs.busy;
   const conflicts = conflictsOf(sync);
   const onBase = sync !== null && sync.branch === sync.baseBranch;
   const pushable = hasPushable(sync) && !onBase;
@@ -702,7 +836,9 @@ function SyncRow({
           title="Bring this copy up to date with the branch"
           onClick={doPull}
         >
-          Pull
+          <Verb verbs={verbs} control="sync:pull" doing="Pulling…">
+            Pull
+          </Verb>
         </button>
         <button
           disabled={working || !pushable}
@@ -713,7 +849,9 @@ function SyncRow({
           }
           onClick={doPush}
         >
-          Push
+          <Verb verbs={verbs} control="sync:push" doing="Pushing…">
+            Push
+          </Verb>
         </button>
         <button
           disabled={working || !hasPushable(sync)}
@@ -722,7 +860,7 @@ function SyncRow({
         >
           Review changes
         </button>
-        {note && <span className="docent-portfolio-sync-note">{note}</span>}
+        <Said said={verbs.saidIn("sync")} />
       </div>
       {conflicts.map((scene) => (
         <div key={scene.name} className="docent-portfolio-github-branches">
@@ -733,14 +871,26 @@ function SyncRow({
             title="Keep this copy; the next push overwrites the branch"
             onClick={() => answer(scene.name, "keep-local")}
           >
-            Keep mine
+            <Verb
+              verbs={verbs}
+              control={`sync:resolve:${scene.name}:keep-local`}
+              doing="Keeping…"
+            >
+              Keep mine
+            </Verb>
           </button>
           <button
             disabled={working}
             title="Replace this copy with the branch's"
             onClick={() => answer(scene.name, "take-remote")}
           >
-            Take remote
+            <Verb
+              verbs={verbs}
+              control={`sync:resolve:${scene.name}:take-remote`}
+              doing="Taking…"
+            >
+              Take remote
+            </Verb>
           </button>
         </div>
       ))}
@@ -768,7 +918,10 @@ function GitHubPanel({
   const [binding, setBinding] = useState<Binding | null | undefined>(undefined);
   const [form, setForm] = useState(EMPTY_FORM);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // One verb at a time across the whole strip (D102): a branch switch and a
+  // pull are the same working copy, so neither may start while the other runs.
+  const verbs = useVerbs();
+  const busy = verbs.busy;
 
   useEffect(() => {
     let live = true;
@@ -807,54 +960,50 @@ function GitHubPanel({
       token: "",
       reviewImages: binding?.review.images ?? false,
       reviewSidecars: binding?.review.sidecars ?? false,
+      // ON for a binding being created, untouched for one being edited (D104).
+      protectedTrunk: binding ? binding.protected : true,
     });
     setOpen(true);
   };
 
-  const submit = () => {
-    void (async () => {
-      setBusy(true);
-      try {
-        // A pasted "owner/repo" is the shape people copy out of GitHub's URL
-        // bar, so accept it in either field rather than making them split it.
-        let owner = form.owner.trim();
-        let repo = form.repo.trim();
-        const pasted = (repo.includes("/") ? repo : owner).split("/");
-        if (pasted.length === 2 && pasted[0] && pasted[1]) {
-          [owner, repo] = pasted;
-        }
-        const result = await putBinding(project, {
-          owner,
-          repo,
-          path: form.path.trim(),
-          branch: form.branch.trim(),
-          apiBase: form.apiBase.trim(),
-          token: form.token.trim(),
-          review: { images: form.reviewImages, sidecars: form.reviewSidecars },
-        });
-        const stored = await getBinding(project);
-        setBinding(stored);
-        setOpen(false);
-        edit({ token: "" });
-        onChanged();
-        // The store asked GitHub what this token may do, so say it now rather
-        // than let the first save be the messenger. A read-only token is the
-        // common accident: fine-grained PATs default to Contents: Read.
-        const target = `${stored?.owner ?? owner}/${stored?.repo ?? repo}`;
-        if (result.canWrite === false) {
-          await alertDialog(
-            `Connected read-only: scenes will open, but saving will fail. Grant the token "Contents: Read and write" on ${target}, then update the token here.`,
-          );
-        } else if (result.warning) {
-          await alertDialog(result.warning);
-        }
-      } catch (err) {
-        await alertDialog(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
+  const submit = () =>
+    verbs.run("github:bind", async () => {
+      // A pasted "owner/repo" is the shape people copy out of GitHub's URL
+      // bar, so accept it in either field rather than making them split it.
+      let owner = form.owner.trim();
+      let repo = form.repo.trim();
+      const pasted = (repo.includes("/") ? repo : owner).split("/");
+      if (pasted.length === 2 && pasted[0] && pasted[1]) {
+        [owner, repo] = pasted;
       }
-    })();
-  };
+      const result = await putBinding(project, {
+        owner,
+        repo,
+        path: form.path.trim(),
+        branch: form.branch.trim(),
+        apiBase: form.apiBase.trim(),
+        token: form.token.trim(),
+        review: { images: form.reviewImages, sidecars: form.reviewSidecars },
+        protected: form.protectedTrunk,
+      });
+      const stored = await getBinding(project);
+      setBinding(stored);
+      setOpen(false);
+      edit({ token: "" });
+      onChanged();
+      // The store asked GitHub what this token may do, so say it now rather
+      // than let the first save be the messenger. A read-only token is the
+      // common accident: fine-grained PATs default to Contents: Read.
+      const target = `${stored?.owner ?? owner}/${stored?.repo ?? repo}`;
+      if (result.canWrite === false) {
+        await alertDialog(
+          `Connected read-only: scenes will open, but saving will fail. Grant the token "Contents: Read and write" on ${target}, then update the token here.`,
+        );
+      } else if (result.warning) {
+        await alertDialog(result.warning);
+      }
+      return `connected to ${target}`;
+    });
 
   const disconnect = () => {
     if (!binding) return;
@@ -869,17 +1018,13 @@ function GitHubPanel({
           "may still hold older scenes — comes back as its storage.",
       );
       if (!confirmed) return;
-      setBusy(true);
-      try {
+      verbs.run("github:unbind", async () => {
         await deleteBinding(project);
         setBinding(null);
         setOpen(false);
         onChanged();
-      } catch (err) {
-        await alertDialog(err instanceof Error ? err.message : String(err));
-      } finally {
-        setBusy(false);
-      }
+        return "disconnected";
+      });
     })();
   };
 
@@ -902,11 +1047,23 @@ function GitHubPanel({
                 no token — scenes cannot be read or written
               </span>
             )}
+            {/* The lock, where the target is (D104) — a standing fact about
+                the binding, not a control. */}
+            {binding.protected && (
+              <span
+                className="docent-scene-tag"
+                title={`${binding.baseBranch} is protected — the canvas is view-only while this project sits on it`}
+              >
+                {binding.baseBranch} locked
+              </span>
+            )}
             <button disabled={busy} onClick={openForm}>
               Update token…
             </button>
             <button disabled={busy} onClick={disconnect}>
-              Disconnect
+              <Verb verbs={verbs} control="github:unbind" doing="Disconnecting…">
+                Disconnect
+              </Verb>
             </button>
           </>
         ) : (
@@ -919,6 +1076,8 @@ function GitHubPanel({
             </button>
           </>
         )}
+        {/* Binding and unbinding answer here, beside the buttons that ask. */}
+        <Said said={verbs.saidIn("github")} />
       </div>
       {/* Branches and synchronization both need a token to ask about at all,
           and the line above already says when there isn't one. */}
@@ -927,14 +1086,14 @@ function GitHubPanel({
           <BranchRow
             project={project}
             binding={binding}
-            disabled={busy}
+            verbs={verbs}
             onChanged={reload}
           />
           <SyncRow
             project={project}
             binding={binding}
             sync={sync}
-            disabled={busy}
+            verbs={verbs}
             onChanged={onChanged}
             onReview={onReview}
           />
@@ -984,6 +1143,22 @@ function GitHubPanel({
               disabled={busy}
               onChange={(e) => edit({ token: e.target.value })}
             />
+          </label>
+          {/* The trunk lock (D104): the branch discipline S14 recommends, made
+              a rule by the person who owns the trunk. On for a new binding. */}
+          <label className="docent-check">
+            <input
+              type="checkbox"
+              checked={form.protectedTrunk}
+              disabled={busy}
+              onChange={(e) => edit({ protectedTrunk: e.target.checked })}
+            />
+            <span>
+              Protect{" "}
+              <code>{binding?.baseBranch ?? (form.branch.trim() || "the base branch")}</code>: while
+              this project sits on it the canvas is view-only, and editing
+              starts with a branch
+            </span>
           </label>
           <details className="docent-portfolio-github-advanced">
             <summary>Advanced</summary>
@@ -1037,7 +1212,13 @@ function GitHubPanel({
               disabled={busy || !form.owner.trim() || !form.repo.trim()}
               onClick={submit}
             >
-              {binding ? "Save binding" : "Connect"}
+              <Verb
+                verbs={verbs}
+                control="github:bind"
+                doing={binding ? "Saving…" : "Connecting…"}
+              >
+                {binding ? "Save binding" : "Connect"}
+              </Verb>
             </button>
             <button disabled={busy} onClick={() => setOpen(false)}>
               Cancel
@@ -1077,6 +1258,12 @@ export interface PortfolioModalProps {
    * the path it just left.
    */
   onSceneMoved?: (project: string, from: string, to: string) => void;
+  /**
+   * A scene's file was replaced under the canvas (D103). Only the shell knows
+   * which scene is open, so it decides whether to reload — what it must never
+   * do is go on editing a copy that is no longer on disk.
+   */
+  onSceneReverted?: (project: string, scene: string) => Promise<void>;
 }
 
 export function PortfolioModal({
@@ -1087,6 +1274,7 @@ export function PortfolioModal({
   onClose,
   onShowChange,
   onSceneMoved,
+  onSceneReverted,
 }: PortfolioModalProps) {
   const [available, setAvailable] = useState<boolean | null>(null);
   // The Review view (D48) stands in for the body while it is open.
@@ -1123,6 +1311,9 @@ export function PortfolioModal({
   // the path it just typed for you.
   const [prefill, setPrefill] = useState(0);
   const saveNameRef = useRef<HTMLInputElement | null>(null);
+  // A revert in flight (D103) — the guard the disabled attribute cannot be,
+  // because the question is asked before anything is disabled.
+  const reverting = useRef(false);
 
   // Async now that the box may be a native one the shell raises, but used the
   // same way: as a `.catch` handler and from `run` below. Callers that do not
@@ -1305,6 +1496,59 @@ export function PortfolioModal({
       await onOpenScene(selected, name);
       onClose();
     });
+  };
+
+  /**
+   * Revert one scene to its base copy (D103): the "before" the store already
+   * keeps beside its sync state (D47), so nothing here reaches GitHub. What
+   * would be thrown away is named first, in the diagram's own terms (D46) —
+   * this is the moment of regret, and a file hash is no answer at it.
+   */
+  const revertScene = (name: string) => {
+    if (!selected || reverting.current) return;
+    const project = selected;
+    // One revert at a time: the reading and the question both happen before
+    // `busy` can disable anything, and this is the action that discards work.
+    reverting.current = true;
+    void (async () => {
+      try {
+        const base = await loadBase(project, name);
+        // No recorded base: the scene has never been on the branch, so there
+        // is nothing to go back to, and this says so rather than guessing.
+        if (base === null) {
+          await alertDialog(
+            `"${project}/${displayPath(name)}" has no synced state yet — pull or push first: what that lands is what a revert goes back to.`,
+          );
+          return;
+        }
+        // Base → working is what this copy did; that is what a revert drops.
+        const { changelog } = describeMeaningChange(
+          snapshotFromSceneJSON(base),
+          snapshotFromSceneJSON(await loadScene(project, name)),
+        );
+        const confirmed = await confirmDialog(
+          `Revert "${displayPath(name)}"? Discards:\n\n${
+            changelog || "no meaning changes — only the picture"
+          }`,
+        );
+        if (!confirmed) return;
+        await run(async () => {
+          // The same save every other write here takes: a local file write,
+          // and the next push carries it like any other change.
+          await saveScene(project, name, base);
+          setThumbRevision((revision) => revision + 1);
+          setScenes(await listScenes(project));
+          await refreshProjects();
+          await refreshSync(project);
+          // The canvas must not go on editing what is no longer on disk.
+          await onSceneReverted?.(project, name);
+        });
+      } catch (err) {
+        await fail(err);
+      } finally {
+        reverting.current = false;
+      }
+    })();
   };
 
   // ---- the tree (D93) ------------------------------------------------------
@@ -1505,6 +1749,9 @@ export function PortfolioModal({
     openScene,
     removeScene,
     moveScene: startMove,
+    // Only a bound project has a base copy to go back to (D47) — an unbound
+    // one answers 404 to sync-status, which is what `sync` being null means.
+    revertScene: sync === null ? null : revertScene,
     newSceneIn,
     newFolderIn,
     removeFolder,
