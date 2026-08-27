@@ -1,9 +1,32 @@
 <!doctype html>
-<html lang="en">
+<!--
+  The chrome starts in the theme the canvas starts in (D107): Excalidraw comes
+  up light unless the person says otherwise, so the house does too, and App.tsx
+  rewrites this attribute the moment the canvas reports what it actually is.
+  Stamping it here rather than leaving it to the first render is what keeps the
+  chrome from wearing the other theme for a frame.
+-->
+<html lang="en" data-docent-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Docent</title>
+    <!-- The house faces are served from this origin (D107); the chrome's own
+         text is the first thing painted, so both are fetched up front. -->
+    <link
+      rel="preload"
+      href="/fonts/spline-sans-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/newsreader-latin.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
   </head>
   <body>
     <div id="root"></div>
