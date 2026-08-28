@@ -2062,8 +2062,34 @@ body {
   right: 0;
   height: 14px;
   z-index: 45;
+  cursor: grab;
   -webkit-app-region: drag;
   app-region: drag;
+}
+
+/* …and it shows itself (D112): hovering the top edge fades in a soft band in
+   the house's surface tone that names the grab area, gone again when the
+   pointer leaves. Presentation only — the band takes no pointer, so the strip
+   above stays exactly the 14px that overlaps no island. */
+.docent-titlebar-drag::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  /* The natural macOS title-bar height, said in the house's grammar: a
+     surface with a hairline foot, not a shadowed island — depth stays
+     reserved for things that float, and a title bar does not. */
+  height: 27px;
+  border-bottom: 1px solid var(--docent-hairline);
+  background: color-mix(in srgb, var(--docent-surface) 94%, transparent);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.docent-titlebar-drag:hover::after {
+  opacity: 1;
 }
 
 /* ── The tools dock left (D110) ────────────────────────────────────────────
@@ -2086,13 +2112,12 @@ body {
    colour, radius and shadow are still the Island's own, which A27 already
    dressed through the variables it publishes (I1). */
 .docent-app {
-  /* The column: where its head sits, how wide a strip it claims (16 of
-     gutter, 44 of island, 12 of air), and what the collapse chip at its head
-     takes out of it — 44 of island and 12 of air again, the island being
-     square. The foot keeps the same 72 clear of upstream's zoom controls. */
+  /* The column: where its head sits and how wide a strip it claims (16 of
+     gutter, 44 of island, 12 of air). The foot keeps the same 72 clear of
+     upstream's zoom controls. The chip that once headed the column is
+     retired (D114), so the head is the column's own top. */
   --docent-rail-top: 16px;
   --docent-rail-inset: 72px;
-  --docent-rail-chip: 56px;
 }
 
 /* Under the traffic lights, never beside them (D108): on the borderless macOS
@@ -2108,7 +2133,7 @@ body {
   /* Centred in the column rather than on the viewport, so `top` is a floor:
      `margin-block: auto` splits the slack, and a window too short to split it
      leaves the rail at the floor instead of climbing out of the column. */
-  top: calc(var(--docent-rail-top) + var(--docent-rail-chip));
+  top: var(--docent-rail-top);
   bottom: var(--docent-rail-inset);
   /* Both are shrink-to-fit: the island is as wide as one button and as tall
      as the tools it holds, and nothing else. */
@@ -2117,10 +2142,7 @@ body {
   /* The cap is what keeps `top` a floor: an island taller than the column
      would otherwise take negative margins and climb out of it. A window too
      short for every tool scrolls the rail rather than hiding one. */
-  max-height: calc(
-    100dvh - var(--docent-rail-top) - var(--docent-rail-chip) -
-      var(--docent-rail-inset)
-  );
+  max-height: calc(100dvh - var(--docent-rail-top) - var(--docent-rail-inset));
   margin-block: auto;
   overflow-y: auto;
 }
@@ -2168,8 +2190,9 @@ body {
    D108 declares the traffic lights (I1): `--sal` is upstream's own
    safe-area-inset-left, and its `FixedSideContainer` pads itself by it — so
    the shape panel and the hamburger step aside without a selector reaching
-   into either. Claimed whether or not the tools are showing, because the
-   collapse chip is the same 44px island standing in the same column. */
+   into either. Claimed whether or not the tools are showing: the collapsed
+   rail's handle stands on the same edge (D114), and islands that do not jump
+   when the tools go away are islands a reader keeps their bearings by. */
 .docent-app .excalidraw {
   --sal: calc(
     env(safe-area-inset-left, 0px) + var(--docent-safe-left) +
@@ -2182,47 +2205,46 @@ body {
   display: none;
 }
 
-/* Docent's own chip at the head of the rail — the one thing left when the
-   tools are away, and the way back. An island like every other (D107). It
-   stands where upstream's hamburger used to, which the strip above has just
-   moved aside; the foot of the column belongs to upstream's zoom controls. */
-.docent-tools-chip {
+/* The way back (D114): while the tools are away, a slim handle hugs the left
+   edge at the window's waist — a hairline that warms on hover, and the only
+   chrome the collapse leaves. The button is a 14px strip for the pointer; the
+   drawn part is the 4px pill inside it. */
+.docent-rail-handle {
   position: fixed;
-  left: 16px;
-  top: var(--docent-rail-top);
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 5;
-  width: 44px;
-  height: 44px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 14px;
+  height: 72px;
   padding: 0;
-  border: 1px solid var(--docent-hairline);
-  border-radius: var(--docent-radius-island);
-  background: var(--docent-surface);
-  box-shadow: var(--docent-shadow);
-  color: var(--docent-muted);
+  border: none;
+  background: none;
   cursor: pointer;
 }
 
-.docent-tools-chip svg {
-  width: 20px;
-  height: 20px;
+.docent-rail-handle::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--docent-hairline);
+  transition:
+    background 120ms ease,
+    transform 120ms ease;
 }
 
-.docent-tools-chip:hover {
-  color: var(--docent-accent-text);
-  border-color: var(--docent-accent-line);
+.docent-rail-handle:hover::after {
+  background: var(--docent-accent);
+  transform: scaleY(1.12);
 }
 
-.docent-tools-chip:focus-visible {
+.docent-rail-handle:focus-visible {
   outline: 2px solid var(--docent-accent);
   outline-offset: 1px;
-}
-
-/* Away, and the chip says so: the accent, spent on one 20px glyph. */
-.docent-tools-collapsed .docent-tools-chip {
-  color: var(--docent-accent-text);
 }
 
 /* ── The command palette (D111) ────────────────────────────────────────────
@@ -2378,6 +2400,15 @@ body {
   --color-primary-light-darker: var(--docent-accent-wash-strong);
   --color-surface-primary-container: var(--docent-accent-wash);
   --color-on-primary-container: var(--docent-accent-text);
+  /* The surface family (D113): what the zoom pill, undo/redo and the other
+     footer buttons are made of. Low is the fill, high the hover (darker, as
+     porcelain hovers are), lowest the 1px ring — the hairline tone, so the
+     pills read as islands like every other. */
+  --color-surface-low: #f2eee5;
+  --color-surface-mid: #f4f1ea;
+  --color-surface-high: #e9e4d8;
+  --color-surface-lowest: #e3ded2;
+  --color-on-surface: #26231e;
   --island-bg-color: rgba(250, 248, 244, 0.96);
   --sidebar-bg-color: #faf8f4;
   --popup-bg-color: #faf8f4;
@@ -2397,6 +2428,14 @@ body {
   --color-danger-background: var(--docent-destructive-wash);
 }
 
+/* The "?" retires (D113): a permanent button for a dialog a chord opens is
+   furniture the paper pays for. Help keeps its key — press ? — and this is
+   the same narrow, honestly-brittle touch as the rail reflow: if upstream
+   renames the class, the button returns and nothing breaks. */
+.docent-app .help-icon {
+  display: none;
+}
+
 /* Doubled class: upstream sets its dark variables at .excalidraw.theme--dark
    and loads after this sheet, so an equal selector loses the tie. */
 .excalidraw.theme--dark.theme--dark {
@@ -2413,6 +2452,13 @@ body {
   --sidebar-shadow: var(--docent-shadow);
   --color-danger-color: var(--docent-destructive);
   --color-danger-background: var(--docent-destructive-wash);
+  /* The surface family in Atelier (D113): raised umber fills, a warmer hover,
+     and a near-black ring the shadow does the separating for. */
+  --color-surface-low: #26231f;
+  --color-surface-mid: #221f1b;
+  --color-surface-high: #322d27;
+  --color-surface-lowest: #141210;
+  --color-on-surface: #efeae2;
   --island-bg-color: rgba(28, 26, 24, 0.97);
   --sidebar-bg-color: #1c1a18;
   --popup-bg-color: #26231f;

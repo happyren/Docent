@@ -54,6 +54,7 @@ enum MenuAction {
     ExportSidecar,
     Present,
     Library,
+    Tools,
     Legend,
     Arrange,
     Tidy,
@@ -68,7 +69,7 @@ enum MenuAction {
 
 impl MenuAction {
     /// Every action, in menu-bar order.
-    const ALL: [Self; 20] = [
+    const ALL: [Self; 21] = [
         Self::New,
         Self::Open,
         Self::Import,
@@ -79,6 +80,7 @@ impl MenuAction {
         Self::ExportSidecar,
         Self::Present,
         Self::Library,
+        Self::Tools,
         Self::Legend,
         Self::Arrange,
         Self::Tidy,
@@ -105,6 +107,7 @@ impl MenuAction {
             Self::ExportSidecar => "export-sidecar",
             Self::Present => "present",
             Self::Library => "library",
+            Self::Tools => "tools",
             Self::Legend => "legend",
             Self::Arrange => "arrange",
             Self::Tidy => "tidy",
@@ -130,6 +133,11 @@ impl MenuAction {
             Self::ExportSidecar => "Export Semantic JSON…",
             Self::Present => "Present",
             Self::Library => "Shape Library",
+            // "Toggle", not a Hide/Show pair: a native label cannot follow the
+            // page's state without a page→shell channel nothing else needs
+            // (D114), and a checkmark would drift the same way. The verb is
+            // honest either way the rail stands.
+            Self::Tools => "Toggle the Tools",
             Self::Legend => "Legend…",
             Self::Arrange => "Arrange Detail Tiers",
             Self::Tidy => "Tidy Diagram",
@@ -153,6 +161,8 @@ impl MenuAction {
             Self::SaveAs => Some("CmdOrCtrl+Shift+S"),
             Self::Present => Some("CmdOrCtrl+P"),
             Self::Library => Some("CmdOrCtrl+L"),
+            // The editors' sidebar chord family; \ is unclaimed by upstream.
+            Self::Tools => Some("CmdOrCtrl+\\"),
             // Format Document's chord, as every editor has it (D73); Alt is
             // Option on macOS.
             Self::Tidy => Some("Alt+Shift+F"),
@@ -461,6 +471,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &item(app, MenuAction::Present)?,
             &item(app, MenuAction::Library)?,
+            &item(app, MenuAction::Tools)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Tidy)?,
             &item(app, MenuAction::Arrange)?,
@@ -885,7 +896,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 18] = [
+    const FRONTEND_IDS: [&str; 19] = [
         "new",
         "open",
         "import",
@@ -896,6 +907,7 @@ mod tests {
         "export-sidecar",
         "present",
         "library",
+        "tools",
         "legend",
         "arrange",
         "tidy",
@@ -963,7 +975,7 @@ mod tests {
             // File
             "open", "save", "save-as", "export-mermaid", "export-sidecar",
             // Diagram
-            "present", "tidy", "arrange", "legend", "detail-markers",
+            "present", "tools", "tidy", "arrange", "legend", "detail-markers",
             // Project
             "portfolio", "connect-agent", "plugins",
         ] {
@@ -980,6 +992,16 @@ mod tests {
         assert_eq!(MenuAction::Tidy.accelerator(), Some("Alt+Shift+F"));
         assert!(is_frontend_menu_id(MenuAction::Tidy.id()));
         assert!(FRONTEND_IDS.contains(&MenuAction::Tidy.id()));
+    }
+
+    #[test]
+    fn the_tools_toggle_is_a_page_item_on_the_sidebar_chord() {
+        // D114: the collapse is a command, not a chip — one page handler,
+        // reached from the bar on the editors' sidebar chord.
+        assert_eq!(MenuAction::Tools.id(), "tools");
+        assert_eq!(MenuAction::Tools.label(), "Toggle the Tools");
+        assert_eq!(MenuAction::Tools.accelerator(), Some("CmdOrCtrl+\\"));
+        assert!(is_frontend_menu_id(MenuAction::Tools.id()));
     }
 
     #[test]

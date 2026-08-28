@@ -86,6 +86,7 @@ type DocentMenuId =
   | "export-sidecar"
   | "present"
   | "library"
+  | "tools"
   | "legend"
   | "arrange"
   | "tidy"
@@ -99,16 +100,15 @@ type DocentMenuWindow = Window & { __docentMenu?: (id: DocentMenuId) => void };
 
 /**
  * Everything the command table holds: the menu bar's ids plus the actions no
- * menu carries — the exports the desktop shell has no file channel for, the
- * portfolio's sync verbs, and the tools' own collapse (D110).
+ * menu carries — the exports the desktop shell has no file channel for and
+ * the portfolio's sync verbs.
  */
 type DocentActionId =
   | DocentMenuId
   | "export-pdf"
   | "branch"
   | "pull"
-  | "push"
-  | "tools";
+  | "push";
 
 /** One command, in the one place it is implemented (B4). */
 interface DocentAction {
@@ -135,6 +135,7 @@ const KEY = isMac
       saveAs: "⇧⌘S",
       present: "⌘P",
       library: "⌘L",
+      tools: "⌘\\",
       tidy: "⌥⇧F",
     }
   : {
@@ -145,6 +146,7 @@ const KEY = isMac
       saveAs: "Ctrl+Shift+S",
       present: "Ctrl+P",
       library: "Ctrl+L",
+      tools: "Ctrl+\\",
       tidy: "Alt+Shift+F",
     };
 
@@ -1253,6 +1255,25 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [tidyDiagram]);
 
+  // The rail's chord (D114): Cmd+\, Ctrl+\ elsewhere — the editors' sidebar
+  // family. The desktop's native accelerator owns it there, like the file
+  // chords above; here as everywhere, a field being typed in keeps its keys.
+  useEffect(() => {
+    if (isDesktop) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key !== "\\") return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleTools();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [toggleTools]);
+
   /**
    * ── One command, one implementation (B4, D109) ──────────────────────────
    *
@@ -1363,6 +1384,7 @@ export function App() {
     },
     tools: {
       title: toolsCollapsed ? "Show the tools" : "Hide the tools",
+      shortcut: KEY.tools,
       hint: "the left rail",
       run: toggleTools,
     },
@@ -1748,32 +1770,18 @@ export function App() {
           detailMarkersVisible={detailMarkers}
           contextExport={{ resolveFrameAt, onCopy: copyFrameJson }}
         />
-        {/* The tools' collapse (D110): Docent's own chip at the foot of the
-            rail, and — collapsed — the whole of what is left over the paper.
-            Not during a presentation, which has no tools to speak of. */}
-        {!presentation.active && (
+        {/* The way back (D114): while the tools are away, a slim handle on
+            the left edge — the one piece of chrome the collapse leaves, gone
+            again the moment the rail returns. Not during a presentation,
+            which has no tools to speak of. */}
+        {!presentation.active && toolsCollapsed && (
           <button
             type="button"
-            className="docent-tools-chip"
-            aria-pressed={toolsCollapsed}
-            title={toolsCollapsed ? "Show the tools" : "Hide the tools"}
-            aria-label={toolsCollapsed ? "Show the tools" : "Hide the tools"}
+            className="docent-rail-handle"
+            title="Show the tools"
+            aria-label="Show the tools"
             onClick={toggleTools}
-          >
-            <svg
-              viewBox="0 0 20 20"
-              aria-hidden="true"
-              focusable="false"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.25"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M4 16.2l.9-3.3L13.3 4.4a1.5 1.5 0 0 1 2.1 0l.2.2a1.5 1.5 0 0 1 0 2.1L7.2 15.3 4 16.2Z" />
-              <path d="M12.5 5.2l2.3 2.3" />
-            </svg>
-          </button>
+          />
         )}
         {canvas && (
           <Breadcrumbs

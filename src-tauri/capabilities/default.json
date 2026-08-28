@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "What the page may ask of the shell — the borderless window's title-bar verbs and nothing else (D112): start dragging from the drag strip, and the zoom a double-click on a macOS title bar owes. The store speaks HTTP and the menu speaks through __docentMenu, so no other shell API is granted.",
+  "windows": ["main"],
+  "permissions": [
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
+  ]
+}
