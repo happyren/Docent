@@ -1,225 +1,373 @@
 {
-  "names": {
-    "software-architecture": {
-      "0": "Connector",
-      "1": "Database",
-      "2": "Layers",
-      "3": "Pipe",
-      "4": "Document",
-      "5": "Browser window",
-      "6": "Mobile device"
-    }
-  },
-  "categories": {
-    "software-architecture": {
-      "Connector": "general",
-      "Database": "storage",
-      "Layers": "general",
-      "Pipe": "messaging",
-      "Document": "general",
-      "Browser window": "client",
-      "Mobile device": "client"
-    }
-  },
-  "aliases": {
-    "aws/amazon-bedrock": [
-      "llm",
-      "foundation model",
-      "genai"
-    ],
-    "aws/api-gateway": [
-      "rest api",
-      "api endpoint",
-      "gateway",
-      "http api"
-    ],
-    "aws/athena": [
-      "query",
-      "sql on s3"
-    ],
-    "aws/aurora": [
-      "aurora postgres",
-      "aurora mysql"
-    ],
-    "aws/aws-cloud": [
-      "aws account",
-      "cloud boundary"
-    ],
-    "aws/cloudformation": [
-      "infrastructure as code",
-      "iac",
-      "stack"
-    ],
-    "aws/cloudfront": [
-      "cdn",
-      "edge cache"
-    ],
-    "aws/cloudwatch": [
-      "monitoring",
-      "metrics",
-      "logs",
-      "alarms"
-    ],
-    "aws/codepipeline": [
-      "ci cd",
-      "pipeline"
-    ],
-    "aws/cognito": [
-      "auth",
-      "user pool",
-      "login"
-    ],
-    "aws/dynamodb": [
-      "nosql",
-      "key value store",
-      "dynamo"
-    ],
-    "aws/ec2": [
-      "virtual machine",
-      "vm",
-      "instance",
-      "server"
-    ],
-    "aws/ecs": [
-      "container service",
-      "containers"
-    ],
-    "aws/eks": [
-      "kubernetes",
-      "k8s"
-    ],
-    "aws/elasticache": [
-      "cache",
-      "redis",
-      "memcached"
-    ],
-    "aws/eventbridge": [
-      "event bus",
-      "events"
-    ],
-    "aws/fargate": [
-      "serverless containers"
-    ],
-    "aws/glue": [
-      "etl"
-    ],
-    "aws/iam": [
-      "identity",
-      "permissions",
-      "roles"
-    ],
-    "aws/kinesis-data-streams": [
-      "stream",
-      "event stream"
-    ],
-    "aws/lambda": [
-      "function",
-      "serverless",
-      "faas",
-      "aws lambda"
-    ],
-    "aws/managed-streaming-for-apache-kafka": [
-      "kafka",
-      "msk"
-    ],
-    "aws/opensearch-service": [
-      "search",
-      "elasticsearch"
-    ],
-    "aws/rds": [
-      "relational database",
-      "postgres",
-      "mysql",
-      "sql database"
-    ],
-    "aws/redshift": [
-      "data warehouse",
-      "warehouse"
-    ],
-    "aws/route-53": [
-      "dns",
-      "domain"
-    ],
-    "aws/s3": [
-      "bucket",
-      "object storage",
-      "blob storage",
-      "simple storage service"
-    ],
-    "aws/sagemaker": [
-      "ml training",
-      "machine learning"
-    ],
-    "aws/secrets-manager": [
-      "secrets"
-    ],
-    "aws/ses": [
-      "email"
-    ],
-    "aws/sns": [
-      "topic",
-      "pub sub",
-      "notification",
-      "simple notification service"
-    ],
-    "aws/sqs": [
-      "queue",
-      "message queue",
-      "simple queue service"
-    ],
-    "aws/step-functions": [
-      "workflow",
-      "state machine",
-      "orchestration"
-    ],
-    "aws/vpc": [
-      "network",
-      "virtual private cloud"
-    ],
-    "software/browser-window": [
-      "browser",
-      "web client",
-      "frontend",
-      "website",
-      "web app"
-    ],
-    "software/connector": [
-      "connector",
-      "line",
-      "link"
-    ],
-    "software/database": [
-      "database",
-      "db",
-      "datastore",
-      "cylinder",
-      "sql"
-    ],
-    "software/document": [
-      "document",
-      "file",
-      "report",
-      "spec",
-      "record"
-    ],
-    "software/layers": [
-      "layers",
-      "stack",
-      "tiers"
-    ],
-    "software/mobile-device": [
-      "mobile",
-      "phone",
-      "mobile app",
-      "device",
-      "ios",
-      "android"
-    ],
-    "software/pipe": [
-      "pipe",
-      "pipeline",
-      "stream",
-      "channel"
-    ]
+ "names": {
+  "software-architecture": {
+   "0": "Connector",
+   "1": "Database",
+   "2": "Layers",
+   "3": "Pipe",
+   "4": "Document",
+   "5": "Browser window",
+   "6": "Mobile device"
   }
+ },
+ "categories": {
+  "software-architecture": {
+   "Connector": "general",
+   "Database": "storage",
+   "Layers": "general",
+   "Pipe": "messaging",
+   "Document": "general",
+   "Browser window": "client",
+   "Mobile device": "client"
+  },
+  "docent-house": {
+   "User": "client",
+   "Browser": "client",
+   "Mobile": "client",
+   "Terminal": "client",
+   "Service": "compute",
+   "Server": "compute",
+   "Function": "compute",
+   "Database": "data",
+   "Cache": "data",
+   "Storage": "data",
+   "Document": "data",
+   "Queue": "messaging",
+   "Topic": "messaging",
+   "Event": "messaging",
+   "Stream": "messaging",
+   "Gateway": "edge",
+   "Load balancer": "edge",
+   "Cloud": "edge",
+   "External": "edge",
+   "Scheduler": "operations",
+   "Lock": "operations",
+   "Metrics": "operations"
+  }
+ },
+ "aliases": {
+  "aws/amazon-bedrock": [
+   "llm",
+   "foundation model",
+   "genai"
+  ],
+  "aws/api-gateway": [
+   "rest api",
+   "api endpoint",
+   "gateway",
+   "http api"
+  ],
+  "aws/athena": [
+   "query",
+   "sql on s3"
+  ],
+  "aws/aurora": [
+   "aurora postgres",
+   "aurora mysql"
+  ],
+  "aws/aws-cloud": [
+   "aws account",
+   "cloud boundary"
+  ],
+  "aws/cloudformation": [
+   "infrastructure as code",
+   "iac",
+   "stack"
+  ],
+  "aws/cloudfront": [
+   "cdn",
+   "edge cache"
+  ],
+  "aws/cloudwatch": [
+   "monitoring",
+   "metrics",
+   "logs",
+   "alarms"
+  ],
+  "aws/codepipeline": [
+   "ci cd",
+   "pipeline"
+  ],
+  "aws/cognito": [
+   "auth",
+   "user pool",
+   "login"
+  ],
+  "aws/dynamodb": [
+   "nosql",
+   "key value store",
+   "dynamo"
+  ],
+  "aws/ec2": [
+   "virtual machine",
+   "vm",
+   "instance",
+   "server"
+  ],
+  "aws/ecs": [
+   "container service",
+   "containers"
+  ],
+  "aws/eks": [
+   "kubernetes",
+   "k8s"
+  ],
+  "aws/elasticache": [
+   "cache",
+   "redis",
+   "memcached"
+  ],
+  "aws/eventbridge": [
+   "event bus",
+   "events"
+  ],
+  "aws/fargate": [
+   "serverless containers"
+  ],
+  "aws/glue": [
+   "etl"
+  ],
+  "aws/iam": [
+   "identity",
+   "permissions",
+   "roles"
+  ],
+  "aws/kinesis-data-streams": [
+   "stream",
+   "event stream"
+  ],
+  "aws/lambda": [
+   "function",
+   "serverless",
+   "faas",
+   "aws lambda"
+  ],
+  "aws/managed-streaming-for-apache-kafka": [
+   "kafka",
+   "msk"
+  ],
+  "aws/opensearch-service": [
+   "search",
+   "elasticsearch"
+  ],
+  "aws/rds": [
+   "relational database",
+   "postgres",
+   "mysql",
+   "sql database"
+  ],
+  "aws/redshift": [
+   "data warehouse",
+   "warehouse"
+  ],
+  "aws/route-53": [
+   "dns",
+   "domain"
+  ],
+  "aws/s3": [
+   "bucket",
+   "object storage",
+   "blob storage",
+   "simple storage service"
+  ],
+  "aws/sagemaker": [
+   "ml training",
+   "machine learning"
+  ],
+  "aws/secrets-manager": [
+   "secrets"
+  ],
+  "aws/ses": [
+   "email"
+  ],
+  "aws/sns": [
+   "topic",
+   "pub sub",
+   "notification",
+   "simple notification service"
+  ],
+  "aws/sqs": [
+   "queue",
+   "message queue",
+   "simple queue service"
+  ],
+  "aws/step-functions": [
+   "workflow",
+   "state machine",
+   "orchestration"
+  ],
+  "aws/vpc": [
+   "network",
+   "virtual private cloud"
+  ],
+  "docent/browser": [
+   "web app",
+   "frontend",
+   "spa",
+   "web client"
+  ],
+  "docent/cache": [
+   "in memory",
+   "hot data"
+  ],
+  "docent/cloud": [
+   "provider",
+   "internet",
+   "external network"
+  ],
+  "docent/database": [
+   "db",
+   "sql",
+   "relational database",
+   "store",
+   "table"
+  ],
+  "docent/document": [
+   "file",
+   "page",
+   "report",
+   "spec"
+  ],
+  "docent/event": [
+   "signal",
+   "trigger",
+   "notification"
+  ],
+  "docent/external": [
+   "third party",
+   "vendor",
+   "external system",
+   "integration"
+  ],
+  "docent/function": [
+   "handler",
+   "serverless function",
+   "job"
+  ],
+  "docent/gateway": [
+   "entry point",
+   "ingress",
+   "router"
+  ],
+  "docent/load-balancer": [
+   "lb",
+   "traffic split",
+   "round robin"
+  ],
+  "docent/lock": [
+   "auth",
+   "security",
+   "secret",
+   "permission"
+  ],
+  "docent/metrics": [
+   "dashboard",
+   "chart",
+   "observability",
+   "graph"
+  ],
+  "docent/mobile": [
+   "phone",
+   "app",
+   "ios",
+   "android"
+  ],
+  "docent/queue": [
+   "message queue",
+   "buffer",
+   "fifo",
+   "jobs"
+  ],
+  "docent/scheduler": [
+   "clock",
+   "cron",
+   "timer",
+   "periodic"
+  ],
+  "docent/server": [
+   "host",
+   "machine",
+   "vm",
+   "backend"
+  ],
+  "docent/service": [
+   "component",
+   "microservice",
+   "worker",
+   "gear"
+  ],
+  "docent/storage": [
+   "object store",
+   "bucket",
+   "blob",
+   "files"
+  ],
+  "docent/stream": [
+   "data stream",
+   "pipeline"
+  ],
+  "docent/terminal": [
+   "cli",
+   "shell",
+   "console",
+   "command line"
+  ],
+  "docent/topic": [
+   "event bus",
+   "pub sub",
+   "broadcast",
+   "fanout"
+  ],
+  "docent/user": [
+   "person",
+   "actor",
+   "customer",
+   "client"
+  ],
+  "software/browser-window": [
+   "browser",
+   "web client",
+   "frontend",
+   "website",
+   "web app"
+  ],
+  "software/connector": [
+   "connector",
+   "line",
+   "link"
+  ],
+  "software/database": [
+   "database",
+   "db",
+   "datastore",
+   "cylinder",
+   "sql"
+  ],
+  "software/document": [
+   "document",
+   "file",
+   "report",
+   "spec",
+   "record"
+  ],
+  "software/layers": [
+   "layers",
+   "stack",
+   "tiers"
+  ],
+  "software/mobile-device": [
+   "mobile",
+   "phone",
+   "mobile app",
+   "device",
+   "ios",
+   "android"
+  ],
+  "software/pipe": [
+   "pipe",
+   "pipeline",
+   "stream",
+   "channel"
+  ]
+ }
 }

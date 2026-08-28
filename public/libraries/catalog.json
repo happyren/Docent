@@ -5102,6 +5102,548 @@
    "aliases": []
   },
   {
+   "symbol": "docent/browser",
+   "name": "Browser",
+   "library": "docent-house",
+   "index": 19,
+   "itemId": "docent-house-browser",
+   "category": "client",
+   "icon": {
+    "width": 52,
+    "height": 44,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 52,
+    "height": 44
+   },
+   "caption": null,
+   "aliases": [
+    "web app",
+    "frontend",
+    "spa",
+    "web client"
+   ]
+  },
+  {
+   "symbol": "docent/cache",
+   "name": "Cache",
+   "library": "docent-house",
+   "index": 5,
+   "itemId": "docent-house-cache",
+   "category": "data",
+   "icon": {
+    "width": 44,
+    "height": 40,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 44,
+    "height": 40
+   },
+   "caption": null,
+   "aliases": [
+    "in memory",
+    "hot data"
+   ]
+  },
+  {
+   "symbol": "docent/cloud",
+   "name": "Cloud",
+   "library": "docent-house",
+   "index": 16,
+   "itemId": "docent-house-cloud",
+   "category": "edge",
+   "icon": {
+    "width": 48,
+    "height": 32,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 48,
+    "height": 32
+   },
+   "caption": null,
+   "aliases": [
+    "provider",
+    "internet",
+    "external network"
+   ]
+  },
+  {
+   "symbol": "docent/database",
+   "name": "Database",
+   "library": "docent-house",
+   "index": 4,
+   "itemId": "docent-house-database",
+   "category": "data",
+   "icon": {
+    "width": 36,
+    "height": 54,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 36,
+    "height": 54
+   },
+   "caption": null,
+   "aliases": [
+    "db",
+    "sql",
+    "relational database",
+    "store",
+    "table"
+   ]
+  },
+  {
+   "symbol": "docent/document",
+   "name": "Document",
+   "library": "docent-house",
+   "index": 7,
+   "itemId": "docent-house-document",
+   "category": "data",
+   "icon": {
+    "width": 36,
+    "height": 52,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 36,
+    "height": 52
+   },
+   "caption": null,
+   "aliases": [
+    "file",
+    "page",
+    "report",
+    "spec"
+   ]
+  },
+  {
+   "symbol": "docent/event",
+   "name": "Event",
+   "library": "docent-house",
+   "index": 10,
+   "itemId": "docent-house-event",
+   "category": "messaging",
+   "icon": {
+    "width": 38,
+    "height": 38,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 38,
+    "height": 38
+   },
+   "caption": null,
+   "aliases": [
+    "signal",
+    "trigger",
+    "notification"
+   ]
+  },
+  {
+   "symbol": "docent/external",
+   "name": "External",
+   "library": "docent-house",
+   "index": 21,
+   "itemId": "docent-house-external",
+   "category": "edge",
+   "icon": {
+    "width": 44,
+    "height": 44,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 44,
+    "height": 44
+   },
+   "caption": null,
+   "aliases": [
+    "third party",
+    "vendor",
+    "external system",
+    "integration"
+   ]
+  },
+  {
+   "symbol": "docent/function",
+   "name": "Function",
+   "library": "docent-house",
+   "index": 3,
+   "itemId": "docent-house-function",
+   "category": "compute",
+   "icon": {
+    "width": 44,
+    "height": 44,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 44,
+    "height": 44
+   },
+   "caption": null,
+   "aliases": [
+    "handler",
+    "serverless function",
+    "job"
+   ]
+  },
+  {
+   "symbol": "docent/gateway",
+   "name": "Gateway",
+   "library": "docent-house",
+   "index": 12,
+   "itemId": "docent-house-gateway",
+   "category": "edge",
+   "icon": {
+    "width": 60,
+    "height": 32,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 60,
+    "height": 32
+   },
+   "caption": null,
+   "aliases": [
+    "entry point",
+    "ingress",
+    "router"
+   ]
+  },
+  {
+   "symbol": "docent/load-balancer",
+   "name": "Load balancer",
+   "library": "docent-house",
+   "index": 13,
+   "itemId": "docent-house-load-balancer",
+   "category": "edge",
+   "icon": {
+    "width": 52,
+    "height": 48,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 52,
+    "height": 48
+   },
+   "caption": null,
+   "aliases": [
+    "lb",
+    "traffic split",
+    "round robin"
+   ]
+  },
+  {
+   "symbol": "docent/lock",
+   "name": "Lock",
+   "library": "docent-house",
+   "index": 15,
+   "itemId": "docent-house-lock",
+   "category": "operations",
+   "icon": {
+    "width": 28,
+    "height": 40,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 28,
+    "height": 40
+   },
+   "caption": null,
+   "aliases": [
+    "auth",
+    "security",
+    "secret",
+    "permission"
+   ]
+  },
+  {
+   "symbol": "docent/metrics",
+   "name": "Metrics",
+   "library": "docent-house",
+   "index": 18,
+   "itemId": "docent-house-metrics",
+   "category": "operations",
+   "icon": {
+    "width": 44,
+    "height": 42,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 44,
+    "height": 42
+   },
+   "caption": null,
+   "aliases": [
+    "dashboard",
+    "chart",
+    "observability",
+    "graph"
+   ]
+  },
+  {
+   "symbol": "docent/mobile",
+   "name": "Mobile",
+   "library": "docent-house",
+   "index": 20,
+   "itemId": "docent-house-mobile",
+   "category": "client",
+   "icon": {
+    "width": 24,
+    "height": 52,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 24,
+    "height": 52
+   },
+   "caption": null,
+   "aliases": [
+    "phone",
+    "app",
+    "ios",
+    "android"
+   ]
+  },
+  {
+   "symbol": "docent/queue",
+   "name": "Queue",
+   "library": "docent-house",
+   "index": 8,
+   "itemId": "docent-house-queue",
+   "category": "messaging",
+   "icon": {
+    "width": 52,
+    "height": 20,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 52,
+    "height": 20
+   },
+   "caption": null,
+   "aliases": [
+    "message queue",
+    "buffer",
+    "fifo",
+    "jobs"
+   ]
+  },
+  {
+   "symbol": "docent/scheduler",
+   "name": "Scheduler",
+   "library": "docent-house",
+   "index": 14,
+   "itemId": "docent-house-scheduler",
+   "category": "operations",
+   "icon": {
+    "width": 44,
+    "height": 44,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 44,
+    "height": 44
+   },
+   "caption": null,
+   "aliases": [
+    "clock",
+    "cron",
+    "timer",
+    "periodic"
+   ]
+  },
+  {
+   "symbol": "docent/server",
+   "name": "Server",
+   "library": "docent-house",
+   "index": 2,
+   "itemId": "docent-house-server",
+   "category": "compute",
+   "icon": {
+    "width": 40,
+    "height": 48,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 40,
+    "height": 48
+   },
+   "caption": null,
+   "aliases": [
+    "host",
+    "machine",
+    "vm",
+    "backend"
+   ]
+  },
+  {
+   "symbol": "docent/service",
+   "name": "Service",
+   "library": "docent-house",
+   "index": 1,
+   "itemId": "docent-house-service",
+   "category": "compute",
+   "icon": {
+    "width": 40,
+    "height": 40,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 40,
+    "height": 40
+   },
+   "caption": null,
+   "aliases": [
+    "component",
+    "microservice",
+    "worker",
+    "gear"
+   ]
+  },
+  {
+   "symbol": "docent/storage",
+   "name": "Storage",
+   "library": "docent-house",
+   "index": 6,
+   "itemId": "docent-house-storage",
+   "category": "data",
+   "icon": {
+    "width": 40,
+    "height": 44,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 40,
+    "height": 44
+   },
+   "caption": null,
+   "aliases": [
+    "object store",
+    "bucket",
+    "blob",
+    "files"
+   ]
+  },
+  {
+   "symbol": "docent/stream",
+   "name": "Stream",
+   "library": "docent-house",
+   "index": 11,
+   "itemId": "docent-house-stream",
+   "category": "messaging",
+   "icon": {
+    "width": 48,
+    "height": 34,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 48,
+    "height": 34
+   },
+   "caption": null,
+   "aliases": [
+    "data stream",
+    "pipeline"
+   ]
+  },
+  {
+   "symbol": "docent/terminal",
+   "name": "Terminal",
+   "library": "docent-house",
+   "index": 17,
+   "itemId": "docent-house-terminal",
+   "category": "client",
+   "icon": {
+    "width": 52,
+    "height": 40,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 52,
+    "height": 40
+   },
+   "caption": null,
+   "aliases": [
+    "cli",
+    "shell",
+    "console",
+    "command line"
+   ]
+  },
+  {
+   "symbol": "docent/topic",
+   "name": "Topic",
+   "library": "docent-house",
+   "index": 9,
+   "itemId": "docent-house-topic",
+   "category": "messaging",
+   "icon": {
+    "width": 48,
+    "height": 48,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 48,
+    "height": 48
+   },
+   "caption": null,
+   "aliases": [
+    "event bus",
+    "pub sub",
+    "broadcast",
+    "fanout"
+   ]
+  },
+  {
+   "symbol": "docent/user",
+   "name": "User",
+   "library": "docent-house",
+   "index": 0,
+   "itemId": "docent-house-user",
+   "category": "client",
+   "icon": {
+    "width": 40,
+    "height": 50,
+    "x": 0,
+    "y": 0
+   },
+   "size": {
+    "width": 40,
+    "height": 50
+   },
+   "caption": null,
+   "aliases": [
+    "person",
+    "actor",
+    "customer",
+    "client"
+   ]
+  },
+  {
    "symbol": "software/browser-window",
    "name": "Browser window",
    "library": "software-architecture",

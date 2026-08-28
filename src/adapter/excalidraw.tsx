@@ -34,6 +34,7 @@ import type { LegendRule, Scenario, SceneLink, SceneSnapshot } from "./snapshot"
 import { parseLegendRules, parseSceneLink, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
 import { symbolEntry } from "../authoring/symbols";
+import { houseTreatment } from "./treatment";
 
 // Excalidraw's zoom limits (MIN_ZOOM/MAX_ZOOM are not runtime-exported).
 const ZOOM_MIN = 0.1;
@@ -1072,7 +1073,9 @@ async function symbolSamples(
     const at = symbolEntry(rule.value);
     if (!at) continue;
     try {
-      out.set(rule.value, glyphOf(await libraryItem(at.library, at.index)));
+      // The sample wears what the scene will wear (D120): the legend must
+      // show the drawing the treatment produces, not the library's raw one.
+      out.set(rule.value, houseTreatment(glyphOf(await libraryItem(at.library, at.index))));
     } catch (err) {
       console.warn(`Failed to load the symbol ${rule.value}`, err);
     }
@@ -1744,7 +1747,9 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       // cannot be read fails the write whole rather than half-drawing it.
       const symbolDrawings = new Map<string, RawLibraryElement[]>();
       for (const sym of write.symbols ?? []) {
-        symbolDrawings.set(sym.id, glyphOf(await libraryItem(sym.library, sym.index)));
+        // Dressed in the house treatment (D120): the write path is the
+        // agent's (B4), so a person's own sidebar drags never pass here.
+        symbolDrawings.set(sym.id, houseTreatment(glyphOf(await libraryItem(sym.library, sym.index))));
       }
       const legendSamples = write.legend ? await symbolSamples(write.legend) : new Map();
       const all = api.getSceneElementsIncludingDeleted();

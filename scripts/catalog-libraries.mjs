@@ -73,7 +73,9 @@ for (const file of readdirSync(dir).filter((f) => f.endsWith(".excalidrawlib")).
     const fills = glyph.map((e) => e.backgroundColor ?? "").filter((f) => !IGNORED_FILLS.has(f));
     const brand = fills.length ? [...new Set(fills)].sort((a, b) => fills.filter((f) => f === b).length - fills.filter((f) => f === a).length)[0] : null;
     const category = library.startsWith("aws") ? (AWS_CATEGORIES[brand] ?? "general") : (aliases.categories?.[library]?.[name] ?? "general");
-    const symbol = `${slug(library.replace(/-architecture-icons|-architecture/, ""))}/${slug(name)}`;
+    // The house library's items answer as `docent/<name>` (D119), the same
+    // way the aws icons drop their packaging words.
+    const symbol = `${slug(library.replace(/-architecture-icons|-architecture|-house$/, ""))}/${slug(name)}`;
     entries.push({
       symbol,
       name,

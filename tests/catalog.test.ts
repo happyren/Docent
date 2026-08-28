@@ -34,7 +34,11 @@ describe("the catalog is generated, not hand-kept (D81)", () => {
 
   it("names every symbol once, with a box to lay it out in", () => {
     expect(catalog.symbols.length).toBeGreaterThan(200);
-    expect(catalog.libraries).toEqual(["aws-architecture-icons", "software-architecture"]);
+    expect(catalog.libraries).toEqual([
+      "aws-architecture-icons",
+      "docent-house",
+      "software-architecture",
+    ]);
     const seen = new Set<string>();
     for (const entry of catalog.symbols) {
       expect(entry.symbol, JSON.stringify(entry)).toMatch(/^[a-z0-9-]+\/[a-z0-9-]+$/);
@@ -62,15 +66,20 @@ describe("find_symbol finds one (D82)", () => {
   });
 
   it("takes the synonym a model reaches for", () => {
-    expect(top("function")[0]).toBe("aws/lambda");
-    expect(top("queue")[0]).toBe("aws/sqs");
+    // "function" and "queue" are brandless words now the house carries them
+    // (D121); the vendor's own vocabulary still answers the vendor.
+    expect(top("function")[0]).toBe("docent/function");
+    expect(top("queue")[0]).toBe("docent/queue");
     expect(top("postgres")[0]).toBe("aws/rds");
     expect(top("kafka")[0]).toBe("aws/managed-streaming-for-apache-kafka");
     expect(top("cdn")[0]).toBe("aws/cloudfront");
   });
 
   it("takes a phrase, as a phrase and as words", () => {
-    expect(top("message queue")[0]).toBe("aws/sqs");
+    // "message queue" is an alias on both; the tie breaks to the house
+    // (D121). The vendor's own qualifier still finds the vendor.
+    expect(top("message queue")[0]).toBe("docent/queue");
+    expect(top("message queue")).toContain("aws/sqs");
     expect(top("simple queue")[0]).toBe("aws/sqs");
     expect(top("object storage")[0]).toBe("aws/s3");
   });
@@ -97,13 +106,14 @@ describe("find_symbol finds one (D82)", () => {
   });
 
   it("says why each hit matched, and how big it is", () => {
-    const [hit] = findSymbols(catalog, "function");
-    expect(hit.why).toBe("alias: function");
-    expect(hit.name).toBe("Lambda");
-    expect(hit.library).toBe("aws-architecture-icons");
-    expect(hit.category).toBe("compute");
-    expect(hit.size.width).toBeGreaterThan(0);
-    expect(describeSymbol(hit)).toContain("aws/lambda — Lambda");
+    const hits = findSymbols(catalog, "function");
+    expect(hits[0].why).toBe("name: Function");
+    expect(hits[0].symbol).toBe("docent/function");
+    const lambda = hits.find((hit) => hit.symbol === "aws/lambda");
+    expect(lambda?.why).toBe("alias: function");
+    expect(lambda?.category).toBe("compute");
+    expect(lambda?.size.width).toBeGreaterThan(0);
+    expect(describeSymbol(lambda!)).toContain("aws/lambda — Lambda");
   });
 
   it("keeps to one library when asked", () => {
@@ -135,12 +145,67 @@ describe("find_symbol finds one (D82)", () => {
   });
 });
 
+describe("the house glyphs (D119, D121)", () => {
+  it("the library file matches its committed generator", () => {
+    const check = spawnSync(
+      "node",
+      [path.resolve("scripts/make-house-library.mjs"), "--check"],
+      { encoding: "utf8" },
+    );
+    expect(`${check.stdout}${check.stderr}`.trim()).toContain("is current");
+    expect(check.status).toBe(0);
+  });
+
+  it("carries the generic vocabulary as docent/ ids", () => {
+    const house = catalog.symbols.filter((entry) => entry.symbol.startsWith("docent/"));
+    expect(house.length).toBe(22);
+    for (const entry of house) {
+      expect(entry.library).toBe("docent-house");
+      // Minimal glyphs: the 64-box discipline, no caption to retype.
+      expect(entry.size.width, entry.symbol).toBeLessThanOrEqual(64);
+      expect(entry.size.height, entry.symbol).toBeLessThanOrEqual(64);
+      expect(entry.caption, entry.symbol).toBeNull();
+    }
+  });
+
+  it("brandless words answer the house first, vendors still on the list", () => {
+    expect(top("database")[0]).toBe("docent/database");
+    expect(top("gateway")[0]).toBe("docent/gateway");
+    expect(top("queue")).toContain("aws/sqs");
+  });
+
+  it("a tied tier breaks toward the house", () => {
+    // "auth" is an alias on both docent/lock and aws/cognito — same score,
+    // and the house sorts first (D121).
+    const hits = findSymbols(catalog, "auth");
+    expect(hits[0].symbol).toBe("docent/lock");
+    expect(hits.map((hit) => hit.symbol)).toContain("aws/cognito");
+    expect(hits[0].score).toBe(hits.find((hit) => hit.symbol === "aws/cognito")?.score);
+  });
+
+  it("a vendor's own name still wins its word", () => {
+    expect(top("lambda")[0]).toBe("aws/lambda");
+    expect(top("sqs")[0]).toBe("aws/sqs");
+    expect(top("s3")[0]).toBe("aws/s3");
+  });
+
+  it("the docent namespace filters like any library", () => {
+    const hits = findSymbols(catalog, "database", { library: "docent" });
+    expect(hits.length).toBeGreaterThan(0);
+    for (const hit of hits) expect(hit.symbol.startsWith("docent/")).toBe(true);
+  });
+});
+
 describe("the find_symbol answer", () => {
   it("carries the hits, the libraries, and what to do next", () => {
     const answer = answerFindSymbol(catalog, { query: "queue", limit: 2 });
-    expect(answer.hits[0].symbol).toBe("aws/sqs");
-    expect(answer.libraries).toEqual(["aws-architecture-icons", "software-architecture"]);
-    expect(answer.next).toContain("add_node({symbol:'aws/sqs'");
+    expect(answer.hits[0].symbol).toBe("docent/queue");
+    expect(answer.libraries).toEqual([
+      "aws-architecture-icons",
+      "docent-house",
+      "software-architecture",
+    ]);
+    expect(answer.next).toContain("add_node({symbol:'docent/queue'");
   });
 
   it("says what to do instead when nothing matches", () => {

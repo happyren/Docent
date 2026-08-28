@@ -269,7 +269,15 @@ export function findSymbols(
       why: match.why,
     });
   }
-  hits.sort((a, b) => b.score - a.score || compare(a.name, b.name) || compare(a.symbol, b.symbol));
+  // Within a tier the house glyphs answer first (D121): a brandless word —
+  // "queue", "database", "gateway" — is a request for the idea, and the
+  // house draws ideas. A vendor's own words still win naturally: they score
+  // on names the house does not carry.
+  const house = (hit: SymbolHit): number => (hit.symbol.startsWith("docent/") ? 0 : 1);
+  hits.sort(
+    (a, b) =>
+      b.score - a.score || house(a) - house(b) || compare(a.name, b.name) || compare(a.symbol, b.symbol),
+  );
   return hits.slice(0, limit);
 }
 

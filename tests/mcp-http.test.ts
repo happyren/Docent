@@ -160,8 +160,10 @@ describe("mcp streamable http", () => {
       hits: { symbol: string; name: string }[];
       libraries: string[];
     };
-    expect(answer.hits[0].symbol).toBe("aws/sqs");
-    expect(answer.libraries).toContain("aws-architecture-icons");
+    // The house glyph answers the brandless word first (D121).
+    expect(answer.hits[0].symbol).toBe("docent/queue");
+    expect(answer.hits.map((hit) => hit.symbol)).toContain("aws/sqs");
+    expect(answer.libraries).toContain("docent-house");
   });
 
   it("rejects unknown tools and unknown methods per JSON-RPC", async () => {
