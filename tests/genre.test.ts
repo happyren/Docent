@@ -249,6 +249,61 @@ describe("event flow speaks command, event, read model (D88)", () => {
   });
 });
 
+describe("the explainer tells one story in steps (D125)", () => {
+  const kinds = [
+    ["step", TONE_LOOK.neutral.fill],
+    ["decision", TONE_LOOK.caution.fill],
+    ["aside", TONE_LOOK.inactive.fill],
+    ["outcome", TONE_LOOK.positive.fill],
+  ] as const;
+
+  it("is found by its own name", () => {
+    expect(genreOf("explainer")).toBe(GENRES.explainer);
+    expect(genreOf("Explainer")).toBe(GENRES.explainer);
+  });
+
+  it("is quiet when the spine is short, labelled, and lands", () => {
+    const scene = sceneOf([
+      carrier("explainer", kinds),
+      ...node("s1", 0, 0, "Parse the input", TONE_LOOK.neutral.fill),
+      ...node("s2", 300, 0, "Check the cache", TONE_LOOK.neutral.fill),
+      ...node("done", 600, 0, "Answer served", TONE_LOOK.positive.fill),
+      ...link("e1", "s1", "s2", "then"),
+      ...link("e2", "s2", "done", "on a hit"),
+    ]);
+    expect(genreSaid(scene, "Explainer:")).toEqual([]);
+  });
+
+  it("asks for the scenario, the outcome, the loose aside and the silent branch", () => {
+    const scene = sceneOf([
+      carrier("explainer", kinds),
+      ...node("s1", 0, 0, "First", TONE_LOOK.neutral.fill),
+      ...node("s2", 300, 0, "Second", TONE_LOOK.neutral.fill),
+      ...node("s3", 600, 0, "Third", TONE_LOOK.neutral.fill),
+      ...node("why", 300, 200, "Background", TONE_LOOK.inactive.fill),
+      ...node("dec", 900, 0, "Cache warm?", TONE_LOOK.caution.fill),
+      ...node("s4", 1200, 0, "Serve it", TONE_LOOK.neutral.fill),
+      ...node("s5", 1200, 200, "Rebuild it", TONE_LOOK.neutral.fill),
+      ...link("e1", "s1", "s2", "then"),
+      ...link("e2", "s2", "s3", "then"),
+      ...link("e3", "why", "s2"),
+      ...link("e4", "s3", "dec", "then"),
+      ...link("e5", "dec", "s4", "yes"),
+      ...link("e6", "dec", "s5"),
+    ]);
+    expect(genreSaid(scene, "Explainer:")).toEqual([
+      "Explainer: no scenario yet — define_scenario over the spine so flow replays the story and script_tour speaks it",
+      "Explainer: the story has no outcome — end the spine where it lands",
+      'Explainer: aside "Background" feeds "Second" — an aside hangs off the spine, nothing follows from it',
+      'Explainer: decision "Cache warm?" has an unlabelled branch — label each leaving edge with its answer',
+    ]);
+    // Advice, never a veto (D88).
+    expect(
+      lint(scene).findings.filter((f) => f.message.startsWith("Explainer:")).every((f) => f.level === "info"),
+    ).toBe(true);
+  });
+});
+
 describe("data flow reads one way and carries its contracts (D88)", () => {
   const kinds = [["source", "#ced4da"], ["transform", "#ffd8a8"], ["store", "#a5d8ff"]] as const;
 

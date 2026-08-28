@@ -17,7 +17,13 @@ import { backEdges } from "./layout";
 import type { Role, Tone } from "./palette";
 import type { Shape } from "./style";
 
-export type GenreId = "architecture" | "request" | "event-flow" | "data-flow" | "lifecycle";
+export type GenreId =
+  | "architecture"
+  | "request"
+  | "event-flow"
+  | "data-flow"
+  | "lifecycle"
+  | "explainer";
 
 /** One word of a genre's vocabulary, in the terms `define_kind` speaks (D77). */
 export interface GenreKind {
@@ -100,6 +106,21 @@ export const GENRES: Readonly<Record<GenreId, GenreProfile>> = {
     guidance:
       "Data flow. Sources, transforms, stores, consumers — one direction, no cycles: the layout will not fold time, and the lint flags a cycle. Every edge carries its contract: the label names what flows (the schema, the topic, the file); intents carry the finer print. Sources, stores, and engines have icons: find_symbol before drawing them plain.",
   },
+  explainer: {
+    id: "explainer",
+    name: "Explainer",
+    posture: "map",
+    kinds: [
+      { kind: "step", tone: "neutral" },
+      { kind: "decision", tone: "caution", shape: "diamond" },
+      { kind: "aside", tone: "inactive" },
+      { kind: "outcome", tone: "positive" },
+      { kind: "pitfall", tone: "danger" },
+    ],
+    when: "explaining anything that runs in order — a sequence, a concept, a plan",
+    guidance:
+      "Explainer — one story told in steps. The spine: steps in the order the story runs, ONE idea per step (a reader finishes a step in one breath), authored in order — a long spine folds into rows that turn, which is the layout's job. Edges carry the connective — 'then', 'because', 'unless', 'which gives' — so step, edge, step reads as a sentence. A decision is a diamond: the question is its label, and every leaving edge is labelled with its answer. An aside (background, a caveat, a definition) hangs OFF the step it annotates — nothing follows from an aside. End the spine at an outcome; mark a trap along the way as a pitfall. Then define_scenario over the spine's edges: flow({scenario}) replays the story numbered, script_tour({scenario}) walks and speaks it — an explainer is meant to be presented. Detail goes a tier down (add_detail_layer), never into a longer spine.",
+  },
   lifecycle: {
     id: "lifecycle",
     name: "Lifecycle",
@@ -115,7 +136,14 @@ export const GENRES: Readonly<Record<GenreId, GenreProfile>> = {
 };
 
 /** The ids, in the order the menu says them (D91). */
-export const GENRE_IDS: readonly GenreId[] = ["architecture", "request", "event-flow", "data-flow", "lifecycle"];
+export const GENRE_IDS: readonly GenreId[] = [
+  "architecture",
+  "request",
+  "event-flow",
+  "data-flow",
+  "lifecycle",
+  "explainer",
+];
 
 const normalize = (s: string): string =>
   s
@@ -247,6 +275,43 @@ export function genreFindings(graph: SceneGraph, profile: GenreProfile): GenreFi
       for (const edge of graph.edges) {
         if (!edge.from || !edge.to || clean(edge.label) || edge.intents.length) continue;
         say(edge.id, `${profile.name}: "${name(from(edge))} → ${name(to(edge))}" carries no contract — name what flows`);
+      }
+      break;
+    }
+    case "explainer": {
+      // The spine wants a scenario (D89): an explainer is meant to replay
+      // numbered and be spoken, and a story nobody can play is notes.
+      const steps = graph.nodes.filter((n) => kindOf(n) === "step");
+      if (steps.length >= 3 && !graph.scenarios.length) {
+        say(
+          null,
+          `${profile.name}: no scenario yet — define_scenario over the spine so flow replays the story and script_tour speaks it`,
+        );
+      }
+      // Every story lands somewhere.
+      if (graph.nodes.length >= 3 && !graph.nodes.some((n) => kindOf(n) === "outcome")) {
+        say(null, `${profile.name}: the story has no outcome — end the spine where it lands`);
+      }
+      // An aside that feeds the spine is a step in costume.
+      for (const edge of graph.edges) {
+        const target = kindOf(to(edge));
+        if (kindOf(from(edge)) === "aside" && target && target !== "aside") {
+          say(
+            edge.id,
+            `${profile.name}: aside "${name(from(edge))}" feeds "${name(to(edge))}" — an aside hangs off the spine, nothing follows from it`,
+          );
+        }
+      }
+      // A decision's answers are its leaving labels; a silent branch loses one.
+      for (const node of graph.nodes) {
+        if (kindOf(node) !== "decision") continue;
+        const leaving = graph.edges.filter((e) => e.from === node.id);
+        if (leaving.length >= 2 && leaving.some((e) => !clean(e.label))) {
+          say(
+            node.id,
+            `${profile.name}: decision "${name(node)}" has an unlabelled branch — label each leaving edge with its answer`,
+          );
+        }
       }
       break;
     }

@@ -17,7 +17,7 @@
 export const SERVER_INFO = { name: "docent", version: "1.1.0" };
 
 /**
- * The five genres as the menu says them (S22, D91): the id, and the one
+ * The six genres as the menu says them (S22, D91): the id, and the one
  * line saying when it is the right one. Duplicated from each profile's
  * `when` in `src/authoring/genre.ts` — the source of truth — because this
  * file is plain ESM that cannot import TypeScript, the same reason the
@@ -30,6 +30,7 @@ const GENRE_MENU = [
   ["event-flow", "commands, events, read models in lanes — event-driven designs"],
   ["data-flow", "pipelines: sources to consumers, contracts on the edges"],
   ["lifecycle", "one thing's states and transitions — orders, documents, jobs"],
+  ["explainer", "explaining anything that runs in order — a sequence, a concept, a plan"],
 ];
 
 /**
@@ -46,7 +47,7 @@ export const INSTRUCTIONS = [
   "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
   "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
-  `GENRES: a diagram has a category, and Docent knows five — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
+  `GENRES: a diagram has a category, and Docent knows six — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
   "SCENARIOS: define_scenario({name, path, description}) names an ordered path of edges — one request's story told over the map you already drew, kept as meaning, not as a second diagram. Replay it: flow({scenario}) pulses the path with numbered step badges, script_tour({scenario}) walks and speaks it. One map carries as many scenarios as it has stories.",
   "SCENE LINKS: dive when it is this diagram going deeper (a detail layer); link when it is another diagram's story. update({id, link:{scene, project?, at?}}) authors one — `scene` is a path list_projects answered with, `at` the component to arrive on, null clears it — and validate() checks every target still exists.",
   "For a walkthrough: script_tour({frame?}) derives the stops and the author's words from the diagram itself (frames in order, components in flow order; `declared` lines are the author's, `inferred` lines are yours to rewrite) — then present({action:'enter', mode:'guided'}) and tour({steps}). That is three calls for a whole walkthrough, and it is the same walkthrough every time. Each result carries a `next` hint.",
