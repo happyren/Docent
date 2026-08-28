@@ -2543,6 +2543,14 @@ body {
   display: none;
 }
 
+/* "Browse libraries" retires too (D122): the bundled shelves and a person's
+   own imports are the library, and D23 promised no call out to
+   libraries.excalidraw.com — the palette is the search (D123). The same
+   degradation promise: if the class moves, the button returns. */
+.docent-app .library-menu-browse-button {
+  display: none;
+}
+
 /* Doubled class: upstream sets its dark variables at .excalidraw.theme--dark
    and loads after this sheet, so an equal selector loses the tie. */
 .excalidraw.theme--dark.theme--dark {

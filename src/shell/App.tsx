@@ -2020,6 +2020,7 @@ export function App() {
           commands={paletteCommands}
           loadScenes={loadPaletteScenes}
           onOpenScene={openPaletteScene}
+          onInsertSymbol={(symbol) => void canvasRef.current?.insertLibraryItem(symbol)}
           onClose={() => setPaletteOpen(false)}
         />
       )}

@@ -17,17 +17,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   matchPalette,
+  PALETTE_ICON_ROWS,
   type PaletteCommand,
   type PaletteEntry,
   type PaletteScene,
+  type PaletteSymbol,
 } from "./palette";
 import { folderOf, leafOf } from "../portfolio/tree";
+import catalogJson from "../../public/libraries/catalog.json";
+import { findSymbols, loadCatalog } from "../libraries/catalog";
+
+/** The checked-in catalog (D81), parsed once — the icon band's whole world. */
+const CATALOG = loadCatalog(catalogJson);
 
 export interface CommandPaletteProps {
   commands: readonly PaletteCommand[];
   /** Asked once, on open. Rejections are the store's absence, and are silent. */
   loadScenes: () => Promise<PaletteScene[]>;
   onOpenScene: (scene: PaletteScene) => void;
+  /** Enter on an icon row (D123): the person's own insertion, at the centre. */
+  onInsertSymbol: (symbol: string) => void;
   onClose: () => void;
 }
 
@@ -85,6 +94,7 @@ export function CommandPalette({
   commands,
   loadScenes,
   onOpenScene,
+  onInsertSymbol,
   onClose,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
@@ -108,9 +118,22 @@ export function CommandPalette({
     };
   }, [loadScenes]);
 
+  // The icon band (D123): ranked by the catalog's own lookup, so a word
+  // answers the same way at the keyboard as over MCP (D82, D121).
+  const symbols = useMemo<PaletteSymbol[]>(
+    () =>
+      query.trim()
+        ? findSymbols(CATALOG, query, { limit: PALETTE_ICON_ROWS }).map((hit) => ({
+            symbol: hit.symbol,
+            name: hit.name,
+            library: hit.library,
+          }))
+        : [],
+    [query],
+  );
   const entries = useMemo(
-    () => matchPalette(query, commands, scenes),
-    [query, commands, scenes],
+    () => matchPalette(query, commands, scenes, symbols),
+    [query, commands, scenes, symbols],
   );
 
   // A shrinking list must never leave the cursor pointing past its end.
@@ -127,9 +150,10 @@ export function CommandPalette({
       // own, and none of them should come up behind this.
       onClose();
       if (entry.kind === "command") entry.command.run();
+      else if (entry.kind === "symbol") onInsertSymbol(entry.symbol.symbol);
       else onOpenScene(entry.scene);
     },
-    [onClose, onOpenScene],
+    [onClose, onOpenScene, onInsertSymbol],
   );
 
   const onKeyDown = (event: ReactKeyboardEvent) => {
@@ -165,21 +189,21 @@ export function CommandPalette({
         className="docent-palette"
         role="dialog"
         aria-modal="true"
-        aria-label="Commands and scenes"
+        aria-label="Commands, scenes and icons"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <input
           className="docent-palette-input"
           autoFocus
           spellCheck={false}
-          placeholder="Commands and scenes…"
+          placeholder="Commands, scenes, icons…"
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
           }}
           onKeyDown={onKeyDown}
-          aria-label="Commands and scenes"
+          aria-label="Commands, scenes and icons"
         />
         {entries.length === 0 ? (
           <p className="docent-palette-empty">Nothing by that name.</p>
@@ -194,6 +218,7 @@ export function CommandPalette({
                   "docent-palette-row",
                   index === active ? "is-active" : "",
                   entry.kind === "scene" ? "is-scene" : "",
+                  entry.kind === "symbol" ? "is-symbol" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
@@ -220,6 +245,9 @@ export function CommandPalette({
                 )}
                 {entry.kind === "scene" && (
                   <span className="docent-palette-hint">scene</span>
+                )}
+                {entry.kind === "symbol" && (
+                  <span className="docent-palette-hint">{entry.symbol.symbol} · icon</span>
                 )}
               </li>
             ))}

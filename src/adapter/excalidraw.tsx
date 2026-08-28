@@ -320,6 +320,13 @@ export interface DocentCanvasHandle {
    */
   setTheme(theme: "light" | "dark"): void;
   /**
+   * Copy a catalog symbol's library item onto the paper at the viewport's
+   * centre, selected — the palette's Enter (D123). The PERSON'S insertion:
+   * the whole item as the sidebar would give it, no carrier, no treatment
+   * (D120's person rule). False when the catalog has no such symbol.
+   */
+  insertLibraryItem(symbol: string): Promise<boolean>;
+  /**
    * Toggle Excalidraw's library sidebar. Upstream's own trigger button is the
    * only other way in, and the desktop shell hides it in favour of a native
    * menu item — so the shell needs a typed way to ask (B1).
@@ -1508,6 +1515,39 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       });
     },
 
+    insertLibraryItem: async (symbol) => {
+      const entry = symbolEntry(symbol);
+      if (!entry) return false;
+      // The WHOLE item, caption included — what the sidebar's own click
+      // gives — and untreated: this is the person's insertion (D120, D123).
+      const item = await libraryItem(entry.library, entry.index);
+      const s = api.getAppState();
+      const center = viewportCoordsToSceneCoords(
+        { clientX: s.offsetLeft + s.width / 2, clientY: s.offsetTop + s.height / 2 },
+        { zoom: s.zoom, offsetLeft: s.offsetLeft, offsetTop: s.offsetTop, scrollX: s.scrollX, scrollY: s.scrollY },
+      );
+      const bounds = rawBounds(item);
+      const group =
+        Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+      const placed = placeItemElements(item, {
+        group,
+        frameId: null,
+        scale: 1,
+        dx: center.x - bounds.x - bounds.width / 2,
+        dy: center.y - bounds.y - bounds.height / 2,
+      });
+      api.updateScene({
+        elements: [...api.getSceneElementsIncludingDeleted(), ...placed],
+        // Selected as one, so the very next drag moves the whole drawing.
+        appState: {
+          selectedElementIds: Object.fromEntries(placed.map((el) => [el.id, true])),
+          selectedGroupIds: { [group]: true },
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      return true;
+    },
+
     // "default" is upstream's own sidebar; "library" its library tab. The
     // deferred icon set (D23) still loads on first open — the onChange latch
     // watches app state, not the trigger button.
@@ -2487,6 +2527,8 @@ interface BundledLibrary {
  * recorded in the README (D23).
  */
 const BUNDLED_LIBRARIES: readonly BundledLibrary[] = [
+  // The house glyphs lead (D119): the shelf a brandless word reaches first.
+  { url: "/libraries/docent-house.excalidrawlib", eager: true },
   { url: "/libraries/software-architecture.excalidrawlib", eager: true },
   { url: "/libraries/aws-architecture-icons.excalidrawlib", eager: false },
 ];

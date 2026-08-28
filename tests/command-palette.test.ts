@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   fuzzyMatch,
   matchPalette,
+  PALETTE_ICON_ROWS,
   PALETTE_LIMIT,
   scenePath,
   type PaletteCommand,
@@ -130,6 +131,31 @@ describe("matchPalette", () => {
 
   it("drops what the query cannot reach", () => {
     expect(titles("qqq", SCENES)).toEqual([]);
+  });
+
+  it("seats the icon band at the foot, capped, and never on an empty query (D123)", () => {
+    const icons = Array.from({ length: 9 }, (_, i) => ({
+      symbol: `docent/icon-${i}`,
+      name: `Icon ${i}`,
+      library: "docent-house",
+    }));
+    // The menu is the menu: no icons before anything is typed.
+    expect(matchPalette("", COMMANDS, [], icons).every((e) => e.kind !== "symbol")).toBe(true);
+    // Typed: the band arrives at the foot, in the caller's ranked order,
+    // at most PALETTE_ICON_ROWS rows, inside the one screenful.
+    const hits = matchPalette("save", COMMANDS, [], icons);
+    const band = hits.filter((e) => e.kind === "symbol");
+    expect(band.length).toBe(PALETTE_ICON_ROWS);
+    expect(band.map((e) => (e.kind === "symbol" ? e.symbol.symbol : ""))).toEqual(
+      icons.slice(0, PALETTE_ICON_ROWS).map((i) => i.symbol),
+    );
+    expect(hits.length).toBeLessThanOrEqual(PALETTE_LIMIT);
+    expect(hits[hits.length - 1].kind).toBe("symbol");
+    // A full list still keeps the band: commands give the rows up.
+    const many = Array.from({ length: 40 }, (_, i) => command(`c${i}`, `Command ${i}`));
+    const crowded = matchPalette("command", many, [], icons);
+    expect(crowded.length).toBe(PALETTE_LIMIT);
+    expect(crowded.filter((e) => e.kind === "symbol").length).toBe(PALETTE_ICON_ROWS);
   });
 
   it("ignores spaces between the words a person half-remembers", () => {
