@@ -973,15 +973,70 @@ fn import_file(dialogs: &dyn Dialogs) -> Result<Reply> {
 struct ExportRequest {
     name: String,
     content: String,
+    /// Absent for the text exports; `"base64"` for the binary ones (D116) —
+    /// the PDF is bytes, and JSON carries no other kind.
+    #[serde(default)]
+    encoding: Option<String>,
 }
 
-/// Raise the save dialog and write the text the page generated — a scene, a
-/// Mermaid diagram, or a semantic sidecar. Only the dialog is the shell's
-/// business; the write happens here, off the main thread.
+/// Decode standard base64 (with `=` padding), strictly: no whitespace, no
+/// URL-safe alphabet, nothing after the padding. A dozen lines owned here
+/// beats a dependency for one route's one field (the D105 posture).
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    fn value(byte: u8) -> Option<u32> {
+        match byte {
+            b'A'..=b'Z' => Some(u32::from(byte - b'A')),
+            b'a'..=b'z' => Some(u32::from(byte - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(byte - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+    let bytes = text.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return None;
+    }
+    let padding = bytes.iter().rev().take_while(|&&b| b == b'=').count();
+    if padding > 2 || bytes[..bytes.len() - padding].contains(&b'=') {
+        return None;
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let quads: Vec<u32> = chunk
+            .iter()
+            .take_while(|&&b| b != b'=')
+            .map(|&b| value(b))
+            .collect::<Option<_>>()?;
+        if quads.len() < 2 {
+            return None; // a lone symbol encodes fewer than 8 bits
+        }
+        let word = quads
+            .iter()
+            .chain(std::iter::repeat(&0))
+            .take(4)
+            .fold(0u32, |acc, &v| (acc << 6) | v);
+        out.extend_from_slice(&word.to_be_bytes()[1..1 + quads.len() - 1]);
+    }
+    Some(out)
+}
+
+/// Raise the save dialog and write what the page generated — a scene, a
+/// Mermaid diagram, a semantic sidecar, or (base64-encoded, D116) a PDF.
+/// Only the dialog is the shell's business; the write happens here, off the
+/// main thread.
 fn export_file(dialogs: &dyn Dialogs, request: &mut Request) -> Result<Reply> {
     let body = read_body(request)?;
     let payload: ExportRequest =
         serde_json::from_str(&body).map_err(|_| HttpError::new(400, "body is not an export"))?;
+    // Decoded before the dialog is raised: a malformed body is the client's
+    // mistake and must never cost the person a save box.
+    let contents: Vec<u8> = match payload.encoding.as_deref() {
+        None => payload.content.into_bytes(),
+        Some("base64") => decode_base64(&payload.content)
+            .ok_or_else(|| HttpError::new(400, "content is not base64"))?,
+        Some(_) => return Err(HttpError::new(400, "unknown encoding")),
+    };
     // Only the leaf is a suggestion the dialog can use; a name carrying
     // separators would otherwise steer where it opens.
     let suggested = Path::new(&payload.name)
@@ -992,7 +1047,7 @@ fn export_file(dialogs: &dyn Dialogs, request: &mut Request) -> Result<Reply> {
     let Some(path) = dialogs.pick_save(&suggested) else {
         return Ok(Reply::ok(r#"{"canceled":true}"#));
     };
-    fs::write(&path, payload.content).map_err(internal)?;
+    fs::write(&path, contents).map_err(internal)?;
     Ok(Reply::ok(
         serde_json::json!({ "saved": path.to_string_lossy() }).to_string(),
     ))
@@ -1444,6 +1499,38 @@ fn read_body(request: &mut Request) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_decodes_the_canonical_vectors() {
+        // RFC 4648's own examples, plus the empty body.
+        for (encoded, plain) in [
+            ("", ""),
+            ("Zg==", "f"),
+            ("Zm8=", "fo"),
+            ("Zm9v", "foo"),
+            ("Zm9vYg==", "foob"),
+            ("Zm9vYmE=", "fooba"),
+            ("Zm9vYmFy", "foobar"),
+        ] {
+            assert_eq!(decode_base64(encoded).as_deref(), Some(plain.as_bytes()));
+        }
+        // Binary survives the trip — a PDF is not text (D116).
+        assert_eq!(decode_base64("AAECww==").as_deref(), Some(&[0u8, 1, 2, 0xc3][..]));
+    }
+
+    #[test]
+    fn base64_refuses_what_no_encoder_of_ours_sends() {
+        for bad in [
+            "Zg",       // unpadded
+            "Zg==Zg==", // padding mid-stream
+            "Z===",     // over-padded
+            "Zm9\n",    // whitespace
+            "Zm9-",     // URL-safe alphabet
+            "=Zg=",     // padding first
+        ] {
+            assert_eq!(decode_base64(bad), None, "{bad:?} should be refused");
+        }
+    }
 
     #[test]
     fn name_gate_matches_the_allowlist() {

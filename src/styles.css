@@ -2067,29 +2067,24 @@ body {
   app-region: drag;
 }
 
-/* …and it shows itself (D112): hovering the top edge fades in a soft band in
-   the house's surface tone that names the grab area, gone again when the
-   pointer leaves. Presentation only — the band takes no pointer, so the strip
-   above stays exactly the 14px that overlaps no island. */
+/* …and it shows itself (D117, amending D112's hover reveal): a standing
+   gradient — the house surface at the window's very edge fading to nothing
+   over the title bar's height. Always there, taking no pointer, drawing no
+   line (D108's no-drawn-border holds): the wash IS the bar. */
 .docent-titlebar-drag::after {
   content: "";
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  /* The natural macOS title-bar height, said in the house's grammar: a
-     surface with a hairline foot, not a shadowed island — depth stays
-     reserved for things that float, and a title bar does not. */
-  height: 27px;
-  border-bottom: 1px solid var(--docent-hairline);
-  background: color-mix(in srgb, var(--docent-surface) 94%, transparent);
+  height: 34px;
   pointer-events: none;
-  opacity: 0;
-  transition: opacity 160ms ease;
-}
-
-.docent-titlebar-drag:hover::after {
-  opacity: 1;
+  background: linear-gradient(
+    to bottom,
+    var(--docent-surface) 0%,
+    color-mix(in srgb, var(--docent-surface) 72%, transparent) 45%,
+    transparent 100%
+  );
 }
 
 /* ── The tools dock left (D110) ────────────────────────────────────────────
@@ -2383,6 +2378,118 @@ body {
   font-family: inherit;
   font-weight: 500;
   cursor: pointer;
+}
+
+/* ── Settings (D115) ──────────────────────────────────────────────────────
+   The person's switches in the house's own modal: sections with a small-caps
+   heading, rows of copy beside their control, the shared Switch. */
+.docent-settings {
+  width: min(520px, calc(100vw - 48px));
+}
+
+.docent-settings-section {
+  padding: 14px 20px 4px;
+}
+
+.docent-settings-section + .docent-settings-section {
+  border-top: 1px solid var(--docent-hairline);
+}
+
+.docent-settings-section h3 {
+  margin: 0 0 4px;
+  color: var(--docent-muted);
+  font-size: var(--docent-meta-size);
+  font-weight: 600;
+  letter-spacing: var(--docent-meta-tracking);
+  text-transform: uppercase;
+}
+
+.docent-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+}
+
+.docent-settings-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.docent-settings-copy strong {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--docent-body);
+}
+
+.docent-settings-copy span {
+  font-size: 12px;
+  color: var(--docent-muted);
+}
+
+/* Two options, one active: quiet buttons in a hairline shell, the accent
+   spent on the chosen one — the same economy as everywhere (D107). */
+.docent-settings-segment {
+  flex: none;
+  display: flex;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-control);
+  overflow: hidden;
+}
+
+.docent-settings-segment button {
+  padding: 5px 14px;
+  border: none;
+  background: none;
+  color: var(--docent-muted);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.docent-settings-segment button + button {
+  border-left: 1px solid var(--docent-hairline);
+}
+
+.docent-settings-segment button.is-active {
+  background: var(--docent-accent-wash);
+  color: var(--docent-accent-text);
+}
+
+.docent-settings-endpoint {
+  flex: none;
+  max-width: 55%;
+  overflow-wrap: anywhere;
+  font-family: var(--docent-font-mono);
+  font-size: 11.5px;
+  color: var(--docent-body);
+  padding: 4px 8px;
+  border: 1px solid var(--docent-hairline);
+  border-radius: var(--docent-radius-control);
+  background: var(--docent-raised);
+}
+
+/* The web bridge's connect: an offer, not the point — the agent-report
+   grammar (an accent outline, never a fill). */
+.docent-settings-action {
+  flex: none;
+  background: none;
+  color: var(--docent-accent-text);
+  border: 1px solid var(--docent-accent-line);
+  border-radius: var(--docent-radius-control);
+  padding: 5px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.docent-settings-action:hover {
+  background: var(--docent-accent-wash);
 }
 
 /* ------------------------------------------------------------------------

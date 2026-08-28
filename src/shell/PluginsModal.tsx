@@ -47,7 +47,9 @@ function licenseRows(license: unknown): [string, string][] {
   return [];
 }
 
-function Switch({
+/** The house's toggle — shared with Settings (D115), which flips the same
+    kind of switch and must look like it. */
+export function Switch({
   checked,
   disabled,
   onChange,

@@ -313,6 +313,12 @@ export interface DocentCanvasHandle {
   /** Toggle Excalidraw's view mode (read-only canvas) for presenting. */
   setViewMode(on: boolean): void;
   /**
+   * Set the canvas theme. Upstream's own "Dark mode" item is the other way
+   * in; Settings (D115) needs a typed way to ask, the same door setViewMode
+   * is (B1). The chrome hears about it through onThemeChange either way.
+   */
+  setTheme(theme: "light" | "dark"): void;
+  /**
    * Toggle Excalidraw's library sidebar. Upstream's own trigger button is the
    * only other way in, and the desktop shell hides it in favour of a native
    * menu item — so the shell needs a typed way to ask (B1).
@@ -700,6 +706,8 @@ export interface SceneMenuActions {
   onTidy: () => void;
   onToggleDetailMarkers: () => void;
   onConnectAgent: () => void;
+  /** Settings (D115) — the person's switches, one dialog. */
+  onOpenSettings: () => void;
   /** Present only where the shell hosts plugins (S17) — the web build never does. */
   onOpenPlugins?: () => void;
   /** The agent-can-edit switch (S19, D61), with its current state for the label. */
@@ -1484,6 +1492,15 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
     setViewMode: (on) => {
       api.updateScene({
         appState: { viewModeEnabled: on },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      });
+    },
+
+    setTheme: (theme) => {
+      // The change flows back out through onThemeChange like any other, so
+      // the chrome follows this exactly as it follows upstream's own item.
+      api.updateScene({
+        appState: { theme },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
     },
@@ -2719,6 +2736,7 @@ export function ExcalidrawCanvas({
             <MainMenu.Item onSelect={menuActions.onConnectAgent}>
               Connect agent bridge
             </MainMenu.Item>
+            <MainMenu.Item onSelect={menuActions.onOpenSettings}>Settings…</MainMenu.Item>
             {menuActions.onOpenPlugins && (
               <MainMenu.Item onSelect={menuActions.onOpenPlugins}>Plugins…</MainMenu.Item>
             )}

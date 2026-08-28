@@ -17,7 +17,7 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
-import { exportSceneFile, importSceneFile } from "./desktop-files";
+import { exportSceneBytes, exportSceneFile, importSceneFile } from "./desktop-files";
 import { alertDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
@@ -36,6 +36,7 @@ import { notePortfolioSave, suggestedBranch } from "../portfolio/autoCommit";
 import { IntentPanel } from "./IntentPanel";
 import { EMPTY_SCENE, PortfolioModal, type PortfolioIntent } from "./PortfolioModal";
 import { PluginsModal } from "./PluginsModal";
+import { SettingsModal } from "./SettingsModal";
 import { hasPlugins, listPlugins, pluginUrl, providerOf, type PluginInfo } from "../plugins/client";
 import { SpeechController, WebAudioSink } from "../speech/controller";
 import type { ReviewJump } from "./ReviewPanel";
@@ -76,6 +77,7 @@ const hasOverlayTitleBar = isDesktop && /Mac/.test(navigator.userAgent);
  * file: change one side and the other must follow.
  */
 type DocentMenuId =
+  | "settings"
   | "new"
   | "open"
   | "import"
@@ -84,6 +86,7 @@ type DocentMenuId =
   | "export-file"
   | "export-mermaid"
   | "export-sidecar"
+  | "export-pdf"
   | "present"
   | "library"
   | "tools"
@@ -92,7 +95,6 @@ type DocentMenuId =
   | "tidy"
   | "detail-markers"
   | "portfolio"
-  | "connect-agent"
   | "plugins"
   | "agent-edit";
 
@@ -100,15 +102,16 @@ type DocentMenuWindow = Window & { __docentMenu?: (id: DocentMenuId) => void };
 
 /**
  * Everything the command table holds: the menu bar's ids plus the actions no
- * menu carries — the exports the desktop shell has no file channel for and
- * the portfolio's sync verbs.
+ * menu carries — the portfolio's sync verbs, and the web bridge's connect,
+ * which the desktop menu dropped because the shell's pipe needs no asking
+ * (D118).
  */
 type DocentActionId =
   | DocentMenuId
-  | "export-pdf"
   | "branch"
   | "pull"
-  | "push";
+  | "push"
+  | "connect-agent";
 
 /** One command, in the one place it is implemented (B4). */
 interface DocentAction {
@@ -128,6 +131,7 @@ const isMac = /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
 /** The chords, spelled the way each platform spells them. */
 const KEY = isMac
   ? {
+      settings: "⌘,",
       newScene: "⌘N",
       open: "⌘O",
       import: "⇧⌘O",
@@ -139,6 +143,7 @@ const KEY = isMac
       tidy: "⌥⇧F",
     }
   : {
+      settings: "Ctrl+,",
       newScene: "Ctrl+N",
       open: "Ctrl+O",
       import: "Ctrl+Shift+O",
@@ -152,6 +157,7 @@ const KEY = isMac
 
 /** The palette's own order — the menu bar's, read top to bottom (D111). */
 const PALETTE_ORDER: readonly DocentActionId[] = [
+  "settings",
   "new",
   "open",
   "import",
@@ -210,6 +216,8 @@ export function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [legendOpen, setLegendOpen] = useState(false);
   const [pluginsOpen, setPluginsOpen] = useState(false);
+  // Settings (D115): the person's switches, on the person's chord.
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // The palette (D111) and the tools' collapse (D110) — both Docent's own
   // chrome, both keyed off the app root and nothing else.
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -721,12 +729,18 @@ export function App() {
     downloadSceneFile(`${exportBaseName}.docent.json`, sidecar);
   }, [exportBaseName, exportContext]);
 
-  // One page per frame, the outline as the table of contents (D105).
+  // One page per frame, the outline as the table of contents (D105). On the
+  // desktop the bytes cross the shell's file channel base64-encoded (D116);
+  // on the web they stay a browser download.
   const exportPdfFile = useCallback(() => {
     const canvasHandle = canvasRef.current;
     if (!canvasHandle) return;
     void exportPdf(canvasHandle, canvasHandle.getSceneSnapshot(), exportBaseName)
-      .then((bytes) => downloadBinaryFile(`${exportBaseName}.pdf`, bytes, "application/pdf"))
+      .then((bytes) =>
+        isDesktop
+          ? exportSceneBytes(`${exportBaseName}.pdf`, bytes).then(() => {})
+          : downloadBinaryFile(`${exportBaseName}.pdf`, bytes, "application/pdf"),
+      )
       .catch((err) => void alertDialog(String(err instanceof Error ? err.message : err)));
   }, [exportBaseName]);
 
@@ -1274,6 +1288,24 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, [toggleTools]);
 
+  // The settings chord (D115): Cmd+,, Ctrl+, elsewhere. The desktop's native
+  // accelerator owns it there; a field being typed in keeps its keys.
+  useEffect(() => {
+    if (isDesktop) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key !== ",") return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSettingsOpen(true);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, []);
+
   /**
    * ── One command, one implementation (B4, D109) ──────────────────────────
    *
@@ -1368,12 +1400,10 @@ export function App() {
         void exportToFile(`${exportLeafName}.docent.json`, sidecar);
       },
     },
-    // The PDF is bytes (D105), and the shell's file channel writes text —
-    // so this one stays a browser download and is not offered on the desktop
-    // rather than being offered and failing.
+    // The PDF is bytes (D105) and the file channel carries bytes now (D116):
+    // one command, both builds.
     "export-pdf": {
       title: "Export PDF…",
-      available: !isDesktop,
       run: exportPdfFile,
     },
     present: { title: "Present", shortcut: KEY.present, run: () => presentation.enter() },
@@ -1418,7 +1448,18 @@ export function App() {
       available: projectBound,
       run: () => openPortfolio("browse"),
     },
-    "connect-agent": { title: "Connect agent bridge", run: connectAgent },
+    // Web only (D118): the desktop shell's own pipe connects itself (D34),
+    // so there the verb would ask for what already happened.
+    "connect-agent": {
+      title: "Connect agent bridge",
+      available: !isDesktop,
+      run: connectAgent,
+    },
+    settings: {
+      title: "Settings…",
+      shortcut: KEY.settings,
+      run: () => setSettingsOpen(true),
+    },
     plugins: {
       title: "Plugins…",
       available: hasPlugins(),
@@ -1762,6 +1803,7 @@ export function App() {
             onTidy: actions.tidy.run,
             onToggleDetailMarkers: actions["detail-markers"].run,
             onConnectAgent: actions["connect-agent"].run,
+            onOpenSettings: actions.settings.run,
             onOpenPlugins: hasPlugins() ? actions.plugins.run : undefined,
             onToggleAgentEdit: actions["agent-edit"].run,
             agentCanEdit,
@@ -1931,6 +1973,24 @@ export function App() {
             if (source?.project !== project || source.scene !== scene) return;
             await openPortfolioScene(project, scene, { keepTrail: true });
           }}
+        />
+      )}
+      {/* The person's switches, in one place (D115). */}
+      {settingsOpen && (
+        <SettingsModal
+          theme={canvasTheme}
+          onTheme={(next) => canvasRef.current?.setTheme(next)}
+          detailMarkers={detailMarkers}
+          onDetailMarkers={setDetailMarkers}
+          agentCanEdit={agentCanEdit}
+          onAgentCanEdit={setAgentCanEdit}
+          endpoint={
+            isDesktop
+              ? ((window as { __DOCENT_MCP_BASE__?: string }).__DOCENT_MCP_BASE__ ?? null)
+              : null
+          }
+          onConnectBridge={isDesktop ? null : connectAgent}
+          onClose={() => setSettingsOpen(false)}
         />
       )}
       {pluginsOpen && hasPlugins() && (

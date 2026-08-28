@@ -67,3 +67,26 @@ export async function exportSceneFile(
   );
   return typeof result.saved === "string";
 }
+
+/**
+ * The same save dialog for bytes (D116): the channel is JSON, so the bytes
+ * ride base64 and the shell decodes before it writes. The PDF is the caller;
+ * anything binary the page ever exports goes this way.
+ */
+export async function exportSceneBytes(
+  name: string,
+  bytes: Uint8Array,
+): Promise<boolean> {
+  // btoa over the raw latin-1 string, fed in slices — one giant
+  // String.fromCharCode(...bytes) call would blow the argument limit.
+  let raw = "";
+  const STEP = 0x8000;
+  for (let at = 0; at < bytes.length; at += STEP) {
+    raw += String.fromCharCode(...bytes.subarray(at, at + STEP));
+  }
+  const result = await postToShell<{ saved?: string; canceled?: boolean }>(
+    "/desktop/export",
+    JSON.stringify({ name, content: btoa(raw), encoding: "base64" }),
+  );
+  return typeof result.saved === "string";
+}

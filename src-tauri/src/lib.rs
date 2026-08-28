@@ -44,6 +44,7 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry}
 /// that order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MenuAction {
+    Settings,
     New,
     Open,
     Import,
@@ -52,6 +53,7 @@ enum MenuAction {
     ExportFile,
     ExportMermaid,
     ExportSidecar,
+    ExportPdf,
     Present,
     Library,
     Tools,
@@ -60,7 +62,6 @@ enum MenuAction {
     Tidy,
     DetailMarkers,
     Portfolio,
-    ConnectAgent,
     Plugins,
     AgentEdit,
     CheckUpdates,
@@ -68,8 +69,10 @@ enum MenuAction {
 }
 
 impl MenuAction {
-    /// Every action, in menu-bar order.
-    const ALL: [Self; 21] = [
+    /// Every action, in menu-bar order — Settings leads because on macOS the
+    /// application menu it lives in comes before File.
+    const ALL: [Self; 22] = [
+        Self::Settings,
         Self::New,
         Self::Open,
         Self::Import,
@@ -78,6 +81,7 @@ impl MenuAction {
         Self::ExportFile,
         Self::ExportMermaid,
         Self::ExportSidecar,
+        Self::ExportPdf,
         Self::Present,
         Self::Library,
         Self::Tools,
@@ -86,7 +90,6 @@ impl MenuAction {
         Self::Tidy,
         Self::DetailMarkers,
         Self::Portfolio,
-        Self::ConnectAgent,
         Self::Plugins,
         Self::AgentEdit,
         Self::CheckUpdates,
@@ -97,6 +100,7 @@ impl MenuAction {
     /// id, and a page-bound id the page does not know fails the contract test.
     const fn id(self) -> &'static str {
         match self {
+            Self::Settings => "settings",
             Self::New => "new",
             Self::Open => "open",
             Self::Import => "import",
@@ -105,6 +109,7 @@ impl MenuAction {
             Self::ExportFile => "export-file",
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
+            Self::ExportPdf => "export-pdf",
             Self::Present => "present",
             Self::Library => "library",
             Self::Tools => "tools",
@@ -113,7 +118,6 @@ impl MenuAction {
             Self::Tidy => "tidy",
             Self::DetailMarkers => "detail-markers",
             Self::Portfolio => "portfolio",
-            Self::ConnectAgent => "connect-agent",
             Self::Plugins => "plugins",
             Self::AgentEdit => "agent-edit",
             Self::CheckUpdates => "check-updates",
@@ -123,6 +127,7 @@ impl MenuAction {
 
     const fn label(self) -> &'static str {
         match self {
+            Self::Settings => "Settings…",
             Self::New => "New Scene…",
             Self::Open => "Open…",
             Self::Import => "Import Scene File…",
@@ -131,6 +136,7 @@ impl MenuAction {
             Self::ExportFile => "Export Scene File…",
             Self::ExportMermaid => "Export Mermaid…",
             Self::ExportSidecar => "Export Semantic JSON…",
+            Self::ExportPdf => "Export PDF…",
             Self::Present => "Present",
             Self::Library => "Shape Library",
             // "Toggle", not a Hide/Show pair: a native label cannot follow the
@@ -143,7 +149,6 @@ impl MenuAction {
             Self::Tidy => "Tidy Diagram",
             Self::DetailMarkers => "Detail Markers",
             Self::Portfolio => "Portfolio…",
-            Self::ConnectAgent => "Connect Agent Bridge",
             Self::Plugins => "Plugins…",
             Self::AgentEdit => "Agent Can Edit",
             Self::CheckUpdates => "Check for Updates…",
@@ -154,6 +159,8 @@ impl MenuAction {
     /// `CmdOrCtrl` resolves to the platform's own modifier.
     const fn accelerator(self) -> Option<&'static str> {
         match self {
+            // The chord every desktop reserves for its settings (D115).
+            Self::Settings => Some("CmdOrCtrl+,"),
             Self::New => Some("CmdOrCtrl+N"),
             Self::Open => Some("CmdOrCtrl+O"),
             Self::Import => Some("CmdOrCtrl+Shift+O"),
@@ -173,11 +180,11 @@ impl MenuAction {
             | Self::Arrange
             | Self::DetailMarkers
             | Self::Portfolio
-            | Self::ConnectAgent
             | Self::Plugins
             | Self::AgentEdit
             | Self::ExportMermaid
             | Self::ExportSidecar
+            | Self::ExportPdf
             | Self::CheckUpdates
             | Self::AgentEndpoint => None,
         }
@@ -440,7 +447,15 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &item(app, MenuAction::ExportFile)?,
             &item(app, MenuAction::ExportMermaid)?,
             &item(app, MenuAction::ExportSidecar)?,
-            // macOS keeps Quit in the application menu; the others have none.
+            // The PDF crosses the file channel now (D116), so it stands with
+            // the other exports instead of being offered only on the web.
+            &item(app, MenuAction::ExportPdf)?,
+            // macOS keeps Settings and Quit in the application menu; the
+            // others put both here, which is where their conventions look.
+            #[cfg(not(target_os = "macos"))]
+            &PredefinedMenuItem::separator(app)?,
+            #[cfg(not(target_os = "macos"))]
+            &item(app, MenuAction::Settings)?,
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
             #[cfg(not(target_os = "macos"))]
@@ -493,7 +508,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &item(app, MenuAction::Portfolio)?,
             &PredefinedMenuItem::separator(app)?,
-            &item(app, MenuAction::ConnectAgent)?,
+            // No "Connect Agent Bridge" here (D118): the shell's own MCP pipe
+            // connects itself at launch (D34), so the desktop has nothing to
+            // ask. The web keeps its manual verbs where they were.
             &item(app, MenuAction::Plugins)?,
             &check_item(app, MenuAction::AgentEdit, true)?,
         ],
@@ -541,6 +558,9 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
                 true,
                 &[
                     &about,
+                    &PredefinedMenuItem::separator(app)?,
+                    // The macOS home for Settings… (D115), where Cmd+, points.
+                    &item(app, MenuAction::Settings)?,
                     &PredefinedMenuItem::separator(app)?,
                     &PredefinedMenuItem::services(app, None)?,
                     &PredefinedMenuItem::separator(app)?,
@@ -896,7 +916,8 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 19] = [
+    const FRONTEND_IDS: [&str; 20] = [
+        "settings",
         "new",
         "open",
         "import",
@@ -905,6 +926,7 @@ mod tests {
         "export-file",
         "export-mermaid",
         "export-sidecar",
+        "export-pdf",
         "present",
         "library",
         "tools",
@@ -913,7 +935,6 @@ mod tests {
         "tidy",
         "detail-markers",
         "portfolio",
-        "connect-agent",
         "plugins",
         "agent-edit",
     ];
@@ -972,15 +993,29 @@ mod tests {
     #[test]
     fn the_bar_carries_the_commands_the_amendment_names() {
         for id in [
-            // File
-            "open", "save", "save-as", "export-mermaid", "export-sidecar",
+            // The application menu (D115)
+            "settings",
+            // File — the PDF included now (D116)
+            "open", "save", "save-as", "export-mermaid", "export-sidecar", "export-pdf",
             // Diagram
             "present", "tools", "tidy", "arrange", "legend", "detail-markers",
             // Project
-            "portfolio", "connect-agent", "plugins",
+            "portfolio", "plugins",
         ] {
             assert!(is_frontend_menu_id(id), "{id} is not in the bar");
         }
+        // …and the verb the desktop dropped (D118): the shell's pipe connects
+        // itself, so no menu item may claim the id again.
+        assert!(!is_docent_menu_id("connect-agent"));
+    }
+
+    #[test]
+    fn settings_sits_on_the_settings_chord() {
+        // D115: Cmd+, / Ctrl+, — the one chord every desktop reserves.
+        assert_eq!(MenuAction::Settings.id(), "settings");
+        assert_eq!(MenuAction::Settings.label(), "Settings…");
+        assert_eq!(MenuAction::Settings.accelerator(), Some("CmdOrCtrl+,"));
+        assert!(is_frontend_menu_id(MenuAction::Settings.id()));
     }
 
     #[test]
