@@ -72,9 +72,6 @@ export type PaletteEntry =
 /** A palette that scrolls is a palette that is being read, not used. */
 export const PALETTE_LIMIT = 12;
 
-/** Icons are a band at the foot of the list, never the list (D123). */
-export const PALETTE_ICON_ROWS = 4;
-
 /** What a matched character is worth, and what a skipped one costs. */
 const CHAR_SCORE = 1;
 /** A hit at the start of a word — the acronym a person actually types. */
@@ -172,7 +169,6 @@ export function matchPalette(
   query: string,
   commands: readonly PaletteCommand[],
   scenes: readonly PaletteScene[],
-  symbols: readonly PaletteSymbol[] = [],
 ): PaletteEntry[] {
   const entries: PaletteEntry[] = [];
   for (const command of commands) {
@@ -202,7 +198,6 @@ export function matchPalette(
   }
   // Nothing typed yet: every score is zero and sorting would only shuffle the
   // menu into alphabetical order, which is not the order anyone wrote it in.
-  // No icons either — the menu is the menu; icons answer typing (D123).
   if (!query.trim()) return entries.slice(0, PALETTE_LIMIT);
   entries.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
@@ -210,9 +205,17 @@ export function matchPalette(
     if (a.label !== b.label) return a.label < b.label ? -1 : 1;
     return a.key < b.key ? -1 : 1;
   });
-  // The icon band (D123): a few rows at the foot, in the order the catalog
-  // ranked them — never re-fuzzed here, so the keyboard and MCP agree.
-  const icons: PaletteEntry[] = symbols.slice(0, PALETTE_ICON_ROWS).map((symbol) => ({
+  return entries.slice(0, PALETTE_LIMIT);
+}
+
+/**
+ * The icon mode's list (D124): the symbols arrive ALREADY ranked by the
+ * catalog's own lookup (D82, D121) and are never re-fuzzed here — mixing
+ * fuzzy labels with catalog tiers is exactly what D124 undid. One screenful,
+ * in the order the catalog answered.
+ */
+export function iconEntries(symbols: readonly PaletteSymbol[]): PaletteEntry[] {
+  return symbols.slice(0, PALETTE_LIMIT).map((symbol) => ({
     kind: "symbol",
     key: `symbol:${symbol.symbol}`,
     label: symbol.name,
@@ -220,5 +223,4 @@ export function matchPalette(
     matched: [],
     symbol,
   }));
-  return [...entries.slice(0, PALETTE_LIMIT - icons.length), ...icons];
 }

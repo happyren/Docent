@@ -45,7 +45,7 @@ import { Breadcrumbs } from "./Breadcrumbs";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
-import { CommandPalette } from "./CommandPalette";
+import { CommandPalette, type PaletteMode } from "./CommandPalette";
 import type { PaletteCommand, PaletteScene } from "./palette";
 
 const UNTITLED = "untitled.excalidraw";
@@ -89,6 +89,7 @@ type DocentMenuId =
   | "export-pdf"
   | "present"
   | "library"
+  | "insert-icon"
   | "tools"
   | "legend"
   | "arrange"
@@ -139,6 +140,7 @@ const KEY = isMac
       saveAs: "⇧⌘S",
       present: "⌘P",
       library: "⌘L",
+      insertIcon: "⇧⌘K",
       tools: "⌘\\",
       tidy: "⌥⇧F",
     }
@@ -151,6 +153,7 @@ const KEY = isMac
       saveAs: "Ctrl+Shift+S",
       present: "Ctrl+P",
       library: "Ctrl+L",
+      insertIcon: "Ctrl+Shift+K",
       tools: "Ctrl+\\",
       tidy: "Alt+Shift+F",
     };
@@ -169,6 +172,7 @@ const PALETTE_ORDER: readonly DocentActionId[] = [
   "export-pdf",
   "present",
   "library",
+  "insert-icon",
   "tools",
   "legend",
   "arrange",
@@ -221,6 +225,12 @@ export function App() {
   // The palette (D111) and the tools' collapse (D110) — both Docent's own
   // chrome, both keyed off the app root and nothing else.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Which door the palette opened by (D124): ⌘K or the icon chord.
+  const [paletteMode, setPaletteMode] = useState<PaletteMode>("commands");
+  // Read by the chord handler, which is installed once: the same chord
+  // toggles, the sibling chord switches the open palette in place.
+  const paletteStateRef = useRef({ open: paletteOpen, mode: paletteMode });
+  paletteStateRef.current = { open: paletteOpen, mode: paletteMode };
   const [toolsCollapsed, setToolsCollapsed] = useState(readToolsCollapsed);
   const toggleTools = useCallback(() => {
     setToolsCollapsed((collapsed) => {
@@ -1412,6 +1422,15 @@ export function App() {
       shortcut: KEY.library,
       run: () => canvasRef.current?.toggleLibrarySidebar(),
     },
+    "insert-icon": {
+      title: "Insert icon…",
+      shortcut: KEY.insertIcon,
+      hint: "search the libraries",
+      run: () => {
+        setPaletteMode("icons");
+        setPaletteOpen(true);
+      },
+    },
     tools: {
       title: toolsCollapsed ? "Show the tools" : "Hide the tools",
       shortcut: KEY.tools,
@@ -1497,20 +1516,27 @@ export function App() {
     run: actions[id].run,
   }));
 
-  // The palette's chord (D111): Cmd+K, Ctrl+K elsewhere. It takes that one
-  // combination and nothing else — a key it does not own is never
-  // preventDefaulted — and it keeps out of text: a field being typed in owns
-  // its own keyboard, Excalidraw's editors included.
+  // The palette's chords: Cmd+K (D111) and its shifted sibling for icons
+  // (D124) — Ctrl elsewhere. They take those combinations and nothing else —
+  // a key they do not own is never preventDefaulted — and they keep out of
+  // text: a field being typed in owns its own keyboard, Excalidraw's editors
+  // included. On the desktop the native accelerator owns the icon chord, so
+  // only the plain one is answered there.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       if (event.key.toLowerCase() !== "k") return;
+      if (event.shiftKey && isDesktop) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
       event.preventDefault();
       event.stopPropagation();
-      setPaletteOpen((open) => !open);
+      const next: PaletteMode = event.shiftKey ? "icons" : "commands";
+      const { open, mode } = paletteStateRef.current;
+      setPaletteMode(next);
+      // The same chord toggles; the sibling chord switches in place.
+      if (!open || mode === next) setPaletteOpen(!open);
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
@@ -2017,6 +2043,8 @@ export function App() {
           carry, and the portfolio's scenes by path. */}
       {paletteOpen && (
         <CommandPalette
+          mode={paletteMode}
+          onMode={setPaletteMode}
           commands={paletteCommands}
           loadScenes={loadPaletteScenes}
           onOpenScene={openPaletteScene}

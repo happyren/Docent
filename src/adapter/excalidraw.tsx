@@ -495,6 +495,39 @@ export async function renderSceneThumbnail(
   return canvas.toDataURL("image/png");
 }
 
+/**
+ * Rasterize one catalog symbol's glyph to a small PNG data URL — the icon
+ * palette's thumbnails (D124). Off-screen through the same export surface
+ * every render uses (B1); transparent ground so the row's own surface shows
+ * through. Rendered once, in the drawing's own colours: dark mode applies
+ * the SAME invert filter upstream's dark canvas applies (in styles.css), so
+ * the thumbnail honestly previews what the paper will show. Cached, because
+ * a palette redraws on every keystroke and the drawing never changes. Null
+ * when the symbol or its library cannot be had; a thumbnail is decoration,
+ * never a gate.
+ */
+const symbolThumbnails = new Map<string, Promise<string | null>>();
+
+export function renderSymbolThumbnail(symbol: string): Promise<string | null> {
+  const cached = symbolThumbnails.get(symbol);
+  if (cached) return cached;
+  const pending = (async (): Promise<string | null> => {
+    const entry = symbolEntry(symbol);
+    if (!entry) return null;
+    const glyph = glyphOf(await libraryItem(entry.library, entry.index));
+    const restored = restoreElements(glyph as never, null);
+    const canvas = await exportToCanvas({
+      elements: restored,
+      appState: { viewBackgroundColor: "transparent", exportBackground: false },
+      files: null,
+      maxWidthOrHeight: 48,
+    });
+    return canvas.toDataURL("image/png");
+  })().catch(() => null);
+  symbolThumbnails.set(symbol, pending);
+  return pending;
+}
+
 /** A rectangle in scene coordinates — the review's unit of cropping (D48). */
 export interface CropRect {
   x: number;

@@ -2367,6 +2367,29 @@ body {
   font-size: 13px;
 }
 
+/* The icon rows' pictures (D124): a fixed little stage so rows align
+   whether the drawing is tall, wide, or still on its way. */
+.docent-palette-thumb {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.docent-palette-thumb img {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* In the dark, the thumbnail wears upstream's own canvas inversion — the
+   same filter the paper will apply to the drawing — so the row previews
+   exactly what Enter will put on screen. */
+:root[data-docent-theme="dark"] .docent-palette-thumb img {
+  filter: invert(93%) hue-rotate(180deg);
+}
+
 /* Undo is the offer, not the point: an accent outline, never a fill. */
 .docent-agent-report button:not(.docent-narration-close) {
   background: none;

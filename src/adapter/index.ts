@@ -1,4 +1,9 @@
-export { ExcalidrawCanvas, renderSceneCrop, renderSceneThumbnail } from "./excalidraw";
+export {
+  ExcalidrawCanvas,
+  renderSceneCrop,
+  renderSceneThumbnail,
+  renderSymbolThumbnail,
+} from "./excalidraw";
 export type {
   CropMark,
   CropRect,

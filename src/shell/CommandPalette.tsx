@@ -16,8 +16,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
+  iconEntries,
   matchPalette,
-  PALETTE_ICON_ROWS,
+  PALETTE_LIMIT,
   type PaletteCommand,
   type PaletteEntry,
   type PaletteScene,
@@ -26,18 +27,58 @@ import {
 import { folderOf, leafOf } from "../portfolio/tree";
 import catalogJson from "../../public/libraries/catalog.json";
 import { findSymbols, loadCatalog } from "../libraries/catalog";
+import { renderSymbolThumbnail } from "../adapter";
 
-/** The checked-in catalog (D81), parsed once — the icon band's whole world. */
+/** The checked-in catalog (D81), parsed once — icon mode's whole world. */
 const CATALOG = loadCatalog(catalogJson);
 
+/** What an empty icon query opens on: the house vocabulary (D119, D124). */
+const HOUSE_STARTER: PaletteSymbol[] = CATALOG.symbols
+  .filter((entry) => entry.symbol.startsWith("docent/"))
+  .slice(0, PALETTE_LIMIT)
+  .map((entry) => ({ symbol: entry.symbol, name: entry.name, library: entry.library }));
+
+/** The two doors (D124): Cmd+K, and Cmd+Shift+K for icons. */
+export type PaletteMode = "commands" | "icons";
+
 export interface CommandPaletteProps {
+  mode: PaletteMode;
+  /**
+   * The sibling chord pressed while the palette is open (D124): its input
+   * owns the keyboard then, so the window's chord handler never hears it —
+   * the palette itself asks the shell to switch.
+   */
+  onMode: (mode: PaletteMode) => void;
   commands: readonly PaletteCommand[];
   /** Asked once, on open. Rejections are the store's absence, and are silent. */
   loadScenes: () => Promise<PaletteScene[]>;
   onOpenScene: (scene: PaletteScene) => void;
-  /** Enter on an icon row (D123): the person's own insertion, at the centre. */
+  /** Enter on an icon row (D124): the person's own insertion, at the centre. */
   onInsertSymbol: (symbol: string) => void;
   onClose: () => void;
+}
+
+/**
+ * One icon row's picture (D124): asked from the adapter's cache, shown when
+ * it arrives. Decoration, never a gate — a row without its picture yet is
+ * still a row.
+ */
+function IconThumb({ symbol }: { symbol: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void renderSymbolThumbnail(symbol).then((url) => {
+      if (alive) setSrc(url);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [symbol]);
+  return (
+    <span className="docent-palette-thumb" aria-hidden>
+      {src && <img src={src} alt="" />}
+    </span>
+  );
 }
 
 /** The matched characters drawn bold, the rest as written. */
@@ -91,6 +132,8 @@ function SceneLabel({ entry }: { entry: Extract<PaletteEntry, { kind: "scene" }>
 }
 
 export function CommandPalette({
+  mode,
+  onMode,
   commands,
   loadScenes,
   onOpenScene,
@@ -118,23 +161,23 @@ export function CommandPalette({
     };
   }, [loadScenes]);
 
-  // The icon band (D123): ranked by the catalog's own lookup, so a word
-  // answers the same way at the keyboard as over MCP (D82, D121).
-  const symbols = useMemo<PaletteSymbol[]>(
-    () =>
-      query.trim()
-        ? findSymbols(CATALOG, query, { limit: PALETTE_ICON_ROWS }).map((hit) => ({
+  // Icon mode (D124): the catalog's own ranking, so a word answers the same
+  // way at the keyboard as over MCP (D82, D121); nothing typed opens on the
+  // house vocabulary. Command mode never sees an icon — that mix is what
+  // D124 undid.
+  const entries = useMemo(() => {
+    if (mode === "icons") {
+      const symbols = query.trim()
+        ? findSymbols(CATALOG, query, { limit: PALETTE_LIMIT }).map((hit) => ({
             symbol: hit.symbol,
             name: hit.name,
             library: hit.library,
           }))
-        : [],
-    [query],
-  );
-  const entries = useMemo(
-    () => matchPalette(query, commands, scenes, symbols),
-    [query, commands, scenes, symbols],
-  );
+        : HOUSE_STARTER;
+      return iconEntries(symbols);
+    }
+    return matchPalette(query, commands, scenes);
+  }, [mode, query, commands, scenes]);
 
   // A shrinking list must never leave the cursor pointing past its end.
   const active = Math.min(cursor, Math.max(entries.length - 1, 0));
@@ -157,6 +200,15 @@ export function CommandPalette({
   );
 
   const onKeyDown = (event: ReactKeyboardEvent) => {
+    // The palette's own chords switch the open palette between its two
+    // doors (D124) — the input has focus, so nobody else can hear them.
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
+      onMode(event.shiftKey ? "icons" : "commands");
+      setCursor(0);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     // Only the four keys this owns are taken; everything else — typing,
     // selection, the platform's own editing chords — is the input's.
     switch (event.key) {
@@ -189,24 +241,26 @@ export function CommandPalette({
         className="docent-palette"
         role="dialog"
         aria-modal="true"
-        aria-label="Commands, scenes and icons"
+        aria-label={mode === "icons" ? "Insert an icon" : "Commands and scenes"}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <input
           className="docent-palette-input"
           autoFocus
           spellCheck={false}
-          placeholder="Commands, scenes, icons…"
+          placeholder={mode === "icons" ? "Insert an icon…" : "Commands and scenes…"}
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
             setCursor(0);
           }}
           onKeyDown={onKeyDown}
-          aria-label="Commands, scenes and icons"
+          aria-label={mode === "icons" ? "Insert an icon" : "Commands and scenes"}
         />
         {entries.length === 0 ? (
-          <p className="docent-palette-empty">Nothing by that name.</p>
+          <p className="docent-palette-empty">
+            {mode === "icons" ? "No icon by that name." : "Nothing by that name."}
+          </p>
         ) : (
           <ul className="docent-palette-list" ref={listRef} role="listbox">
             {entries.map((entry, index) => (
@@ -228,6 +282,7 @@ export function CommandPalette({
                   run(entry);
                 }}
               >
+                {entry.kind === "symbol" && <IconThumb symbol={entry.symbol.symbol} />}
                 <span className="docent-palette-label">
                   {entry.kind === "scene" ? (
                     <SceneLabel entry={entry} />
@@ -247,7 +302,7 @@ export function CommandPalette({
                   <span className="docent-palette-hint">scene</span>
                 )}
                 {entry.kind === "symbol" && (
-                  <span className="docent-palette-hint">{entry.symbol.symbol} · icon</span>
+                  <span className="docent-palette-hint">{entry.symbol.symbol}</span>
                 )}
               </li>
             ))}

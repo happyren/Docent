@@ -56,6 +56,7 @@ enum MenuAction {
     ExportPdf,
     Present,
     Library,
+    InsertIcon,
     Tools,
     Legend,
     Arrange,
@@ -71,7 +72,7 @@ enum MenuAction {
 impl MenuAction {
     /// Every action, in menu-bar order — Settings leads because on macOS the
     /// application menu it lives in comes before File.
-    const ALL: [Self; 22] = [
+    const ALL: [Self; 23] = [
         Self::Settings,
         Self::New,
         Self::Open,
@@ -84,6 +85,7 @@ impl MenuAction {
         Self::ExportPdf,
         Self::Present,
         Self::Library,
+        Self::InsertIcon,
         Self::Tools,
         Self::Legend,
         Self::Arrange,
@@ -112,6 +114,7 @@ impl MenuAction {
             Self::ExportPdf => "export-pdf",
             Self::Present => "present",
             Self::Library => "library",
+            Self::InsertIcon => "insert-icon",
             Self::Tools => "tools",
             Self::Legend => "legend",
             Self::Arrange => "arrange",
@@ -139,6 +142,7 @@ impl MenuAction {
             Self::ExportPdf => "Export PDF…",
             Self::Present => "Present",
             Self::Library => "Shape Library",
+            Self::InsertIcon => "Insert Icon…",
             // "Toggle", not a Hide/Show pair: a native label cannot follow the
             // page's state without a page→shell channel nothing else needs
             // (D114), and a checkmark would drift the same way. The verb is
@@ -168,6 +172,8 @@ impl MenuAction {
             Self::SaveAs => Some("CmdOrCtrl+Shift+S"),
             Self::Present => Some("CmdOrCtrl+P"),
             Self::Library => Some("CmdOrCtrl+L"),
+            // The palette's sibling (D124): Cmd+K shifted is the icon door.
+            Self::InsertIcon => Some("CmdOrCtrl+Shift+K"),
             // The editors' sidebar chord family; \ is unclaimed by upstream.
             Self::Tools => Some("CmdOrCtrl+\\"),
             // Format Document's chord, as every editor has it (D73); Alt is
@@ -486,6 +492,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &item(app, MenuAction::Present)?,
             &item(app, MenuAction::Library)?,
+            &item(app, MenuAction::InsertIcon)?,
             &item(app, MenuAction::Tools)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Tidy)?,
@@ -916,7 +923,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 20] = [
+    const FRONTEND_IDS: [&str; 21] = [
         "settings",
         "new",
         "open",
@@ -929,6 +936,7 @@ mod tests {
         "export-pdf",
         "present",
         "library",
+        "insert-icon",
         "tools",
         "legend",
         "arrange",
@@ -998,7 +1006,7 @@ mod tests {
             // File — the PDF included now (D116)
             "open", "save", "save-as", "export-mermaid", "export-sidecar", "export-pdf",
             // Diagram
-            "present", "tools", "tidy", "arrange", "legend", "detail-markers",
+            "present", "insert-icon", "tools", "tidy", "arrange", "legend", "detail-markers",
             // Project
             "portfolio", "plugins",
         ] {
