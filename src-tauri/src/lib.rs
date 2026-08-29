@@ -65,6 +65,7 @@ enum MenuAction {
     Portfolio,
     Plugins,
     AgentEdit,
+    Welcome,
     CheckUpdates,
     AgentEndpoint,
 }
@@ -72,7 +73,7 @@ enum MenuAction {
 impl MenuAction {
     /// Every action, in menu-bar order — Settings leads because on macOS the
     /// application menu it lives in comes before File.
-    const ALL: [Self; 23] = [
+    const ALL: [Self; 24] = [
         Self::Settings,
         Self::New,
         Self::Open,
@@ -94,6 +95,7 @@ impl MenuAction {
         Self::Portfolio,
         Self::Plugins,
         Self::AgentEdit,
+        Self::Welcome,
         Self::CheckUpdates,
         Self::AgentEndpoint,
     ];
@@ -123,6 +125,7 @@ impl MenuAction {
             Self::Portfolio => "portfolio",
             Self::Plugins => "plugins",
             Self::AgentEdit => "agent-edit",
+            Self::Welcome => "welcome",
             Self::CheckUpdates => "check-updates",
             Self::AgentEndpoint => "agent-endpoint",
         }
@@ -155,6 +158,7 @@ impl MenuAction {
             Self::Portfolio => "Portfolio…",
             Self::Plugins => "Plugins…",
             Self::AgentEdit => "Agent Can Edit",
+            Self::Welcome => "Welcome Tour",
             Self::CheckUpdates => "Check for Updates…",
             Self::AgentEndpoint => "Agent Endpoint…",
         }
@@ -191,6 +195,7 @@ impl MenuAction {
             | Self::ExportMermaid
             | Self::ExportSidecar
             | Self::ExportPdf
+            | Self::Welcome
             | Self::CheckUpdates
             | Self::AgentEndpoint => None,
         }
@@ -548,6 +553,8 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &about,
             #[cfg(not(target_os = "macos"))]
             &PredefinedMenuItem::separator(app)?,
+            // The welcome scene, forever after its first showing (D126).
+            &item(app, MenuAction::Welcome)?,
             &item(app, MenuAction::CheckUpdates)?,
             &item(app, MenuAction::AgentEndpoint)?,
         ],
@@ -923,7 +930,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 21] = [
+    const FRONTEND_IDS: [&str; 22] = [
         "settings",
         "new",
         "open",
@@ -945,6 +952,7 @@ mod tests {
         "portfolio",
         "plugins",
         "agent-edit",
+        "welcome",
     ];
 
     #[test]

@@ -97,7 +97,8 @@ type DocentMenuId =
   | "detail-markers"
   | "portfolio"
   | "plugins"
-  | "agent-edit";
+  | "agent-edit"
+  | "welcome";
 
 type DocentMenuWindow = Window & { __docentMenu?: (id: DocentMenuId) => void };
 
@@ -185,6 +186,7 @@ const PALETTE_ORDER: readonly DocentActionId[] = [
   "connect-agent",
   "plugins",
   "agent-edit",
+  "welcome",
 ];
 
 /**
@@ -193,6 +195,33 @@ const PALETTE_ORDER: readonly DocentActionId[] = [
  * never one that fails to come up.
  */
 const TOOLS_COLLAPSED = "docent.toolsCollapsed";
+
+/**
+ * The welcome scene (D126): a bundled explainer about Docent itself, opened
+ * once on a first launch that addressed nothing, and forever after from
+ * Help → Welcome Tour or the palette. The flag lives where the collapse
+ * does, behind the same try/catch: storage denied means welcomed — a
+ * browser that cannot remember must not greet on every visit.
+ */
+const WELCOME_SCENE_URL = "/samples/welcome.excalidraw";
+const WELCOME_SCENE_NAME = "welcome.excalidraw";
+const WELCOMED = "docent.welcomed";
+
+function wasWelcomed(): boolean {
+  try {
+    return localStorage.getItem(WELCOMED) === "1";
+  } catch {
+    return true;
+  }
+}
+
+function rememberWelcomed(): void {
+  try {
+    localStorage.setItem(WELCOMED, "1");
+  } catch {
+    // Then next launch greets again, which is the least harmful failure.
+  }
+}
 
 function readToolsCollapsed(): boolean {
   try {
@@ -1178,6 +1207,46 @@ export function App() {
     }
   }, []);
 
+  // The welcome scene (D126): the bundled explainer about Docent, loaded the
+  // way ?scene loads any asset — a loose, unsaved scene the person may draw
+  // over, save anywhere, or simply leave.
+  const [tourPillDismissed, setTourPillDismissed] = useState(false);
+  const openWelcome = useCallback(async () => {
+    const handle = canvasRef.current;
+    if (!handle) return;
+    if (await blockedByUnsaved()) return;
+    try {
+      const response = await fetch(WELCOME_SCENE_URL);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      await handle.loadSceneBlob(new Blob([text], { type: "application/json" }));
+      portfolioSourceRef.current = null;
+      syncSceneUrl(null);
+      drill.clearJumps();
+      markClean(WELCOME_SCENE_NAME);
+      setTourPillDismissed(false);
+      fitLayerOne();
+    } catch (err) {
+      console.error("Failed to load the welcome scene", err);
+      await alertDialog(
+        `Could not open the welcome tour: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }, [blockedByUnsaved, syncSceneUrl, drill, markClean, fitLayerOne]);
+
+  // First launch (D126): nothing addressed, never welcomed — the app opens
+  // on its own explanation, exactly once. The flag is set before the fetch
+  // answers: a greeting that failed must not become a greeting that loops.
+  useEffect(() => {
+    if (!canvas) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("project") || params.get("scene")) return;
+    if (wasWelcomed()) return;
+    rememberWelcomed();
+    void openWelcome();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvas]);
+
   // Startup scene load (?scene=<url>) runs in an effect so it acts only after
   // the canvas is mounted — the excalidrawAPI callback fires mid-mount, and
   // viewport calls made then are silently dropped.
@@ -1487,6 +1556,11 @@ export function App() {
     "agent-edit": {
       title: agentCanEdit ? "Agent can edit ✓" : "Agent can edit",
       run: () => setAgentCanEdit((v) => !v),
+    },
+    welcome: {
+      title: "Welcome tour",
+      hint: "how Docent works",
+      run: () => void openWelcome(),
     },
   };
 
@@ -1850,6 +1924,25 @@ export function App() {
             aria-label="Show the tools"
             onClick={toggleTools}
           />
+        )}
+        {/* The tour's offer (D127): the trunk lock's grammar, on the welcome
+            scene only, gone the moment the tour starts or another scene
+            opens — the pill is keyed to the file's own name. */}
+        {fileName === WELCOME_SCENE_NAME && !presentation.active && !tourPillDismissed && (
+          <div className="docent-welcome-pill">
+            <span>Welcome to Docent</span>
+            <button type="button" onClick={() => presentation.enter()}>
+              Start the tour ⌘P
+            </button>
+            <button
+              type="button"
+              className="docent-welcome-dismiss"
+              aria-label="Dismiss"
+              onClick={() => setTourPillDismissed(true)}
+            >
+              ✕
+            </button>
+          </div>
         )}
         {canvas && (
           <Breadcrumbs
