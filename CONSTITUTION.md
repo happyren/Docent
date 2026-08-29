@@ -340,6 +340,7 @@ the scene graph, not a parallel store. There is one graph; intent is attributes 
 | D133 *(A38, 2026-08-29)* | **A proposal is a branch.** The shadow replica is never a new object: to explore a change, branch the scene (S14, `create_branch`) or draw a linked sibling (D95) and redraw freely — the trunk stays protected (D104), the working copy IS the replica, and merging is accepting. No fork of scene state, no second canvas: one drawing per place, versioned like the code it describes | Git already keeps perfect shadows with perfect memories; inventing a replica object would be Git wearing a costume, maintained by us |
 | D134 *(A38, 2026-08-29)* | **The compare lens.** `compare({against})` — and the palette's rows — overlays the live canvas against a reference snapshot: the scene's BASE copy (the one the store keeps for sync and revert, D47/D103), its SAVED copy, or any named scene. Matched by stable id (I6): removed elements appear as ghosts — faint, dashed, named — at their old places; additions wear a positive tint, changes a caution tint, both as outline effects in the overlay's own grammar (D39). A chip names the reference and the counts; the answer carries added/removed/changed and the craft score of both sides — the measurable half of the wins. Entirely overlay (I2): nothing writes, `clear_effects` and the chip's ✕ end it | A proposal argued from memory of the old drawing is argued badly; both versions on one canvas, told apart by tint, is the argument seeing itself |
 | D135 *(A38, 2026-08-29)* | **The case is meaning.** `define_proposal({title, against?, wins, costs})` records the proposal's argument beside the legend, where the genre and the scenarios live (D87, D89): each win and each cost one sentence. It exports with everything else (sidecar as data, Mermaid as comments), the outline says it, and clearing it (`define_proposal({clear})`) is one call. Judgment stays the author's: the lens measures what it can, the case says the rest | Pros and cons in a chat thread die with the thread; on the drawing they are versioned, exported, spoken — and merged into history with the decision itself |
+| D136 *(A39, 2026-08-29)* | **The title bar says where you are.** The macOS overlay band (D108, D117) gains a breadcrumb readout, centred clear of the traffic lights: the open scene's own trail — project › folders › scene, the segments D92 wrote — extension dropped, "Untitled" while nothing is addressed, and the unsaved dot standing beside it as it does in the window title. Set in the metadata voice (D107); when the trail is long the middle segments yield to ellipsis before the scene's own name does. Furniture, not control: the readout takes no pointer, so the band beneath keeps its drag and its double-click zoom (D112). Framed windows and browser tabs already carry the trail in their own title bars — the readout stands only where borderless left the window nameless | A window that shows a drawing but not which drawing makes the person carry that state in their head; the band was already standing there, empty |
 | D53 *(A10, 2026-08-22)* | **The engine is a plugin, the weights are never ours, and nothing leaves the machine.** The PocketTTS provider lives in its own repository (`happyren/docent-pocket-tts`, MIT): a manifest that runs `pocket-tts serve` through `uvx`, its voice list with each voice's license, and install notes. Docent bundles no model, no weights, no Python: the plugin downloads Kyutai's weights (CC-BY-4.0) on first run and attributes them; the Plugins panel shows the licenses. Provider URLs are loopback only — a manifest naming any other host is refused — so narration text cannot be sent anywhere silently | I7 holds (the runtime set is unchanged; a plugin is the person's installation, like a shape library is a static file — D23), the app stays a 7 MB binary, the weights' license obligations stay with the artifact that carries them, and "local TTS" means local by construction rather than by configuration |
 
 New decisions append here with a number, a one-line rationale, and a date.
@@ -475,6 +476,17 @@ plugin). Rationale: once narration is spoken, the agent is the narrator — it
 goes where the question goes and should not move before it has finished the
 sentence — and what it says must sound like an engineer, not a reader of
 digits.
+
+**A39 — 2026-08-29.** Title-trail amendment. Added D136 (the macOS overlay
+title bar reads the open scene's trail as a breadcrumb — project › folders ›
+scene, D92's own segments in the metadata voice, with the unsaved dot;
+pointer-transparent, so the band keeps the drag and double-click zoom D112
+granted it; standing only where borderless removed the window's own title,
+since framed windows and browser tabs still carry theirs). Rationale: D108
+traded the native title bar for a clean edge and D117 gave the band a
+surface, but nothing on the paper ever said which diagram was open — the
+one fact a person re-orients by should be readable at a glance, not
+remembered.
 
 **A38 — 2026-08-29.** Proposals amendment. Added S24 and D133–D135 (a
 proposal is a branch or a linked sibling, never a new replica object; a
