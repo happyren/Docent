@@ -1905,6 +1905,9 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           // and the side's own spread (D75) already sits tighter than a nudge.
           return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < NUDGE / 2);
         },
+        // The other lines as they stand — a settled line must not tangle
+        // them, and edges settled earlier are seen settled.
+        [...lines].filter(([otherId]) => otherId !== id).map(([, otherPts]) => otherPts),
         ROUTE_PAD,
       );
       lines.set(id, settled);

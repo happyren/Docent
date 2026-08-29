@@ -879,6 +879,7 @@ function settleTail(
   other: { port: Port; node: PortNode; which: "start" | "end" },
   obstacles: readonly Box[],
   seatTaken: SeatTaken,
+  lines: readonly (readonly Point[])[],
   clearance: number,
 ): Point[] | null {
   const n = pts.length;
@@ -896,7 +897,12 @@ function settleTail(
   // pts[k-1] → pts[k] is the perpendicular drop; pts[k-1] rides the run.
   const runC = pts[k - 1][cross];
   const mk = (a: number, c: number): Point => (axis === 0 ? [a, c] : [c, a]);
-  const clear = (cand: readonly Point[]) => !obstacles.some((o) => polylineThroughBox(cand, o, 2));
+  // A settled line must be clear of the components — and must not tangle
+  // what was untangled: a candidate that crosses the other lines more than
+  // the cramped original did is refused. A runway is not worth a knot.
+  const tangles = lineCrossings(pts, lines);
+  const clear = (cand: readonly Point[]) =>
+    !obstacles.some((o) => polylineThroughBox(cand, o, 2)) && lineCrossings(cand, lines) <= tangles;
   if (k >= 2) {
     // The port walks onto the run's line — inside D75's span, outline-true
     // through D98's arithmetic, never onto a seat another edge holds.
@@ -905,7 +911,7 @@ function settleTail(
     if (pos >= lo && pos <= hi && !seatTaken(which, port.side, pos)) {
       const walked = portAt(node, node.shape, port.side, pos, clearance);
       const cand = dropCollinear([...pts.slice(0, k), walked.outside, walked.at]);
-      if (clear(cand.slice(Math.max(0, k - 2)))) {
+      if (clear(cand)) {
         port.at = walked.at;
         port.outside = walked.outside;
         return cand;
@@ -918,7 +924,7 @@ function settleTail(
     const runFrom = pts[k - 2][axis];
     if ((turnAt - runFrom) * inward > SAME_LINE) {
       const cand = dropCollinear([...pts.slice(0, k - 1), mk(turnAt, runC), mk(turnAt, lineC), pts[n - 1]]);
-      if (clear(cand.slice(Math.max(0, k - 2)))) return cand;
+      if (clear(cand)) return cand;
     }
   } else if (n === 3 && other.port.dir !== axis) {
     // The pure L: the run rides the OTHER port's own line, so neither repair
@@ -967,13 +973,14 @@ export function settleApproaches(
   to: PortNode,
   obstacles: readonly Box[],
   seatTaken: SeatTaken,
+  lines: readonly (readonly Point[])[] = [],
   clearance = ROUTE_PAD,
 ): Point[] {
   let pts: readonly Point[] = points;
-  const tail = settleTail(pts, ports.end, to, "end", { port: ports.start, node: from, which: "start" }, obstacles, seatTaken, clearance);
+  const tail = settleTail(pts, ports.end, to, "end", { port: ports.start, node: from, which: "start" }, obstacles, seatTaken, lines, clearance);
   if (tail) pts = tail;
   const reversed = [...pts].reverse();
-  const head = settleTail(reversed, ports.start, from, "start", { port: ports.end, node: to, which: "end" }, obstacles, seatTaken, clearance);
+  const head = settleTail(reversed, ports.start, from, "start", { port: ports.end, node: to, which: "end" }, obstacles, seatTaken, lines, clearance);
   if (head) pts = head.reverse();
   return pts === points ? [...points] : (pts as Point[]);
 }
