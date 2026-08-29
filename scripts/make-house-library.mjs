@@ -35,7 +35,7 @@ function seedOf(text) {
 }
 
 /** The fields every element shares; the canvas re-derives the rest. */
-function base(id, type, extra = {}) {
+function base(id, type, group, extra = {}) {
   return {
     id,
     type,
@@ -47,7 +47,8 @@ function base(id, type, extra = {}) {
     strokeStyle: "solid",
     roughness: 1,
     opacity: 100,
-    groupIds: [],
+    // One group per glyph (D132): a drag moves the drawing, never a stroke.
+    groupIds: [group],
     frameId: null,
     roundness: null,
     seed: seedOf(id),
@@ -191,6 +192,7 @@ const slug = (s) =>
 
 function build(name, verbs) {
   const flat = verbs.flat();
+  const group = `dh-${slug(name)}-group`;
   return flat.map((verb, i) => {
     const id = `dh-${slug(name)}-${i}`;
     if (verb.kind === "line" || verb.kind === "arrow") {
@@ -200,7 +202,7 @@ function build(name, verbs) {
       const minX = Math.min(...verb.pts.map(([x]) => x));
       const minY = Math.min(...verb.pts.map(([, y]) => y));
       const points = verb.pts.map(([x, y]) => [x - minX, y - minY]);
-      return base(id, verb.kind, {
+      return base(id, verb.kind, group, {
         x: minX,
         y: minY,
         width: Math.max(...points.map(([x]) => x)),
@@ -214,7 +216,7 @@ function build(name, verbs) {
         roundness: { type: 2 },
       });
     }
-    return base(id, verb.kind, {
+    return base(id, verb.kind, group, {
       x: verb.x,
       y: verb.y,
       width: verb.w,

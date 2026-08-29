@@ -156,6 +156,18 @@ describe("the house glyphs (D119, D121)", () => {
     expect(check.status).toBe(0);
   });
 
+  it("keeps each glyph one thing — a shared group per item (D132)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const lib = JSON.parse(
+      readFileSync(path.resolve("public/libraries/docent-house.excalidrawlib"), "utf8"),
+    ) as { libraryItems: { name: string; elements: { groupIds: string[] }[] }[] };
+    for (const item of lib.libraryItems) {
+      const groups = new Set(item.elements.map((el) => el.groupIds.join(",")));
+      expect(groups.size, item.name).toBe(1);
+      expect(item.elements[0].groupIds.length, item.name).toBeGreaterThan(0);
+    }
+  });
+
   it("carries the generic vocabulary as docent/ ids", () => {
     const house = catalog.symbols.filter((entry) => entry.symbol.startsWith("docent/"));
     expect(house.length).toBe(22);

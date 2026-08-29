@@ -341,6 +341,13 @@ export interface DocentCanvasHandle {
   /** The person's own named library items as runtime entries (D130). */
   getPersonalSymbols(): readonly SymbolEntry[];
   /**
+   * Give a library item its name (D131) — the teaching act, performed
+   * through upstream's own update API. The change comes back through
+   * onLibraryChange, which re-teaches the catalog. False when the item is
+   * gone or the name is empty.
+   */
+  nameLibraryItem(itemId: string, name: string): Promise<boolean>;
+  /**
    * Toggle Excalidraw's library sidebar. Upstream's own trigger button is the
    * only other way in, and the desktop shell hides it in favour of a native
    * menu item — so the shell needs a typed way to ask (B1).
@@ -522,13 +529,14 @@ export async function renderSceneThumbnail(
  */
 const symbolThumbnails = new Map<string, Promise<string | null>>();
 
-export function renderSymbolThumbnail(symbol: string): Promise<string | null> {
-  const cached = symbolThumbnails.get(symbol);
+function renderThumbnail(
+  key: string,
+  drawing: () => Promise<readonly RawLibraryElement[]>,
+): Promise<string | null> {
+  const cached = symbolThumbnails.get(key);
   if (cached) return cached;
   const pending = (async (): Promise<string | null> => {
-    const entry = symbolEntry(symbol);
-    if (!entry) return null;
-    const glyph = glyphOf(await libraryItem(entry.library, entry.index));
+    const glyph = glyphOf(await drawing());
     const restored = restoreElements(glyph as never, null);
     const canvas = await exportToCanvas({
       elements: restored,
@@ -538,8 +546,30 @@ export function renderSymbolThumbnail(symbol: string): Promise<string | null> {
     });
     return canvas.toDataURL("image/png");
   })().catch(() => null);
-  symbolThumbnails.set(symbol, pending);
+  symbolThumbnails.set(key, pending);
   return pending;
+}
+
+export function renderSymbolThumbnail(symbol: string): Promise<string | null> {
+  return renderThumbnail(symbol, async () => {
+    const entry = symbolEntry(symbol);
+    if (!entry) throw new Error(`Unknown symbol: ${symbol}`);
+    return libraryItem(entry.library, entry.index);
+  });
+}
+
+/** An unnamed personal item's picture (D131) — what the naming row shows. */
+export function renderUnnamedThumbnail(itemId: string): Promise<string | null> {
+  return renderThumbnail(`unnamed:${itemId}`, async () => {
+    const item = unnamedPersonal.find((it) => it.itemId === itemId);
+    if (!item) throw new Error(`Unknown library item: ${itemId}`);
+    return item.elements;
+  });
+}
+
+/** The nameless, for the icon door's naming rows (D131). */
+export function unnamedPersonalItems(): readonly { itemId: string }[] {
+  return unnamedPersonal.map(({ itemId }) => ({ itemId }));
 }
 
 /** A rectangle in scene coordinates — the review's unit of cropping (D48). */
@@ -1002,12 +1032,23 @@ function libraryElements(library: string): Promise<RawLibraryElement[][]> {
  */
 let personalDrawings: readonly RawLibraryElement[][] = [];
 
+/** The library as last heard, whole — what a rename maps over (D131). */
+let latestLibraryItems: readonly PersonalItem[] = [];
+
+/** The nameless (D131): drawn, unbundled, waiting for their word. */
+let unnamedPersonal: readonly { itemId: string; elements: RawLibraryElement[] }[] = [];
+
 function registerPersonalLibrary(items: readonly PersonalItem[]): void {
-  const { entries, drawings } = buildPersonalEntries(items, bundledItemIds());
+  latestLibraryItems = items;
+  const bundled = bundledItemIds();
+  const { entries, drawings } = buildPersonalEntries(items, bundled);
   personalDrawings = drawings as unknown as readonly RawLibraryElement[][];
   registerRuntimeSymbols(entries);
+  unnamedPersonal = items
+    .filter((item) => !(item.name ?? "").trim() && !bundled.has(item.id) && item.elements.length)
+    .map((item) => ({ itemId: item.id, elements: item.elements as RawLibraryElement[] }));
   for (const key of [...symbolThumbnails.keys()]) {
-    if (key.startsWith("my/")) symbolThumbnails.delete(key);
+    if (key.startsWith("my/") || key.startsWith("unnamed:")) symbolThumbnails.delete(key);
   }
 }
 
@@ -1597,6 +1638,17 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
     },
 
     getPersonalSymbols: () => runtimeSymbols(),
+
+    nameLibraryItem: async (itemId, name) => {
+      const trimmed = name.trim();
+      if (!trimmed || !latestLibraryItems.some((item) => item.id === itemId)) return false;
+      await api.updateLibrary({
+        libraryItems: latestLibraryItems.map((item) =>
+          item.id === itemId ? { ...item, name: trimmed } : item,
+        ) as never,
+      });
+      return true;
+    },
 
     insertLibraryItem: async (symbol) => {
       const entry = symbolEntry(symbol);

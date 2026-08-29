@@ -3,6 +3,8 @@ export {
   renderSceneCrop,
   renderSceneThumbnail,
   renderSymbolThumbnail,
+  renderUnnamedThumbnail,
+  unnamedPersonalItems,
 } from "./excalidraw";
 export type {
   CropMark,

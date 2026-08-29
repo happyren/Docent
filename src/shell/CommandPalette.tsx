@@ -28,7 +28,7 @@ import { folderOf, leafOf } from "../portfolio/tree";
 import catalogJson from "../../public/libraries/catalog.json";
 import { findSymbols, loadCatalog, withRuntimeSymbols } from "../libraries/catalog";
 import { runtimeSymbols } from "../authoring/symbols";
-import { renderSymbolThumbnail } from "../adapter";
+import { renderSymbolThumbnail, renderUnnamedThumbnail, unnamedPersonalItems } from "../adapter";
 
 /** The checked-in catalog (D81), parsed once — icon mode's bundled half. */
 const CATALOG = loadCatalog(catalogJson);
@@ -50,6 +50,8 @@ export interface CommandPaletteProps {
   onOpenScene: (scene: PaletteScene) => void;
   /** Enter on an icon row (D124): the person's own insertion, at the centre. */
   onInsertSymbol: (symbol: string) => void;
+  /** The pen (D131): write a name onto an unnamed library item. */
+  onNameItem: (itemId: string, name: string) => Promise<boolean>;
   onClose: () => void;
 }
 
@@ -58,17 +60,18 @@ export interface CommandPaletteProps {
  * it arrives. Decoration, never a gate — a row without its picture yet is
  * still a row.
  */
-function IconThumb({ symbol }: { symbol: string }) {
+function IconThumb({ symbol, itemId }: { symbol?: string; itemId?: string }) {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let alive = true;
-    void renderSymbolThumbnail(symbol).then((url) => {
+    const render = itemId ? renderUnnamedThumbnail(itemId) : renderSymbolThumbnail(symbol ?? "");
+    void render.then((url) => {
       if (alive) setSrc(url);
     });
     return () => {
       alive = false;
     };
-  }, [symbol]);
+  }, [symbol, itemId]);
   return (
     <span className="docent-palette-thumb" aria-hidden>
       {src && <img src={src} alt="" />}
@@ -133,6 +136,7 @@ export function CommandPalette({
   loadScenes,
   onOpenScene,
   onInsertSymbol,
+  onNameItem,
   onClose,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
@@ -156,13 +160,26 @@ export function CommandPalette({
     };
   }, [loadScenes]);
 
+  // The pen (D131): which unnamed item the input is naming, or none.
+  const [naming, setNaming] = useState<string | null>(null);
   // Icon mode (D124): the catalog's own ranking over the bundled shelves
-  // plus the person's own (D130) — read once per open, which is when the
-  // library could last have changed. A word answers the same way at the
-  // keyboard as over MCP (D82, D121); nothing typed opens on the person's
-  // shelf and then the house vocabulary. Command mode never sees an icon —
-  // that mix is what D124 undid.
-  const [catalog] = useState(() => withRuntimeSymbols(CATALOG, runtimeSymbols()));
+  // plus the person's own (D130) — re-read after a naming, which is the one
+  // way the shelf changes while the palette is open. A word answers the
+  // same way at the keyboard as over MCP (D82, D121); nothing typed opens
+  // on the person's shelf, then the house vocabulary, then the nameless
+  // waiting for their word. Command mode never sees an icon — that mix is
+  // what D124 undid.
+  const [shelfNonce, setShelfNonce] = useState(0);
+  const catalog = useMemo(
+    () => withRuntimeSymbols(CATALOG, runtimeSymbols()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shelfNonce],
+  );
+  const unnamed = useMemo(
+    () => unnamedPersonalItems(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [shelfNonce],
+  );
   const starter = useMemo<PaletteSymbol[]>(
     () =>
       catalog.symbols
@@ -171,8 +188,9 @@ export function CommandPalette({
         .map((entry) => ({ symbol: entry.symbol, name: entry.name, library: entry.library })),
     [catalog],
   );
-  const entries = useMemo(() => {
+  const entries = useMemo<PaletteEntry[]>(() => {
     if (mode === "icons") {
+      if (naming) return []; // the input is a pen now, not a search
       const symbols = query.trim()
         ? findSymbols(catalog, query, { limit: PALETTE_LIMIT }).map((hit) => ({
             symbol: hit.symbol,
@@ -180,10 +198,24 @@ export function CommandPalette({
             library: hit.library,
           }))
         : starter;
+      // The nameless (D131), on the empty query only — a search answers
+      // words, and these have none yet. They hold reserved seats at the
+      // foot: a full shelf must not hide the very items waiting to join it.
+      if (!query.trim()) {
+        const waiting = unnamed.slice(0, 3).map((item) => ({
+          kind: "unnamed" as const,
+          key: `unnamed:${item.itemId}`,
+          label: "Unnamed icon",
+          score: 0,
+          matched: [],
+          itemId: item.itemId,
+        }));
+        return [...iconEntries(symbols).slice(0, PALETTE_LIMIT - waiting.length), ...waiting];
+      }
       return iconEntries(symbols);
     }
     return matchPalette(query, commands, scenes);
-  }, [mode, query, commands, scenes, catalog, starter]);
+  }, [mode, query, commands, scenes, catalog, starter, unnamed, naming]);
 
   // A shrinking list must never leave the cursor pointing past its end.
   const active = Math.min(cursor, Math.max(entries.length - 1, 0));
@@ -197,6 +229,14 @@ export function CommandPalette({
       if (!entry) return;
       // Closed first: every command opens a modal, a dialog or a menu of its
       // own, and none of them should come up behind this.
+      // Naming stays inside (D131): the palette becomes the pen, everything
+      // else closes first so its own surface can come up in front.
+      if (entry.kind === "unnamed") {
+        setNaming(entry.itemId);
+        setQuery("");
+        setCursor(0);
+        return;
+      }
       onClose();
       if (entry.kind === "command") entry.command.run();
       else if (entry.kind === "symbol") onInsertSymbol(entry.symbol.symbol);
@@ -205,12 +245,35 @@ export function CommandPalette({
     [onClose, onOpenScene, onInsertSymbol],
   );
 
+  // The pen writes (D131): Enter commits the typed name, Escape puts the
+  // pen down and the door is a search again.
+  const commitName = useCallback(() => {
+    if (!naming || !query.trim()) return;
+    void onNameItem(naming, query.trim()).then(() => {
+      setNaming(null);
+      setQuery("");
+      setCursor(0);
+      setShelfNonce((n) => n + 1);
+    });
+  }, [naming, query, onNameItem]);
+
   const onKeyDown = (event: ReactKeyboardEvent) => {
     // The palette's own chords switch the open palette between its two
     // doors (D124) — the input has focus, so nobody else can hear them.
     if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === "k") {
       onMode(event.shiftKey ? "icons" : "commands");
       setCursor(0);
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    // While the pen is out (D131), Enter writes and Escape puts it down.
+    if (naming) {
+      if (event.key === "Enter") commitName();
+      else if (event.key === "Escape") {
+        setNaming(null);
+        setQuery("");
+      } else return;
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -254,7 +317,9 @@ export function CommandPalette({
           className="docent-palette-input"
           autoFocus
           spellCheck={false}
-          placeholder={mode === "icons" ? "Insert an icon…" : "Commands and scenes…"}
+          placeholder={
+            naming ? "Name this icon…" : mode === "icons" ? "Insert an icon…" : "Commands and scenes…"
+          }
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
@@ -263,7 +328,12 @@ export function CommandPalette({
           onKeyDown={onKeyDown}
           aria-label={mode === "icons" ? "Insert an icon" : "Commands and scenes"}
         />
-        {entries.length === 0 ? (
+        {naming ? (
+          <div className="docent-palette-naming">
+            <IconThumb itemId={naming} />
+            <span>Type the name agents will know it by, then press Enter. Esc cancels.</span>
+          </div>
+        ) : entries.length === 0 ? (
           <p className="docent-palette-empty">
             {mode === "icons" ? "No icon by that name." : "Nothing by that name."}
           </p>
@@ -289,6 +359,7 @@ export function CommandPalette({
                 }}
               >
                 {entry.kind === "symbol" && <IconThumb symbol={entry.symbol.symbol} />}
+                {entry.kind === "unnamed" && <IconThumb itemId={entry.itemId} />}
                 <span className="docent-palette-label">
                   {entry.kind === "scene" ? (
                     <SceneLabel entry={entry} />
@@ -309,6 +380,9 @@ export function CommandPalette({
                 )}
                 {entry.kind === "symbol" && (
                   <span className="docent-palette-hint">{entry.symbol.symbol}</span>
+                )}
+                {entry.kind === "unnamed" && (
+                  <span className="docent-palette-hint">Enter names it</span>
                 )}
               </li>
             ))}

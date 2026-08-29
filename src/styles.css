@@ -2367,6 +2367,17 @@ body {
   font-size: 13px;
 }
 
+/* The pen out (D131): the item being named, beside one line of what Enter
+   will do — the input above is the pen itself. */
+.docent-palette-naming {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  color: var(--docent-muted);
+  font-size: 13px;
+}
+
 /* The icon rows' pictures (D124): a fixed little stage so rows align
    whether the drawing is tall, wide, or still on its way. */
 .docent-palette-thumb {

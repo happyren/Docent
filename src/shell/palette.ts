@@ -67,6 +67,15 @@ export type PaletteEntry =
       score: number;
       matched: readonly number[];
       symbol: PaletteSymbol;
+    }
+  | {
+      /** An unnamed personal item (D131): Enter turns the input into the pen. */
+      kind: "unnamed";
+      key: string;
+      label: string;
+      score: number;
+      matched: readonly number[];
+      itemId: string;
     };
 
 /** A palette that scrolls is a palette that is being read, not used. */

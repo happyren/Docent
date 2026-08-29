@@ -2158,6 +2158,9 @@ export function App() {
           loadScenes={loadPaletteScenes}
           onOpenScene={openPaletteScene}
           onInsertSymbol={(symbol) => void canvasRef.current?.insertLibraryItem(symbol)}
+          onNameItem={(itemId, name) =>
+            canvasRef.current?.nameLibraryItem(itemId, name) ?? Promise.resolve(false)
+          }
           onClose={() => setPaletteOpen(false)}
         />
       )}
