@@ -7,7 +7,7 @@
  * say what it would change before it does; `lint` is the craft check.
  * Pure and deterministic given the id source (I3).
  */
-import type { LegendRule, Scenario, SceneLink, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
+import type { Proposal, LegendRule, Scenario, SceneLink, SceneSnapshot, SnapshotElement } from "../adapter/snapshot";
 import type { SceneWrite, WriteArrow, WriteFrame, WriteMeaning, WritePatch, WriteShape, WriteStyle, WriteSymbol } from "../adapter/excalidraw";
 import { applyLegend } from "../export/legend";
 import { buildSceneGraph, type GraphEdge, type GraphFrame, type GraphNode, type SceneGraph } from "../scene/graph";
@@ -173,7 +173,22 @@ export interface DefineScenario {
   description?: string;
 }
 
-export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout | UseGenre | DefineScenario;
+export interface DefineProposal {
+  op: "define_proposal";
+  ref?: string;
+  /** The proposal's one-line name. Required unless clearing. */
+  title?: string;
+  /** What the lens compares with — "base", "saved", or "project/path". */
+  against?: string;
+  /** Each win one sentence — what the change buys. */
+  wins?: string[];
+  /** Each cost one sentence — what it spends. */
+  costs?: string[];
+  /** True removes the recorded case (D135). */
+  clear?: boolean;
+}
+
+export type Op = AddNode | AddEdge | Update | Remove | AddFrame | AddDetailLayer | DefineKind | Layout | UseGenre | DefineScenario | DefineProposal;
 
 /**
  * A write, and what rides beside the legend on its carrier (D87, D89):
@@ -187,6 +202,8 @@ export interface MeaningWrite extends SceneWrite {
   genre?: string;
   /** The scenarios this write records, whole, in authored order. */
   scenarios?: Scenario[];
+  /** The proposal's case this write records (D135); null clears it. */
+  proposal?: Proposal | null;
 }
 
 export interface Plan {
@@ -305,6 +322,8 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   let genreChanged = false;
   let scenarios: Scenario[] = [...graph.scenarios];
   let scenariosChanged = false;
+  let proposal: Proposal | null = graph.proposal;
+  let proposalChanged = false;
   // The genre this plan lays out by (D90): what the scene records, or
   // what a `use_genre` in this very batch establishes — an agent's first
   // batch adopts a genre and draws in it, and the posture has to hold for
@@ -587,6 +606,35 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           notes.push(`scenario "${name}" defined (${path.length} step${path.length === 1 ? "" : "s"})`);
         }
         scenariosChanged = true;
+        break;
+      }
+      case "define_proposal": {
+        // The case is meaning (D135): a title and the argument, beside the
+        // legend where the genre and the scenarios live.
+        if (op.clear) {
+          if (proposal !== null) {
+            proposal = null;
+            proposalChanged = true;
+            notes.push("proposal cleared");
+          }
+          break;
+        }
+        const title = clean(op.title ?? "");
+        if (!title) {
+          problems.push(`${at}: title is empty — name the proposal, or pass clear:true to remove it`);
+          break;
+        }
+        const lines = (raw: string[] | undefined): string[] =>
+          (raw ?? []).map((line) => clean(line)).filter((line) => line !== "");
+        const against = clean(op.against ?? "");
+        proposal = {
+          title,
+          ...(against ? { against } : {}),
+          wins: lines(op.wins),
+          costs: lines(op.costs),
+        };
+        proposalChanged = true;
+        notes.push(`proposal "${title}" recorded (${proposal.wins.length} win${proposal.wins.length === 1 ? "" : "s"}, ${proposal.costs.length} cost${proposal.costs.length === 1 ? "" : "s"})`);
         break;
       }
       case "add_frame": {
@@ -1865,6 +1913,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // (D87, D89) — one home for the scene's conventions.
   if (genreChanged && genre) result.genre = genre;
   if (scenariosChanged) result.scenarios = scenarios;
+  if (proposalChanged) result.proposal = proposal;
   return { write: result, ids, notes, touched };
 }
 
@@ -1875,7 +1924,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
-  return { detailFrameId: null, link: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], legendSample: false, refine: null, composite: {}, symbol: null };
+  return { detailFrameId: null, link: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], proposal: null, legendSample: false, refine: null, composite: {}, symbol: null };
 }
 
 function docentFromMeaning(meaning: WriteMeaning | null | undefined, base: SnapshotElement["docent"]): SnapshotElement["docent"] {
@@ -2063,12 +2112,13 @@ export function simulate(snapshot: SceneSnapshot, write: MeaningWrite): SceneSna
   // (D9, D87, D89): whichever of them a write carries goes there, and a
   // scene with no legend yet has the carrier made for it — the empty rule
   // list is what marks the element as the carrier.
-  if (write.legend || write.genre !== undefined || write.scenarios !== undefined) {
+  if (write.legend || write.genre !== undefined || write.scenarios !== undefined || write.proposal !== undefined) {
     const recorded = (base: SnapshotElement["docent"]): SnapshotElement["docent"] => ({
       ...base,
       ...(write.legend ? { legend: write.legend } : {}),
       ...(write.genre !== undefined ? { genre: write.genre } : {}),
       ...(write.scenarios !== undefined ? { scenarios: write.scenarios } : {}),
+      ...(write.proposal !== undefined ? { proposal: write.proposal } : {}),
     });
     const carrier = out.find((el) => el.docent.legend !== null);
     if (carrier) carrier.docent = recorded(carrier.docent);

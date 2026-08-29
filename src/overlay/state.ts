@@ -51,18 +51,37 @@ export interface GhostState {
   bounds: { x: number; y: number; width: number; height: number };
 }
 
+/**
+ * The compare lens's tints (D134): additions and changes marked at their
+ * own bounds, pre-resolved by the command like the ghosts' are — the
+ * renderer draws rectangles and asks nothing of the scene (I2).
+ */
+export interface CompareMark {
+  id: string;
+  tone: "added" | "changed";
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
 export interface OverlayState {
   highlight: HighlightState | null;
   flow: FlowState | null;
   /** The numbered steps of the flow in force, empty for a plain pulse. */
   steps: StepBadge[];
   ghosts: GhostState[];
+  /** The compare lens's marks (D134); [] when the lens is off. */
+  compareMarks: CompareMark[];
 }
 
 type Listener = (state: OverlayState) => void;
 
 export class OverlayStore {
-  private state: OverlayState = { highlight: null, flow: null, steps: [], ghosts: [] };
+  private state: OverlayState = {
+    highlight: null,
+    flow: null,
+    steps: [],
+    ghosts: [],
+    compareMarks: [],
+  };
   private listeners = new Set<Listener>();
   private generation = 0;
 
@@ -136,7 +155,22 @@ export class OverlayStore {
     this.emit({ ...this.state, ghosts: ghosts.map((g) => ({ ...g, bounds: { ...g.bounds } })) });
   }
 
+  /** Replace the compare marks (D134). Empty clears; same set is a no-op. */
+  setCompareMarks(marks: CompareMark[]): void {
+    const current = this.state.compareMarks;
+    if (
+      current.length === marks.length &&
+      current.every((m, i) => m.id === marks[i].id && m.tone === marks[i].tone)
+    ) {
+      return;
+    }
+    this.emit({
+      ...this.state,
+      compareMarks: marks.map((m) => ({ ...m, bounds: { ...m.bounds } })),
+    });
+  }
+
   clear(): void {
-    this.emit({ highlight: null, flow: null, steps: [], ghosts: [] });
+    this.emit({ highlight: null, flow: null, steps: [], ghosts: [], compareMarks: [] });
   }
 }

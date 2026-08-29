@@ -512,6 +512,25 @@ export function OverlayLayer({
               </text>
             </g>
           ))}
+          {/* The compare lens's tints (D134): green for what the proposal
+              adds, amber for what it changes — quiet washes with a solid
+              hairline, beside the ghosts of what it removes. */}
+          {overlay.compareMarks.map((m) => (
+            <rect
+              key={`mark:${m.id}`}
+              className={`docent-compare-${m.tone}`}
+              x={m.bounds.x - 4}
+              y={m.bounds.y - 4}
+              width={Math.max(m.bounds.width, 8) + 8}
+              height={Math.max(m.bounds.height, 8) + 8}
+              rx={8}
+              fill={m.tone === "added" ? "#2f9e44" : "#e8590c"}
+              fillOpacity={0.09}
+              stroke={m.tone === "added" ? "#2f9e44" : "#e8590c"}
+              strokeWidth={2}
+              opacity={0.9}
+            />
+          ))}
           {overlay.ghosts.map((g) => (
             <g key={`ghost:${g.id}`} className="docent-ghost">
               <title>{`${g.label} — removed`}</title>

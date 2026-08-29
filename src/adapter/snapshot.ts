@@ -85,6 +85,8 @@ export interface DocentElementData {
   genre: string | null;
   /** The scene's scenarios (D89), on the carrier with the genre. */
   scenarios: Scenario[];
+  /** The proposal's case (D135), on the carrier with them. */
+  proposal: Proposal | null;
   /**
    * A drawn legend sample or its label (D69): part of the legend's picture,
    * never a component or an edge.
@@ -220,6 +222,36 @@ function cleaned(v: unknown): string | null {
 }
 
 /**
+ * The proposal's case (D135): a title, what it is argued against, and the
+ * wins and costs — each one sentence. A case with no title is no case.
+ */
+export interface Proposal {
+  title: string;
+  /** What the lens compares with — "base", "saved", or "project/path". */
+  against?: string;
+  wins: string[];
+  costs: string[];
+}
+
+export function parseProposal(v: unknown): Proposal | null {
+  if (typeof v !== "object" || v === null) return null;
+  const r = v as Record<string, unknown>;
+  const title = cleaned(r.title);
+  if (!title) return null;
+  const lines = (raw: unknown): string[] =>
+    Array.isArray(raw)
+      ? raw.map((line) => cleaned(line)).filter((line): line is string => line !== null)
+      : [];
+  const against = cleaned(r.against);
+  return {
+    title,
+    ...(against ? { against } : {}),
+    wins: lines(r.wins),
+    costs: lines(r.costs),
+  };
+}
+
+/**
  * The scenarios on the carrier (D89). A malformed entry — no name, no
  * path, a step that is not an id — is dropped rather than repaired: what
  * comes back is what can be replayed.
@@ -278,6 +310,7 @@ function parseDocent(customData: unknown): DocentElementData {
     legend: null,
     genre: null,
     scenarios: [],
+    proposal: null,
     legendSample: false,
     refine: null,
     composite: {},
@@ -326,6 +359,7 @@ function parseDocent(customData: unknown): DocentElementData {
     // (D87, D89): one home for the scene's conventions.
     genre: cleaned(d.genre),
     scenarios: parseScenarios(d.scenarios),
+    proposal: parseProposal(d.proposal),
     legendSample: d.legendSample === true,
   };
 }

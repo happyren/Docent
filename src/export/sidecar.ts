@@ -212,6 +212,18 @@ export function exportSidecar(graph: SceneGraph, context?: ExportContext): strin
   if (scenarios.length) {
     chunks.push(` "scenarios": ${stableStringify(scenarios)}`);
   }
+  if (graph.proposal) {
+    // The case (D135): the author's own argument, declared like everything.
+    chunks.push(
+      ` "proposal": ${stableStringify({
+        title: graph.proposal.title,
+        ...(graph.proposal.against ? { against: graph.proposal.against } : {}),
+        wins: [...graph.proposal.wins],
+        costs: [...graph.proposal.costs],
+        provenance: "declared",
+      })}`,
+    );
+  }
   if (Object.keys(legendRecord).length) {
     chunks.push(` "legend": ${stableStringify(legendRecord)}`);
   }

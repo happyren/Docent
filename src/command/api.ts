@@ -24,6 +24,8 @@ import type { SceneWrite } from "../adapter/excalidraw";
 import { idSource, lint, plan, PlanError, simulate, type LintReport, type Op } from "../authoring/ops";
 import { tidyTargets, type TidyScope } from "../authoring/tidy";
 import { describeChange, describeMeaningChange } from "../scene/diff";
+import { compareGraphs } from "../scene/compare";
+import { craftScore } from "../authoring/score";
 
 /** The read-only slice of the canvas surface commands may touch. */
 export interface SceneReader {
@@ -789,6 +791,67 @@ export class CommandAPI {
   /** Clear all overlay effects. */
   clearEffects(): void {
     this.overlay.clear();
+  }
+
+  /**
+   * The compare lens (D134): the live scene against a reference snapshot,
+   * matched by stable id (I6) — ghosts where the reference had what the
+   * scene no longer does, tints on what it added and changed, and the
+   * craft score of both sides as the measurable half of the wins. Effects
+   * only (I2); `compareOff` or `clearEffects` ends it.
+   */
+  compare(reference: SceneSnapshot): {
+    counts: { added: number; removed: number; changed: number };
+    score: { reference: number; current: number };
+  } {
+    const current = this.reader.getSceneSnapshot();
+    const referenceGraph = buildSceneGraph(reference);
+    const currentGraph = buildSceneGraph(current);
+    const view = compareGraphs(referenceGraph, currentGraph);
+    this.overlay.setGhosts(
+      view.ghosts.map((g) => ({
+        id: g.sourceId,
+        label: g.label ? `${g.label}` : g.frame ? "(frame)" : "",
+        bounds: g.bounds,
+      })),
+    );
+    const boundsOf = (sourceId: string) => {
+      const node = currentGraph.nodes.find((n) => n.sourceId === sourceId);
+      if (node) return node.bounds;
+      const frame = currentGraph.frames.find((f) => f.sourceId === sourceId);
+      if (frame) return frame.bounds;
+      const edge = currentGraph.edges.find((e) => e.sourceId === sourceId);
+      if (!edge) return null;
+      const from = edge.from ? currentGraph.nodes.find((n) => n.id === edge.from) : null;
+      const to = edge.to ? currentGraph.nodes.find((n) => n.id === edge.to) : null;
+      if (!from || !to) return null;
+      const x = Math.min(from.bounds.x + from.bounds.width / 2, to.bounds.x + to.bounds.width / 2);
+      const y = Math.min(from.bounds.y + from.bounds.height / 2, to.bounds.y + to.bounds.height / 2);
+      return {
+        x,
+        y,
+        width: Math.abs(from.bounds.x - to.bounds.x) || 2,
+        height: Math.abs(from.bounds.y - to.bounds.y) || 2,
+      };
+    };
+    const marks = [
+      ...view.added.map((id) => ({ id, tone: "added" as const, bounds: boundsOf(id) })),
+      ...view.changed.map((id) => ({ id, tone: "changed" as const, bounds: boundsOf(id) })),
+    ].filter((m): m is { id: string; tone: "added" | "changed"; bounds: NonNullable<ReturnType<typeof boundsOf>> } => m.bounds !== null);
+    this.overlay.setCompareMarks(marks);
+    return {
+      counts: view.counts,
+      score: {
+        reference: craftScore(reference, referenceGraph).score,
+        current: craftScore(current, currentGraph).score,
+      },
+    };
+  }
+
+  /** Put the lens down (D134). */
+  compareOff(): void {
+    this.overlay.setGhosts([]);
+    this.overlay.setCompareMarks([]);
   }
 
   /**

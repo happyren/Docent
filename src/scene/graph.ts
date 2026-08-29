@@ -9,6 +9,7 @@
  */
 import type {
   LegendRule,
+  Proposal,
   Scenario,
   SceneLink,
   SceneSnapshot,
@@ -116,6 +117,8 @@ export interface SceneGraph {
   genre: string | null;
   /** The scene's scenarios (D89), in the order they were authored. */
   scenarios: Scenario[];
+  /** The proposal's case (D135), off the same carrier. */
+  proposal: Proposal | null;
 }
 
 const NODE_TYPES = new Set([
@@ -288,6 +291,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
   const legend = carrier?.docent.legend ?? [];
   const genre = carrier?.docent.genre ?? null;
   const scenarios = carrier?.docent.scenarios ?? [];
+  const proposal = carrier?.docent.proposal ?? null;
 
   const frameElements = snapshot.elements.filter((el) => el.type === "frame");
   const edgeElements = snapshot.elements.filter((el) => el.type === "arrow" && !isLegendCarrier(el));
@@ -550,5 +554,5 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
     .map(([id, members]) => ({ id, members: members.sort() }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
 
-  return { nodes, edges, frames, groups, legend, genre, scenarios };
+  return { nodes, edges, frames, groups, legend, genre, scenarios, proposal };
 }

@@ -30,7 +30,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ExcalidrawElement, ExcalidrawTextElement } from "@excalidraw/excalidraw/element/types";
 import "@excalidraw/excalidraw/index.css";
-import type { LegendRule, Scenario, SceneLink, SceneSnapshot } from "./snapshot";
+import type { LegendRule, Proposal, Scenario, SceneLink, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, parseSceneLink, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
 import {
@@ -283,6 +283,8 @@ export interface SceneWrite {
   genre?: string;
   /** The scene's scenarios (D89), whole and in order, on the same carrier. */
   scenarios?: Scenario[];
+  /** The proposal's case (D135), on the same carrier; null clears it. */
+  proposal?: Proposal | null;
 }
 
 export interface DocentCanvasHandle {
@@ -2415,7 +2417,7 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       // (D87, D89), merged into what it already holds. A write may record
       // them without touching the legend — and a scene that has no legend
       // yet gets the empty one, which is what marks an element as carrier.
-      if (write.genre !== undefined || write.scenarios !== undefined) {
+      if (write.genre !== undefined || write.scenarios !== undefined || write.proposal !== undefined) {
         let carrier = elements.find(
           (el) => !el.isDeleted && parseLegendRules(docentDataOf(el).legend) !== null,
         );
@@ -2430,6 +2432,7 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
             ? withDocentPatch(el, {
                 ...(write.genre !== undefined ? { genre: write.genre } : {}),
                 ...(write.scenarios !== undefined ? { scenarios: write.scenarios } : {}),
+                ...(write.proposal !== undefined ? { proposal: write.proposal } : {}),
               })
             : el,
         );

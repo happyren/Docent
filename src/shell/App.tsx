@@ -18,6 +18,7 @@ import {
   writeSceneFile,
 } from "./scene-file";
 import { exportSceneBytes, exportSceneFile, importSceneFile } from "./desktop-files";
+import { snapshotFromSceneJSON } from "../adapter/snapshot";
 import { alertDialog, confirmDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
@@ -25,6 +26,7 @@ import { tidyOps, type TidyScope } from "../authoring/tidy";
 import { detailBadges, linkBadges, logicMarks } from "../scene/detailBadges";
 import type { SceneLink } from "../adapter/snapshot";
 import {
+  loadBase,
   createBranch as createPortfolioBranch,
   getBinding as getPortfolioBinding,
   listProjects,
@@ -114,7 +116,10 @@ type DocentActionId =
   | "branch"
   | "pull"
   | "push"
-  | "connect-agent";
+  | "connect-agent"
+  | "compare-base"
+  | "compare-saved"
+  | "compare-off";
 
 /** One command, in the one place it is implemented (B4). */
 interface DocentAction {
@@ -185,6 +190,9 @@ const PALETTE_ORDER: readonly DocentActionId[] = [
   "branch",
   "pull",
   "push",
+  "compare-base",
+  "compare-saved",
+  "compare-off",
   "connect-agent",
   "plugins",
   "agent-edit",
@@ -253,6 +261,11 @@ export function App() {
   const [pluginsOpen, setPluginsOpen] = useState(false);
   // Settings (D115): the person's switches, on the person's chord.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The compare lens (D134): what the canvas is being held against.
+  const [comparing, setComparing] = useState<{
+    name: string;
+    counts: { added: number; removed: number; changed: number } | null;
+  } | null>(null);
   // The palette (D111) and the tools' collapse (D110) — both Docent's own
   // chrome, both keyed off the app root and nothing else.
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -1083,6 +1096,7 @@ export function App() {
       },
     },
     openScene: (project, scene) => openPortfolioScene(project, scene),
+    comparing: (name, counts) => setComparing(name ? { name, counts: counts ?? null } : null),
     isDirty: () => dirty,
     currentScene: () =>
       portfolioSourceRef.current
@@ -1139,6 +1153,7 @@ export function App() {
         trail: () => current().drill.trail(),
       },
       openScene: (project, scene) => current().openScene(project, scene),
+      comparing: (name, counts) => current().comparing?.(name, counts),
       isDirty: () => current().isDirty(),
       currentScene: () => current().currentScene(),
       authoring: {
@@ -1388,6 +1403,47 @@ export function App() {
   }, []);
 
   /**
+   * The person's side of the lens (D134): fetch the reference, hand it to
+   * the one compare the agent uses (B4), remember what the chip should say.
+   */
+  const runCompare = useCallback(
+    async (kind: "base" | "saved") => {
+      const source = portfolioSourceRef.current;
+      if (!commands) return;
+      if (!source) {
+        await alertDialog(
+          "Comparing needs a portfolio scene — save this one into a project first.",
+        );
+        return;
+      }
+      try {
+        const text =
+          kind === "base"
+            ? await loadBase(source.project, source.scene)
+            : await loadPortfolioScene(source.project, source.scene);
+        if (text === null) {
+          await alertDialog(
+            `"${source.project}/${source.scene}" has no synced base yet — pull or push first, or compare with the saved copy.`,
+          );
+          return;
+        }
+        const view = commands.compare(snapshotFromSceneJSON(text));
+        setComparing({
+          name: kind === "base" ? "the base copy" : "the saved copy",
+          counts: view.counts,
+        });
+      } catch (err) {
+        await alertDialog(`Could not compare: ${err instanceof Error ? err.message : err}`);
+      }
+    },
+    [commands],
+  );
+  const stopComparing = useCallback(() => {
+    commands?.compareOff();
+    setComparing(null);
+  }, [commands]);
+
+  /**
    * ── One command, one implementation (B4, D109) ──────────────────────────
    *
    * The in-canvas hamburger, the native menu bar and the palette are three
@@ -1561,6 +1617,24 @@ export function App() {
       title: "Settings…",
       shortcut: KEY.settings,
       run: () => setSettingsOpen(true),
+    },
+    // The compare lens (D134): the proposal seen against its truth.
+    "compare-base": {
+      title: "Compare with base",
+      hint: "ghosts and tints",
+      available: projectBound,
+      run: () => void runCompare("base"),
+    },
+    "compare-saved": {
+      title: "Compare with saved copy",
+      hint: "what you changed",
+      available: portfolioSourceRef.current !== null,
+      run: () => void runCompare("saved"),
+    },
+    "compare-off": {
+      title: "Stop comparing",
+      available: comparing !== null,
+      run: stopComparing,
     },
     plugins: {
       title: "Plugins…",
@@ -1938,6 +2012,20 @@ export function App() {
             aria-label="Show the tools"
             onClick={toggleTools}
           />
+        )}
+        {/* The lens's chip (D134): what the canvas is being held against,
+            and the way to put the lens down. */}
+        {comparing && (
+          <div className="docent-compare-chip">
+            <span>
+              Comparing with {comparing.name}
+              {comparing.counts &&
+                ` · +${comparing.counts.added} −${comparing.counts.removed} ~${comparing.counts.changed}`}
+            </span>
+            <button type="button" aria-label="Stop comparing" onClick={stopComparing}>
+              ✕
+            </button>
+          </div>
         )}
         {/* The tour's offer (D127): the trunk lock's grammar, on the welcome
             scene only, gone the moment the tour starts or another scene

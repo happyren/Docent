@@ -94,6 +94,12 @@ export function exportMermaid(graph: SceneGraph, context?: ExportContext): strin
     lines.push(`  %% scenario (declared): ${escapeLabel(scenario.name)}${description}`);
     for (const step of scenarioSteps(graph, scenario)) lines.push(`  %%   ${step}`);
   }
+  if (graph.proposal) {
+    const against = graph.proposal.against ? ` — against ${escapeLabel(graph.proposal.against)}` : "";
+    lines.push(`  %% proposal (declared): ${escapeLabel(graph.proposal.title)}${against}`);
+    for (const win of graph.proposal.wins) lines.push(`  %%   win: ${escapeLabel(win)}`);
+    for (const cost of graph.proposal.costs) lines.push(`  %%   cost: ${escapeLabel(cost)}`);
+  }
 
   const nodeLine = (nodeId: string): string => {
     const node = graph.nodes.find((n) => n.id === nodeId)!;

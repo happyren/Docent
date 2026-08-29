@@ -19,7 +19,7 @@ import type { TidyScope } from "../authoring/tidy";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar, type ExportContext } from "../export";
-import { listProjects, listScenes, loadScene } from "../portfolio/client";
+import { listProjects, listScenes, loadBase, loadScene } from "../portfolio/client";
 import catalogJson from "../../public/libraries/catalog.json";
 import {
   answerFindSymbol,
@@ -105,6 +105,16 @@ export function buildOutline(commands: CommandAPI, graph: SceneGraph) {
             const description = opener(s.description);
             return { name: s.name, steps: s.path.length, ...(description ? { description } : {}) };
           }),
+        }
+      : {}),
+    ...(graph.proposal
+      ? {
+          proposal: {
+            title: graph.proposal.title,
+            ...(graph.proposal.against ? { against: graph.proposal.against } : {}),
+            wins: graph.proposal.wins,
+            costs: graph.proposal.costs,
+          },
         }
       : {}),
     frames,
@@ -294,6 +304,11 @@ export interface AgentShellHooks {
   };
   /** Open a portfolio scene onto the canvas; rejects on failure. */
   openScene(project: string, scene: string): Promise<void>;
+  /** The chip's mirror (D134): what the lens compares with, or null when down. */
+  comparing?: (
+    name: string | null,
+    counts?: { added: number; removed: number; changed: number },
+  ) => void;
   isDirty(): boolean;
   currentScene(): { project: string; scene: string } | null;
   /** Authoring (S19, D65): the store's own routes, never Git beyond a branch. */
@@ -349,6 +364,7 @@ const WRITES = new Set([
   "edit",
   "use_genre",
   "define_scenario",
+  "define_proposal",
   "tidy",
 ]);
 
@@ -835,6 +851,79 @@ export async function execute(
         scenario: name,
         steps: path.length,
         next: `replay it: flow({scenario:'${name}'}) pulses the path with numbered steps, script_tour({scenario:'${name}'}) walks and speaks it`,
+      };
+    }
+    case "define_proposal": {
+      // The case is meaning (D135): recorded beside the legend, cleared the
+      // same way.
+      if (params.clear === true) {
+        const cleared = await commands.edit([{ op: "define_proposal", clear: true }]);
+        return { ...cleared, proposal: null };
+      }
+      const title = String(params.title ?? "");
+      const result = await commands.edit([
+        {
+          op: "define_proposal",
+          title,
+          ...(params.against !== undefined ? { against: String(params.against) } : {}),
+          ...(Array.isArray(params.wins) ? { wins: (params.wins as unknown[]).map(String) } : {}),
+          ...(Array.isArray(params.costs) ? { costs: (params.costs as unknown[]).map(String) } : {}),
+        },
+      ]);
+      return {
+        ...result,
+        proposal: title,
+        next: "compare({against:'base'}) shows the change on the canvas; present or script_tour speaks the case",
+      };
+    }
+    case "compare": {
+      // The compare lens (D134): overlay only (I2). `off` puts it down.
+      if (params.off === true) {
+        commands.compareOff();
+        shell.comparing?.(null);
+        return { comparing: null, next: "the lens is down" };
+      }
+      const against = params.against ?? "base";
+      const current = shell.currentScene();
+      let referenceJSON: string | null = null;
+      let name = "";
+      if (against === "saved" || against === "base") {
+        if (!current) {
+          throw new Error(
+            "this scene is a loose file — compare({against:{project, scene}}) still works, but 'base' and 'saved' need a portfolio scene",
+          );
+        }
+        if (against === "saved") {
+          referenceJSON = await loadScene(current.project, current.scene);
+          name = "the saved copy";
+        } else {
+          referenceJSON = await loadBase(current.project, current.scene);
+          if (referenceJSON === null) {
+            throw new Error(
+              `"${current.project}/${current.scene}" has no synced base yet — pull or push first, or compare({against:'saved'})`,
+            );
+          }
+          name = "the base copy";
+        }
+      } else if (typeof against === "object" && against !== null) {
+        const ref = against as { project?: unknown; scene?: unknown };
+        const project = String(ref.project ?? "");
+        const scene = String(ref.scene ?? "");
+        if (!project || !scene) {
+          throw new Error("compare needs against:'base', 'saved', or {project, scene}");
+        }
+        referenceJSON = await loadScene(project, scene);
+        name = `${project}/${scene}`;
+      } else {
+        throw new Error("compare needs against:'base', 'saved', or {project, scene}");
+      }
+      const reference = snapshotFromSceneJSON(referenceJSON);
+      const view = commands.compare(reference);
+      shell.comparing?.(name, view.counts);
+      return {
+        comparing: name,
+        ...view,
+        next: "ghosts are what the reference had; green is added, amber changed. compare({off:true}) or clear_effects ends it",
       };
     }
     // The formatter (D73): the same write path as edit, and a meaning
