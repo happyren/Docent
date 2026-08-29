@@ -995,18 +995,33 @@ export interface NudgeRoute {
   points: readonly Point[];
   /** What this edge must not cross — its own two ends already left out. */
   obstacles: readonly Box[];
+  /** Height of the label riding this line — the midpoint segment claims its air (D138). */
+  labelHeight?: number;
+  /** A standing line from outside the batch: joins corridors, never moves (D138). */
+  locked?: boolean;
 }
 
 /** Two segments count as sharing a line when their coordinates differ by less. */
 const SAME_LINE = 0.5;
 
+/** Breathing room between a label's edge and the next line (D138). */
+const LABEL_MARGIN = 4;
+/** How close two runs must sit before they count as one corridor (D138). */
+const CORRIDOR = 32;
+
 /**
- * Routed segments that would run along one line, pushed apart (D75). Two
- * lines on top of each other are one line to the eye, so segments sharing a
- * grid line with overlapping extents are spread by `gap`, centred on the
- * line they shared and ordered by edge id — deterministically, and never
- * into an obstacle: a nudge that would put the edge through a component is
- * given up and the original line kept. Returns each route's new polyline.
+ * Routed segments that would run along one corridor, pushed apart (D75,
+ * amended by D138). Two lines closer than the air their words need are one
+ * wire to the eye, so segments within the corridor tolerance with
+ * overlapping extents are spread until every adjacent pair keeps the sum of
+ * the two claims: half a gap for a bare line, half its label's height plus
+ * a margin for the segment the label rides (the path's midpoint). Movable
+ * pairs split the deficit; a LOCKED segment — a standing line from outside
+ * the batch — holds its ground and its neighbours give the whole way.
+ * Deterministic, and never into an obstacle: a shift that would put the
+ * edge through a component is given up and the original line kept. Returns
+ * each movable route's new polyline; locked routes are neighbours, not
+ * results.
  */
 export function nudgeRoutes(routes: readonly NudgeRoute[], gap = NUDGE): Map<string, Point[]> {
   const work = routes.map((r) => ({ route: r, pts: r.points.map((p): Point => [p[0], p[1]]) }));
@@ -1020,48 +1035,85 @@ export function nudgeRoutes(routes: readonly NudgeRoute[], gap = NUDGE): Map<str
     coord: number;
     lo: number;
     hi: number;
+    /** Half the separation this segment asks of each neighbour (D138). */
+    air: number;
+    locked: boolean;
+    /** Where the segment may stand: shifts must keep both legs a corner long. */
+    low: number;
+    high: number;
   }
+  // The segment the label rides: the one holding the path's length-midpoint.
+  const labelSegOf = (pts: readonly Point[]): number => {
+    let total = 0;
+    for (let i = 0; i + 1 < pts.length; i++) total += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+    let run = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      run += Math.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1]);
+      if (run >= total / 2) return i;
+    }
+    return Math.max(0, pts.length - 2);
+  };
   const segs: Seg[] = [];
   for (let r = 0; r < work.length; r++) {
     const pts = work[r].pts;
+    const locked = !!work[r].route.locked;
+    const labelH = work[r].route.labelHeight;
+    const labelSeg = labelH ? labelSegOf(pts) : -1;
     // Only the segments between turning points move: the legs that meet the
     // components stay on their ports, and a turning point moved sideways
-    // keeps its legs axis-aligned, because a turn is a right angle.
-    for (let i = 1; i + 2 < pts.length; i++) {
+    // keeps its legs axis-aligned, because a turn is a right angle. A locked
+    // line contributes every segment — it is a wall, not a traveller.
+    const first = locked ? 0 : 1;
+    const last = locked ? pts.length - 2 : pts.length - 3;
+    for (let i = first; i <= last; i++) {
       const p = pts[i];
       const q = pts[i + 1];
-      // A leg either side that could not absorb the shift would come out of
-      // the nudge shorter than a corner — a jog the simplification (D78)
-      // just took out. Only legs with room to give are nudged.
-      const room = Math.min(
-        Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]),
-        Math.hypot(pts[i + 2][0] - q[0], pts[i + 2][1] - q[1]),
-      );
-      if (room < CORNER_RADIUS + 2 * gap) continue;
-      if (Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) > 1e-6) {
-        segs.push({ r, i, axis: 1, coord: p[0], lo: Math.min(p[1], q[1]), hi: Math.max(p[1], q[1]) });
-      } else if (Math.abs(p[1] - q[1]) < 1e-6 && Math.abs(p[0] - q[0]) > 1e-6) {
-        segs.push({ r, i, axis: 0, coord: p[1], lo: Math.min(p[0], q[0]), hi: Math.max(p[0], q[0]) });
+      const air = labelH && i === labelSeg ? labelH / 2 + LABEL_MARGIN : gap / 2;
+      const vertical = Math.abs(p[0] - q[0]) < 1e-6 && Math.abs(p[1] - q[1]) > 1e-6;
+      const horizontal = Math.abs(p[1] - q[1]) < 1e-6 && Math.abs(p[0] - q[0]) > 1e-6;
+      if (!vertical && !horizontal) continue;
+      const shiftAxis = vertical ? 0 : 1;
+      const coord = vertical ? p[0] : p[1];
+      let low = locked ? coord : Number.NEGATIVE_INFINITY;
+      let high = locked ? coord : Number.POSITIVE_INFINITY;
+      if (!locked) {
+        // A shift toward a neighbour leg shortens it; a leg squeezed under a
+        // corner is the jog the simplification (D78) just took out. Room is
+        // a DIRECTION, not a gate: away from a short leg is always open.
+        for (const [legFrom, legTo] of [
+          [pts[i - 1], p],
+          [pts[i + 2], q],
+        ] as const) {
+          const extent = legTo[shiftAxis] - legFrom[shiftAxis];
+          const give = Math.max(0, Math.abs(extent) - CORNER_RADIUS);
+          if (extent > 0) low = Math.max(low, coord - give);
+          else high = Math.min(high, coord + give);
+        }
+      }
+      if (vertical) {
+        segs.push({ r, i, axis: 1, coord, lo: Math.min(p[1], q[1]), hi: Math.max(p[1], q[1]), air, locked, low, high });
+      } else {
+        segs.push({ r, i, axis: 0, coord, lo: Math.min(p[0], q[0]), hi: Math.max(p[0], q[0]), air, locked, low, high });
       }
     }
   }
-  // Clusters: same axis, coordinates within half a unit, extents overlapping.
+  // Corridors: same axis, coordinates within the tolerance, extents overlapping.
   const order = segs.map((_, k) => k).sort((k, l) => segs[k].axis - segs[l].axis || segs[k].coord - segs[l].coord || segs[k].lo - segs[l].lo);
   const clusters: number[][] = [];
   let band: number[] = [];
   for (const k of order) {
     const last = band.length ? segs[band[band.length - 1]] : null;
-    if (last && segs[k].axis === last.axis && Math.abs(segs[k].coord - last.coord) <= SAME_LINE) band.push(k);
+    if (last && segs[k].axis === last.axis && Math.abs(segs[k].coord - last.coord) <= CORRIDOR) band.push(k);
     else {
       if (band.length) clusters.push(band);
       band = [k];
     }
   }
   if (band.length) clusters.push(band);
-  const shifts = new Map<number, number>();
+  const shifts = new Map<number, { by: number; fellows: ReadonlySet<number>; twin?: number }>();
   for (const cluster of clusters) {
     if (cluster.length < 2) continue;
-    // Within a band, only the segments that actually overlap share a line.
+    // Within a corridor, only the segments that actually overlap share it.
     const groups: number[][] = [];
     for (const k of cluster) {
       const found = groups.find((g) => g.some((l) => segs[k].lo < segs[l].hi && segs[l].lo < segs[k].hi));
@@ -1070,25 +1122,140 @@ export function nudgeRoutes(routes: readonly NudgeRoute[], gap = NUDGE): Map<str
     }
     for (const group of groups) {
       if (group.length < 2) continue;
+      // Relax to rest: every adjacent pair at least the sum of its claims,
+      // locked segments pinned, movable ones splitting each deficit. The
+      // order is by position with ids breaking ties, so two runs of the
+      // same diagram give one picture (I3).
+      const pos = new Map<number, number>(group.map((k) => [k, segs[k].coord]));
+      // Coincident lines take the order their branches leave in — the
+      // shallower return nests inside the deeper one — so parting them
+      // cannot cross them; lines already apart keep their standing order.
+      const departure = (k: number): number => {
+        const s = segs[k];
+        const pts = work[s.r].pts;
+        const sa = s.axis === 1 ? 0 : 1;
+        const ends: number[] = [];
+        if (s.i - 1 >= 0) ends.push(pts[s.i - 1][sa]);
+        if (s.i + 2 < pts.length) ends.push(pts[s.i + 2][sa]);
+        return ends.length ? ends.reduce((u, v) => u + v, 0) / ends.length : s.coord;
+      };
       const sorted = [...group].sort((k, l) => {
+        const byCoord = segs[k].coord - segs[l].coord;
+        if (Math.abs(byCoord) > SAME_LINE) return byCoord;
+        const byLeave = departure(k) - departure(l);
+        if (Math.abs(byLeave) > 1e-9) return byLeave;
         const a = work[segs[k].r].route.id;
         const b = work[segs[l].r].route.id;
         return a < b ? -1 : a > b ? 1 : segs[k].i - segs[l].i;
       });
-      for (let n = 0; n < sorted.length; n++) shifts.set(sorted[n], (n - (sorted.length - 1) / 2) * gap);
+      const settle = (k: number, target: number) => {
+        const clamped = Math.min(segs[k].high, Math.max(segs[k].low, target));
+        if (Math.abs(clamped - pos.get(k)!) <= 0.01) return false;
+        pos.set(k, clamped);
+        return true;
+      };
+      for (let sweep = 0; sweep < 6 * group.length + 8; sweep++) {
+        let moved = false;
+        for (let n = 0; n + 1 < sorted.length; n++) {
+          const a = sorted[n];
+          const b = sorted[n + 1];
+          const need = segs[a].air + segs[b].air;
+          const deficit = need - (pos.get(b)! - pos.get(a)!);
+          if (deficit <= 0.01) continue;
+          // Each side gives what its legs allow, the other absorbs the rest
+          // across later sweeps; a pinned pair stays short, honestly.
+          if (settle(a, pos.get(a)! - deficit / 2)) moved = true;
+          const rest = need - (pos.get(b)! - pos.get(a)!);
+          if (rest > 0.01 && settle(b, pos.get(b)! + rest)) moved = true;
+          const still = need - (pos.get(b)! - pos.get(a)!);
+          if (still > 0.01 && settle(a, pos.get(a)! - still)) moved = true;
+        }
+        if (!moved) break;
+      }
+      const fellows = new Set(group.map((k) => segs[k].r));
+      // A coincident pair could nest either way, and the relax cannot see
+      // which; both orders are kept and the application tries the second
+      // when the first crosses the pair (D138) — parting twins must never
+      // knot them.
+      const movable = group.filter((k) => !segs[k].locked);
+      const coincidentPair =
+        movable.length === 2 &&
+        group.length === 2 &&
+        Math.abs(segs[movable[0]].coord - segs[movable[1]].coord) <= SAME_LINE;
+      for (const k of group) {
+        if (segs[k].locked) continue;
+        const by = pos.get(k)! - segs[k].coord;
+        if (Math.abs(by) > 0.01) shifts.set(k, { by, fellows, ...(coincidentPair ? { twin: movable.find((l) => l !== k)! } : {}) });
+      }
     }
   }
-  for (const [k, by] of [...shifts.entries()].sort((p, q) => p[0] - q[0])) {
+  const properBetween = (a: readonly Point[], b: readonly Point[]): number => {
+    let n = 0;
+    for (let i = 0; i + 1 < a.length; i++)
+      for (let j = 0; j + 1 < b.length; j++)
+        if (segmentsCrossProperly(a[i], a[i + 1], b[j], b[j + 1])) n += 1;
+    return n;
+  };
+  // A shift must not put the line through a component — nor tangle what was
+  // untangled: air is not worth a knot (D137's lesson, held here too). Only
+  // STRANGERS count: crossings with the corridor's own fellows are the
+  // overlap being spread, not a knot — two lines that shared a stretch must
+  // touch or cross once they part, and always could.
+  const applySeg = (k: number, by: number, fellows: ReadonlySet<number>): (() => void) | null => {
     const seg = segs[k];
     const pts = work[seg.r].pts;
     const before: Point[] = [pts[seg.i], pts[seg.i + 1]].map((p): Point => [p[0], p[1]]);
-    for (const p of [pts[seg.i], pts[seg.i + 1]]) p[seg.axis === 1 ? 0 : 1] = seg.coord + by;
-    if (work[seg.r].route.obstacles.some((o) => polylineThroughBox(pts, o, 2))) {
+    const undo = () => {
       pts[seg.i] = before[0];
       pts[seg.i + 1] = before[1];
+    };
+    const others = work.filter((_, idx) => idx !== seg.r && !fellows.has(idx)).map((w) => w.pts);
+    const crossed = others.reduce((n, other) => n + properBetween(pts, other), 0);
+    for (const p of [pts[seg.i], pts[seg.i + 1]]) p[seg.axis === 1 ? 0 : 1] = seg.coord + by;
+    if (
+      work[seg.r].route.obstacles.some((o) => polylineThroughBox(pts, o, 2)) ||
+      others.reduce((n, other) => n + properBetween(pts, other), 0) > crossed
+    ) {
+      undo();
+      return null;
     }
+    return undo;
+  };
+  const done = new Set<number>();
+  for (const [k, { by, fellows, twin }] of [...shifts.entries()].sort((p, q) => p[0] - q[0])) {
+    if (done.has(k)) continue;
+    done.add(k);
+    // A parted coincident pair could nest either way (D138): the chosen
+    // order is kept only while it does not cross the pair itself; crossed,
+    // the two swap targets — each clamped to its own legs' room — and the
+    // order with fewer crossings between the twins stands.
+    // The relax may have left one twin standing (clamped where it was); the
+    // pair check still runs, with the standing twin's shift read as zero.
+    const partner = twin !== undefined && !done.has(twin) ? (shifts.get(twin) ?? { by: 0, fellows }) : undefined;
+    if (twin !== undefined && partner) {
+      done.add(twin);
+      const undoK = applySeg(k, by, fellows);
+      const undoT = applySeg(twin, partner.by, partner.fellows);
+      const crossPair = properBetween(work[segs[k].r].pts, work[segs[twin].r].pts);
+      if (crossPair > 0) {
+        undoT?.();
+        undoK?.();
+        const swapK = Math.min(segs[k].high, Math.max(segs[k].low, segs[twin].coord + partner.by)) - segs[k].coord;
+        const swapT = Math.min(segs[twin].high, Math.max(segs[twin].low, segs[k].coord + by)) - segs[twin].coord;
+        const redoK = applySeg(k, swapK, fellows);
+        const redoT = applySeg(twin, swapT, partner.fellows);
+        if (properBetween(work[segs[k].r].pts, work[segs[twin].r].pts) >= crossPair) {
+          redoT?.();
+          redoK?.();
+          applySeg(k, by, fellows);
+          applySeg(twin, partner.by, partner.fellows);
+        }
+      }
+      continue;
+    }
+    applySeg(k, by, fellows);
   }
-  return new Map(work.map((w) => [w.route.id, w.pts]));
+  return new Map(work.filter((w) => !w.route.locked).map((w) => [w.route.id, w.pts]));
 }
 
 /** A turn shallower than this is not a corner; it gets no arc (D78). */

@@ -24,6 +24,7 @@ import {
   edgeWiggles,
   NUDGE,
   nudgeRoutes,
+  type NudgeRoute,
   passesThrough,
   polylineThroughBox,
   ROUTE_PAD,
@@ -1921,8 +1922,39 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       }
     }
   }
-  for (const [id, points] of nudgeRoutes([...lines].map(([id, points]) => ({ id, points, obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to) })))) {
-    lines.set(id, points);
+  // The words own their air (D138): each route carries the height of the
+  // label riding it, and the drawn lines of edges OUTSIDE this batch join
+  // the nudge as fixed neighbours — a scope's tidy must not lay its lines
+  // onto a stranger's at a stroke's width.
+  {
+    const labelOf = (id: string): string | null =>
+      jobOf.get(id)?.arrow?.label ?? graph.edges.find((e) => e.sourceId === id)?.label ?? null;
+    const airOf = (label: string | null) =>
+      label ? { labelHeight: edgeLabelSize(label, house.arrow.style.fontSize).height } : {};
+    const batch = [...lines].map(([id, points]) => ({
+      id,
+      points,
+      obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to),
+      ...airOf(labelOf(id)),
+    }));
+    const standing: NudgeRoute[] = [];
+    for (const e of graph.edges) {
+      // A batch edge is a traveller even when it routed straight — only the
+      // lines this write does not touch stand as walls.
+      if (removed.has(e.sourceId) || jobOf.has(e.sourceId)) continue;
+      const el = elements.get(e.sourceId);
+      if (!el || el.type !== "arrow" || !el.points || el.points.length < 2) continue;
+      standing.push({
+        id: e.sourceId,
+        points: absolutePoints(el.x, el.y, el.points),
+        obstacles: [],
+        locked: true,
+        ...airOf(e.label),
+      });
+    }
+    for (const [id, points] of nudgeRoutes([...batch, ...standing])) {
+      lines.set(id, points);
+    }
   }
   for (const [id, points] of lines) {
     const drawn = dropCollinear(arcCorners(points));

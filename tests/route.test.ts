@@ -148,12 +148,14 @@ describe("segments that would share a line are nudged apart (D75)", () => {
       { id: "b_edge", points: c, obstacles: [] },
       { id: "a_edge", points: a, obstacles: [] },
     ]);
-    // Ordered by edge id, not by the order they came in.
-    expect(out.get("a_edge")![1][0]).toBe(100 - NUDGE / 2);
-    expect(out.get("a_edge")![2][0]).toBe(100 - NUDGE / 2);
-    expect(out.get("b_edge")![1][0]).toBe(100 + NUDGE / 2);
-    expect(out.get("b_edge")![2][0]).toBe(100 + NUDGE / 2);
-    expect(out.get("b_edge")![1][0] - out.get("a_edge")![1][0]).toBe(NUDGE);
+    // Parted by the gap — and in the order that does NOT cross the pair
+    // (D138): id order put a_edge's lower horizontal through b_edge's line,
+    // so the twins swapped sides and the drawing lost a crossing.
+    expect(out.get("a_edge")![1][0]).toBe(100 + NUDGE / 2);
+    expect(out.get("a_edge")![2][0]).toBe(100 + NUDGE / 2);
+    expect(out.get("b_edge")![1][0]).toBe(100 - NUDGE / 2);
+    expect(out.get("b_edge")![2][0]).toBe(100 - NUDGE / 2);
+    expect(out.get("a_edge")![1][0] - out.get("b_edge")![1][0]).toBe(NUDGE);
     // The legs that meet the components keep their ports, and stay orthogonal.
     expect(out.get("a_edge")![0]).toEqual([0, 0]);
     expect(out.get("a_edge")![3]).toEqual([200, 200]);
@@ -178,8 +180,10 @@ describe("segments that would share a line are nudged apart (D75)", () => {
       { id: "a_edge", points: a, obstacles: [blocker] },
       { id: "b_edge", points: c, obstacles: [] },
     ]);
-    expect(out.get("a_edge")![1][0]).toBe(100);
-    expect(out.get("b_edge")![1][0]).toBe(100 + NUDGE / 2);
+    // a_edge cannot go left, so the pair settles with a_edge on the right —
+    // clear of the blocker, parted, and uncrossed (D138).
+    expect(out.get("a_edge")![1][0]).toBe(100 + NUDGE / 2);
+    expect(out.get("b_edge")![1][0]).toBe(100 - NUDGE / 2);
     expect(polylineThroughBox(out.get("a_edge")!, blocker)).toBe(false);
   });
 
@@ -720,12 +724,23 @@ it("a hub's fan never crosses itself (D75)", () => {
     const el = els.get(e.sourceId)!;
     if (el.points) lines.push({ id: e.id, pts: absolutePoints(el.x, el.y, el.points), from: e.from, to: e.to });
   }
+  // The two-way pair (hub↔t5) has interleaved ports at both ends, so once
+  // D138 honestly parts their coincident stretch — two wires on one line
+  // were the hidden version of the same defect — planarity forces exactly
+  // one crossing between THEM. Every other pair stays untangled.
+  const twins = (u: { from: string; to: string }, v: { from: string; to: string }) =>
+    u.from === v.to && u.to === v.from;
   let total = 0;
+  let twinTotal = 0;
   for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) {
     for (let s = 0; s + 1 < lines[i].pts.length; s++) for (let t = 0; t + 1 < lines[j].pts.length; t++)
-      if (segmentsCrossProperly(lines[i].pts[s], lines[i].pts[s+1], lines[j].pts[t], lines[j].pts[t+1])) total++;
+      if (segmentsCrossProperly(lines[i].pts[s], lines[i].pts[s+1], lines[j].pts[t], lines[j].pts[t+1])) {
+        if (twins(lines[i], lines[j])) twinTotal++;
+        else total++;
+      }
   }
   expect(total).toBe(0);
+  expect(twinTotal).toBeLessThanOrEqual(1);
   // And every leg of every one of them runs along an axis (D98): the fan is
   // orthogonal and untangled at once, which is the whole of the claim.
   expect(lines).toHaveLength(9);
@@ -863,5 +878,55 @@ describe("the pure L walks the other port (D137)", () => {
     ]);
     expect(ports.start.at).toEqual([38, 100]);
     expect(ports.end.at).toEqual([62, 340]);
+  });
+});
+
+describe("the words own their air (D138)", () => {
+  // Long parallel runs with room to give on every leg.
+  const line = (y: number): Point[] => [
+    [0, y - 100],
+    [80, y - 100],
+    [80, y],
+    [1000, y],
+    [1000, y - 100],
+    [1080, y - 100],
+  ];
+
+  it("spreads a labelled pair to the label's height, not the wire gap", () => {
+    const out = nudgeRoutes([
+      { id: "a", points: line(500), obstacles: [], labelHeight: 20 },
+      { id: "b", points: line(500), obstacles: [] },
+    ]);
+    const ya = out.get("a")![2][1];
+    const yb = out.get("b")![2][1];
+    // The label segment claims 10 + 4 of air; the bare line claims 6.
+    expect(Math.abs(ya - yb)).toBeCloseTo(20, 5);
+    expect((ya + yb) / 2).toBeCloseTo(500, 5);
+  });
+
+  it("counts near-coincident strangers as one corridor and stands off locked lines", () => {
+    // Three runs three units apart — the maintainer's screenshot — with the
+    // middle one a standing line from outside the batch.
+    const out = nudgeRoutes([
+      { id: "a", points: line(497), obstacles: [], labelHeight: 20 },
+      { id: "wall", points: line(500), obstacles: [], locked: true, labelHeight: 20 },
+      { id: "b", points: line(503), obstacles: [], labelHeight: 20 },
+    ]);
+    // The wall never moves and never comes back as a result.
+    expect(out.has("wall")).toBe(false);
+    const ya = out.get("a")![2][1];
+    const yb = out.get("b")![2][1];
+    // Both movable lines give the whole way: 14 + 14 of air each side.
+    expect(500 - ya).toBeGreaterThanOrEqual(27.5);
+    expect(yb - 500).toBeGreaterThanOrEqual(27.5);
+  });
+
+  it("leaves distinct corridors alone", () => {
+    const out = nudgeRoutes([
+      { id: "a", points: line(500), obstacles: [], labelHeight: 20 },
+      { id: "b", points: line(560), obstacles: [], labelHeight: 20 },
+    ]);
+    expect(out.get("a")![2][1]).toBe(500);
+    expect(out.get("b")![2][1]).toBe(560);
   });
 });
