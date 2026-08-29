@@ -23,6 +23,8 @@ export type Point = [number, number];
 
 /** Clearance kept between a routed edge and what it goes around. */
 export const ROUTE_PAD = 24;
+/** The buffer a passing line keeps from what it is not attached to (D139). */
+export const STANDOFF = 12;
 /** How far apart two routed segments that would share a line are pushed (D75). */
 export const NUDGE = 12;
 /** The radius a right-angle turn is rounded to (D75); less on a short leg. */
@@ -394,9 +396,8 @@ export function routeEdge(
   const near = obstaclesNear(from, to, obstacles).filter((o) => o !== from && o !== to);
   const a = centre(from);
   const b = centre(to);
-  // Clear straight line: nothing to do. A near miss (inside the clearance)
-  // is let through — it is what hand drawing does. The line tested is the
-  // one that will be drawn: between the ports when there are ports.
+  // Clear straight line: nothing to do. The line tested is the one that
+  // will be drawn: between the ports when there are ports.
   const lineA = ports ? ports.start.at : a;
   const lineB = ports ? ports.end.at : b;
   // Sides chosen by route cost (D78) must actually be left through: a line
@@ -408,7 +409,12 @@ export function routeEdge(
       ? true
       : (q[0] - p[0]) * NORMAL[ports.start.side][0] + (q[1] - p[1]) * NORMAL[ports.start.side][1] > 1e-6 &&
         (p[0] - q[0]) * NORMAL[ports.end.side][0] + (p[1] - q[1]) * NORMAL[ports.end.side][1] > 1e-6;
-  const clear = (p: Point, q: Point) => !near.some((o) => segmentThroughBox(p, q, o, 4));
+  // A passing line keeps its distance (D139): a straight stands only when
+  // it misses everything in reach by the standoff — a graze reads as a
+  // connection that is not there, and the grid's corridors already run at
+  // the full clearance. (The old posture let a near miss through as "what
+  // hand drawing does"; the reader disagreed.)
+  const clear = (p: Point, q: Point) => !near.some((o) => segmentThroughBox(p, q, pad(o, STANDOFF), 0));
   if (outward(lineA, lineB) && clear(lineA, lineB)) {
     // An edge is axis-aligned or it turns (D98). A clear line is kept only
     // when what would be drawn is square within the snap; everything oblique
@@ -982,6 +988,106 @@ export function settleApproaches(
   const reversed = [...pts].reverse();
   const head = settleTail(reversed, ports.start, from, "start", { port: ports.end, node: to, which: "end" }, obstacles, seatTaken, lines, clearance);
   if (head) pts = head.reverse();
+  return pts === points ? [...points] : (pts as Point[]);
+}
+
+/**
+ * A port leg that grazes a bystander walks its port (D139). The first and
+ * last legs never nudge — they stand on their ports — so a long run out of
+ * a port can lie on a neighbour's shoulder where nothing else may. The
+ * port slides along its own side to the nearest position that clears every
+ * bystander by the standoff: inside D75's span, outline-true through D98's
+ * arithmetic, never onto a seat another edge holds, never through anything
+ * (D72), and never minting a crossing (D137's lesson). Refused, the leg
+ * stands as it was. Mutates `ports` on a walk, like the passes before it.
+ */
+export function settleGrazes(
+  points: readonly Point[],
+  ports: PortEnds,
+  from: PortNode,
+  to: PortNode,
+  obstacles: readonly Box[],
+  seatTaken: SeatTaken,
+  lines: readonly (readonly Point[])[] = [],
+  clearance = ROUTE_PAD,
+): Point[] {
+  const properAgainst = (line: readonly Point[]): number => {
+    let n = 0;
+    for (const other of lines)
+      for (let i = 0; i + 1 < line.length; i++)
+        for (let j = 0; j + 1 < other.length; j++)
+          if (segmentsCrossProperly(line[i], line[i + 1], other[j], other[j + 1])) n += 1;
+    return n;
+  };
+  const one = (pts: readonly Point[], port: Port, node: PortNode, which: "start" | "end"): Point[] | null => {
+    const n = pts.length;
+    if (n < 3) return null;
+    const axis = port.dir;
+    const cross = axis === 0 ? 1 : 0;
+    // The port leg: everything on the port's own line, up to the first turn.
+    let k = 1;
+    while (k + 1 < n && Math.abs(pts[k][cross] - pts[0][cross]) < SAME_LINE) k++;
+    const legFrom = pts[0];
+    const legTo = pts[k - 1 >= 1 ? k - 1 : 1];
+    const lo = Math.min(legFrom[axis], legTo[axis]);
+    const hi = Math.max(legFrom[axis], legTo[axis]);
+    const c = pts[0][cross];
+    // Bystanders whose along-span meets the leg's; the leg's own ends are
+    // attached, not passing.
+    let bad = false;
+    const spans: [number, number][] = [];
+    for (const o of obstacles) {
+      const oLo = axis === 0 ? o.x : o.y;
+      const oHi = oLo + (axis === 0 ? o.width : o.height);
+      if (oHi < lo || oLo > hi) continue;
+      const cLo = (axis === 0 ? o.y : o.x) - STANDOFF;
+      const cHi = (axis === 0 ? o.y + o.height : o.x + o.width) + STANDOFF;
+      spans.push([cLo, cHi]);
+      if (c > cLo && c < cHi) bad = true;
+    }
+    if (!bad) return null;
+    // The nearest clear heights, walking outward from the current line.
+    const clearAt = (v: number) => spans.every(([a, b]) => v <= a + SAME_LINE || v >= b - SAME_LINE);
+    const candidates: number[] = [];
+    for (const [a, b] of spans) {
+      if (clearAt(a)) candidates.push(a);
+      if (clearAt(b)) candidates.push(b);
+    }
+    candidates.sort((u, v) => Math.abs(u - c) - Math.abs(v - c) || u - v);
+    const [sLo, sHi] = sideSpan(node, port.side);
+    const before = properAgainst(pts);
+    for (const v of candidates) {
+      const pos = posForOutline(node, node.shape, port.side, v);
+      if (pos < sLo || pos > sHi) continue;
+      if (seatTaken(which, port.side, pos)) continue;
+      const walked = portAt(node, node.shape, port.side, pos, clearance);
+      const cand = pts.map((p): Point => [p[0], p[1]]);
+      cand[0] = walked.at;
+      for (let i = 1; i < k; i++) cand[i][cross] = v;
+      // The turn's perpendicular leg absorbs the slide; a leg that would
+      // reverse or vanish under a corner refuses the walk.
+      if (k < n) {
+        const nextLen = Math.abs(cand[k][cross] - v);
+        const oldLen = Math.abs(pts[k][cross] - c);
+        const oldSign = Math.sign(pts[k][cross] - c);
+        if (Math.sign(cand[k][cross] - v) !== oldSign && oldLen > SAME_LINE) continue;
+        if (nextLen < CORNER_RADIUS && nextLen < oldLen) continue;
+      }
+      const trimmed = dropCollinear(cand);
+      if (obstacles.some((o) => polylineThroughBox(trimmed, o, 2))) continue;
+      if (properAgainst(trimmed) > before) continue;
+      port.at = walked.at;
+      port.outside = walked.outside;
+      return trimmed;
+    }
+    return null;
+  };
+  let pts: readonly Point[] = points;
+  const head = one(pts, ports.start, from, "start");
+  if (head) pts = head;
+  const reversed = [...pts].reverse();
+  const tail = one(reversed, ports.end, to, "end");
+  pts = tail ? tail.reverse() : pts;
   return pts === points ? [...points] : (pts as Point[]);
 }
 

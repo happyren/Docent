@@ -31,6 +31,7 @@ import {
   routeEdge,
   segmentsCrossProperly,
   settleApproaches,
+  settleGrazes,
   simplifyRoute,
   type Point,
   type SidePair,
@@ -1893,25 +1894,38 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       if (!endsOf.has(id)) continue;
       const job = jobOf.get(id)!;
       const port = ports.get(id)!;
+      const seatFree = (which: "start" | "end", side: string, pos: number) => {
+        const node = which === "start" ? job.from : job.to;
+        const held = seats.get(`${node}|${side}`) ?? [];
+        // Half the nudge gap: two settled runs this close diverge at once,
+        // and the side's own spread (D75) already sits tighter than a nudge.
+        return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < NUDGE / 2);
+      };
+      // The other lines as they stand — a settled line must not tangle
+      // them, and edges settled earlier are seen settled.
+      const otherLines = [...lines].filter(([otherId]) => otherId !== id).map(([, otherPts]) => otherPts);
       const settled = settleApproaches(
         points,
         port,
         endBoxes.get(job.from)!,
         endBoxes.get(job.to)!,
         around(job.from, job.to),
-        (which, side, pos) => {
-          const node = which === "start" ? job.from : job.to;
-          const held = seats.get(`${node}|${side}`) ?? [];
-          // Half the nudge gap: two settled runs this close diverge at once,
-          // and the side's own spread (D75) already sits tighter than a nudge.
-          return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < NUDGE / 2);
-        },
-        // The other lines as they stand — a settled line must not tangle
-        // them, and edges settled earlier are seen settled.
-        [...lines].filter(([otherId]) => otherId !== id).map(([, otherPts]) => otherPts),
+        seatFree,
+        otherLines,
         ROUTE_PAD,
       );
-      lines.set(id, settled);
+      // A port leg lying on a bystander's shoulder walks its port (D139).
+      const grazed = settleGrazes(
+        settled,
+        port,
+        endBoxes.get(job.from)!,
+        endBoxes.get(job.to)!,
+        around(job.from, job.to),
+        seatFree,
+        otherLines,
+        ROUTE_PAD,
+      );
+      lines.set(id, grazed);
       endsOf.set(id, { start: port.start.at, end: port.end.at });
       // A walked port sits in a new seat; later edges must respect it.
       for (const which of ["start", "end"] as const) {
@@ -1952,7 +1966,22 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         ...airOf(e.label),
       });
     }
-    for (const [id, points] of nudgeRoutes([...batch, ...standing])) {
+    // Every component's outline joins the corridors as a wall (D139): a
+    // routed run that hugs a box drifts off it whenever its legs allow —
+    // the stubs that ATTACH to a box are port legs, which never nudge.
+    const walls: NudgeRoute[] = obstacles.map((box) => ({
+      id: `__wall:${box.id}`,
+      points: [
+        [box.x, box.y],
+        [box.x + box.width, box.y],
+        [box.x + box.width, box.y + box.height],
+        [box.x, box.y + box.height],
+        [box.x, box.y],
+      ],
+      obstacles: [],
+      locked: true,
+    }));
+    for (const [id, points] of nudgeRoutes([...batch, ...standing, ...walls])) {
       lines.set(id, points);
     }
   }

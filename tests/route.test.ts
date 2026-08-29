@@ -930,3 +930,48 @@ describe("the words own their air (D138)", () => {
     expect(out.get("b")![2][1]).toBe(560);
   });
 });
+
+describe("a passing line keeps its distance (D139)", () => {
+  it("routes around what it would graze instead of standing straight", () => {
+    const from = { id: "a", x: 0, y: 0, width: 100, height: 100 };
+    const to = { id: "b", x: 400, y: 0, width: 100, height: 100 };
+    // The centre line runs at y=50; the bystander's shoulder sits 6 below.
+    const bystander = { id: "c", x: 200, y: 56, width: 60, height: 60 };
+    const route = routeEdge(from, to, [from, to, bystander]);
+    expect(route).not.toBeNull();
+    // The drawn line stays a standoff clear of the bystander.
+    expect(polylineThroughBox(route!, { x: bystander.x - 11, y: bystander.y - 11, width: 82, height: 82 })).toBe(false);
+    // With the bystander out of reach, the straight line stands as ever.
+    expect(routeEdge(from, to, [from, to])).toBeNull();
+  });
+
+  it("drifts a run off the box it hugs through the corridor walls", () => {
+    const run: Point[] = [
+      [0, 400],
+      [80, 400],
+      [80, 496],
+      [1000, 496],
+      [1000, 400],
+      [1080, 400],
+    ];
+    const wall = { x: 200, y: 500, width: 600, height: 200 };
+    const out = nudgeRoutes([
+      { id: "edge", points: run, obstacles: [] },
+      {
+        id: "__wall:w",
+        points: [
+          [wall.x, wall.y],
+          [wall.x + wall.width, wall.y],
+          [wall.x + wall.width, wall.y + wall.height],
+          [wall.x, wall.y + wall.height],
+          [wall.x, wall.y],
+        ],
+        obstacles: [],
+        locked: true,
+      },
+    ]);
+    // 4 units from the shoulder becomes a full wire gap.
+    expect(out.get("edge")![3][1]).toBeLessThanOrEqual(500 - NUDGE);
+    expect(out.has("__wall:w")).toBe(false);
+  });
+});
