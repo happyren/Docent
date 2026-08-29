@@ -22,12 +22,14 @@ import {
   chooseSidesWithLine,
   dropCollinear,
   edgeWiggles,
+  NUDGE,
   nudgeRoutes,
   passesThrough,
   polylineThroughBox,
   ROUTE_PAD,
   routeEdge,
   segmentsCrossProperly,
+  settleApproaches,
   simplifyRoute,
   type Point,
   type SidePair,
@@ -1866,6 +1868,55 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // put the edge through a component.
   for (const [id, points] of lines) {
     lines.set(id, simplifyRoute(points, around(jobOf.get(id)!.from, jobOf.get(id)!.to)));
+  }
+  // The arrowhead earns a runway (D137): no turn within a corner of either
+  // port. A port may walk along its side onto the run's line — but never
+  // onto a seat another edge holds, so the fans D75 spread stay spread.
+  {
+    const seatCoord = (side: string, at: Point) => (side === "left" || side === "right" ? at[1] : at[0]);
+    const seats = new Map<string, { id: string; which: "start" | "end"; c: number }[]>();
+    for (const j of jobs) {
+      const p = ports.get(j.id);
+      if (!p) continue;
+      for (const [node, which, port] of [
+        [j.from, "start", p.start],
+        [j.to, "end", p.end],
+      ] as const) {
+        const key = `${node}|${port.side}`;
+        const list = seats.get(key) ?? [];
+        list.push({ id: j.id, which, c: seatCoord(port.side, port.at) });
+        seats.set(key, list);
+      }
+    }
+    for (const [id, points] of lines) {
+      if (!endsOf.has(id)) continue;
+      const job = jobOf.get(id)!;
+      const port = ports.get(id)!;
+      const settled = settleApproaches(
+        points,
+        port,
+        endBoxes.get(job.from)!,
+        endBoxes.get(job.to)!,
+        around(job.from, job.to),
+        (which, side, pos) => {
+          const node = which === "start" ? job.from : job.to;
+          const held = seats.get(`${node}|${side}`) ?? [];
+          // Half the nudge gap: two settled runs this close diverge at once,
+          // and the side's own spread (D75) already sits tighter than a nudge.
+          return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < NUDGE / 2);
+        },
+        ROUTE_PAD,
+      );
+      lines.set(id, settled);
+      endsOf.set(id, { start: port.start.at, end: port.end.at });
+      // A walked port sits in a new seat; later edges must respect it.
+      for (const which of ["start", "end"] as const) {
+        const node = which === "start" ? job.from : job.to;
+        const p = which === "start" ? port.start : port.end;
+        const mine = (seats.get(`${node}|${p.side}`) ?? []).find((s) => s.id === id && s.which === which);
+        if (mine) mine.c = seatCoord(p.side, p.at);
+      }
+    }
   }
   for (const [id, points] of nudgeRoutes([...lines].map(([id, points]) => ({ id, points, obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to) })))) {
     lines.set(id, points);

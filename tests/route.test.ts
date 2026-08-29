@@ -27,6 +27,7 @@ import { absolutePoints, segmentsCrossProperly,
   ROUTE_PAD,
   routeEdge,
   routeCorners,
+  settleApproaches,
   sideTowards,
   simplifyRoute,
   type Point,
@@ -748,5 +749,119 @@ describe("a bottom port stands past the caption (D83)", () => {
     const route = routeEdge(upper, lower, [], ROUTE_PAD, pe);
     // Axis-aligned clear pair: the fast path stands (D98) — from the foot.
     expect(route).toBeNull();
+  });
+});
+
+describe("the arrowhead earns a runway (D137)", () => {
+  // A cramped tail: the run rides y=140, the port sits at y=128, and the
+  // drop onto the port column happens inside the last stub — the maintainer's
+  // "you cannot see the arrow" report, in four points.
+  const to = { id: "b", x: 400, y: 100, width: 120, height: 80 };
+  const from = { id: "a", x: 0, y: 100, width: 100, height: 80 };
+  const port = () => ({
+    start: { side: "right" as const, at: [100, 140] as Point, outside: [124, 140] as Point, dir: 0 as const },
+    end: { side: "left" as const, at: [400, 128] as Point, outside: [376, 128] as Point, dir: 0 as const },
+  });
+  const cramped = (): Point[] => [
+    [100, 140],
+    [376, 140],
+    [376, 128],
+    [400, 128],
+  ];
+
+  it("walks the port onto the run's line when the seat is free", () => {
+    const ports = port();
+    const settled = settleApproaches(cramped(), ports, from, to, [], () => false);
+    expect(settled).toEqual([
+      [100, 140],
+      [400, 140],
+    ]);
+    // The walked port is handed back — the caller draws what was settled.
+    expect(ports.end.at).toEqual([400, 140]);
+    expect(ports.end.outside).toEqual([376, 140]);
+  });
+
+  it("steps the turn back a full corner when a sibling holds the seat", () => {
+    const ports = port();
+    const settled = settleApproaches(cramped(), ports, from, to, [], (which) => which === "end");
+    expect(settled).toEqual([
+      [100, 140],
+      [352, 140],
+      [352, 128],
+      [400, 128],
+    ]);
+    // The final straight into the arrowhead is stub plus corner.
+    expect(400 - 352).toBe(ROUTE_PAD + CORNER_RADIUS);
+    expect(ports.end.at).toEqual([400, 128]);
+  });
+
+  it("stands honestly when geometry allows neither", () => {
+    const ports = port();
+    // A block square across both the walked line and the stepped-back drop.
+    const wall = { x: 340, y: 125, width: 24, height: 40 };
+    const settled = settleApproaches(cramped(), ports, from, to, [wall], () => false);
+    expect(settled).toEqual(cramped());
+    expect(ports.end.at).toEqual([400, 128]);
+  });
+
+  it("leaves a clean approach alone", () => {
+    const ports = port();
+    const clean: Point[] = [
+      [100, 140],
+      [300, 140],
+      [300, 128],
+      [400, 128],
+    ];
+    const settled = settleApproaches(clean, ports, from, to, [], () => false);
+    expect(settled).toEqual(clean);
+  });
+
+  it("settles the head the same way", () => {
+    const ports = port();
+    // The cramped end is the SOURCE: a drop inside the first stub.
+    const pts: Point[] = [
+      [100, 140],
+      [124, 140],
+      [124, 152],
+      [380, 152],
+      [380, 128],
+      [400, 128],
+    ];
+    const settled = settleApproaches(pts, ports, from, to, [], () => false);
+    // Both ends were cramped; both ports walk onto the run's line and the
+    // whole edge becomes the one straight stroke it always wanted to be.
+    expect(settled).toEqual([
+      [100, 152],
+      [400, 152],
+    ]);
+    expect(ports.start.at).toEqual([100, 152]);
+    expect(ports.end.at).toEqual([400, 152]);
+  });
+});
+
+describe("the pure L walks the other port (D137)", () => {
+  it("moves the source port so the drop column steps back, taking what the span affords", () => {
+    // The run rides the source port's own column: an L whose approach into
+    // the target is 12px — the other port must walk, and the full runway
+    // would walk it out of its span, so the graceful rung takes 24.
+    const from = { id: "a", x: 0, y: 0, width: 100, height: 100 };
+    const to = { id: "b", x: 62, y: 300, width: 200, height: 80 };
+    const ports = {
+      start: { side: "bottom" as const, at: [50, 100] as Point, outside: [50, 124] as Point, dir: 1 as const },
+      end: { side: "left" as const, at: [62, 340] as Point, outside: [38, 340] as Point, dir: 0 as const },
+    };
+    const pts: Point[] = [
+      [50, 100],
+      [50, 340],
+      [62, 340],
+    ];
+    const settled = settleApproaches(pts, ports, from, to, [], () => false);
+    expect(settled).toEqual([
+      [38, 100],
+      [38, 340],
+      [62, 340],
+    ]);
+    expect(ports.start.at).toEqual([38, 100]);
+    expect(ports.end.at).toEqual([62, 340]);
   });
 });

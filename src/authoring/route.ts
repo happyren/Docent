@@ -852,6 +852,133 @@ export function simplifyRoute(points: readonly Point[], obstacles: readonly Box[
 }
 
 // ---------------------------------------------------------------------------
+// the arrowhead's runway (D137)
+// ---------------------------------------------------------------------------
+
+/**
+ * True when another edge already holds a seat within a nudge of `pos` on
+ * this end's node and side — a walked port must not sit on it (D75).
+ */
+export type SeatTaken = (which: "start" | "end", side: Side, pos: number) => boolean;
+
+/**
+ * One end settled (D137): when the last turn stands closer to the port than
+ * the stub plus a corner, the approach is mush — the head is drawn over its
+ * own arcs. The port walks along its side onto the run's line when the span
+ * allows and no sibling holds the seat; refused that, the turn steps back a
+ * full corner from the stub; refused that too, the route stands as it was.
+ * `pts` arrives tail-last: index n-1 is this end's port. Mutates `port` on a
+ * walk — the caller draws the line the router settled, as routeEdge already
+ * documents. Returns the settled points, or null when nothing needed doing.
+ */
+function settleTail(
+  pts: readonly Point[],
+  port: Port,
+  node: PortNode,
+  which: "start" | "end",
+  other: { port: Port; node: PortNode; which: "start" | "end" },
+  obstacles: readonly Box[],
+  seatTaken: SeatTaken,
+  clearance: number,
+): Point[] | null {
+  const n = pts.length;
+  if (n < 3) return null;
+  const axis = port.dir;
+  const cross = axis === 0 ? 1 : 0;
+  const lineC = pts[n - 1][cross];
+  // The first point, walking back, that is off the approach line.
+  let k = n - 1;
+  while (k > 0 && Math.abs(pts[k - 1][cross] - lineC) < SAME_LINE) k--;
+  if (k === 0) return null;
+  const runway = clearance + CORNER_RADIUS;
+  const arrive = Math.abs(pts[n - 1][axis] - pts[k][axis]);
+  if (arrive >= runway - SAME_LINE) return null;
+  // pts[k-1] → pts[k] is the perpendicular drop; pts[k-1] rides the run.
+  const runC = pts[k - 1][cross];
+  const mk = (a: number, c: number): Point => (axis === 0 ? [a, c] : [c, a]);
+  const clear = (cand: readonly Point[]) => !obstacles.some((o) => polylineThroughBox(cand, o, 2));
+  if (k >= 2) {
+    // The port walks onto the run's line — inside D75's span, outline-true
+    // through D98's arithmetic, never onto a seat another edge holds.
+    const [lo, hi] = sideSpan(node, port.side);
+    const pos = posForOutline(node, node.shape, port.side, runC);
+    if (pos >= lo && pos <= hi && !seatTaken(which, port.side, pos)) {
+      const walked = portAt(node, node.shape, port.side, pos, clearance);
+      const cand = dropCollinear([...pts.slice(0, k), walked.outside, walked.at]);
+      if (clear(cand.slice(Math.max(0, k - 2)))) {
+        port.at = walked.at;
+        port.outside = walked.outside;
+        return cand;
+      }
+    }
+    // The turn steps back a full corner from the stub — only while the run
+    // still runs the same way, so the step cannot mint a new double-back.
+    const inward = Math.sign(pts[n - 1][axis] - pts[k][axis]) || 1;
+    const turnAt = pts[n - 1][axis] - inward * runway;
+    const runFrom = pts[k - 2][axis];
+    if ((turnAt - runFrom) * inward > SAME_LINE) {
+      const cand = dropCollinear([...pts.slice(0, k - 1), mk(turnAt, runC), mk(turnAt, lineC), pts[n - 1]]);
+      if (clear(cand.slice(Math.max(0, k - 2)))) return cand;
+    }
+  } else if (n === 3 && other.port.dir !== axis) {
+    // The pure L: the run rides the OTHER port's own line, so neither repair
+    // above can reach it — the other port walks along ITS side, which runs
+    // along the approach axis, and the whole run moves back with it. The
+    // scan walks outward at half the nudge gap — further out only lengthens
+    // the approach — until the other side's span runs out: bounded,
+    // deterministic, first free and clear seat wins.
+    const inward = Math.sign(pts[n - 1][axis] - pts[k][axis]) || 1;
+    const [olo, ohi] = sideSpan(other.node, other.port.side);
+    const reach = Math.abs(ohi - olo) + Math.abs(pts[n - 1][axis] - (inward > 0 ? olo : ohi)) + runway;
+    // The full runway first; when the corridor is hemmed — seats, boxes and
+    // the span leaving no room — a second pass takes what it can get, down
+    // to two nudges: still a legible stroke under the arrowhead, and only
+    // where it is a real gain over what stands.
+    const attempt = (fromT: number): Point[] | null => {
+      for (let t = fromT; t <= reach; t += NUDGE / 2) {
+        const raw = pts[n - 1][axis] - inward * t;
+        const pos = posForOutline(other.node, other.node.shape, other.port.side, raw);
+        if (pos < olo || pos > ohi) continue;
+        if (seatTaken(other.which, other.port.side, pos)) continue;
+        const walked = portAt(other.node, other.node.shape, other.port.side, pos, clearance);
+        const cand = dropCollinear([walked.at, walked.outside, mk(raw, lineC), pts[n - 1]]);
+        if (!clear(cand)) continue;
+        other.port.at = walked.at;
+        other.port.outside = walked.outside;
+        return cand;
+      }
+      return null;
+    };
+    const settled = attempt(runway) ?? (arrive < 2 * NUDGE - SAME_LINE ? attempt(2 * NUDGE) : null);
+    if (settled) return settled;
+  }
+  return null;
+}
+
+/**
+ * Both ends of a routed line given their runway (D137): no turn within a
+ * corner radius of either port. Ports may walk (mutated in place, like
+ * routeEdge's snap); the polyline returned is the one to draw.
+ */
+export function settleApproaches(
+  points: readonly Point[],
+  ports: PortEnds,
+  from: PortNode,
+  to: PortNode,
+  obstacles: readonly Box[],
+  seatTaken: SeatTaken,
+  clearance = ROUTE_PAD,
+): Point[] {
+  let pts: readonly Point[] = points;
+  const tail = settleTail(pts, ports.end, to, "end", { port: ports.start, node: from, which: "start" }, obstacles, seatTaken, clearance);
+  if (tail) pts = tail;
+  const reversed = [...pts].reverse();
+  const head = settleTail(reversed, ports.start, from, "start", { port: ports.end, node: to, which: "end" }, obstacles, seatTaken, clearance);
+  if (head) pts = head.reverse();
+  return pts === points ? [...points] : (pts as Point[]);
+}
+
+// ---------------------------------------------------------------------------
 // nudging (D75)
 // ---------------------------------------------------------------------------
 
