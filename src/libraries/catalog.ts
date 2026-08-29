@@ -88,6 +88,23 @@ export function describeSymbol(entry: Describable): string {
   return `${entry.symbol} — ${entry.name} (${entry.library}, ${entry.category}), ${entry.size.width}×${entry.size.height}`;
 }
 
+/**
+ * The bundled catalog with the runtime shelf in front of it (D130). The
+ * same object when there is nothing to add, so a canvasless dispatcher
+ * costs nothing extra.
+ */
+export function withRuntimeSymbols(
+  base: SymbolCatalog,
+  runtime: readonly SymbolEntry[],
+): SymbolCatalog {
+  if (!runtime.length) return base;
+  return {
+    version: base.version,
+    symbols: [...runtime, ...base.symbols],
+    libraries: [...new Set([...base.libraries, ...runtime.map((entry) => entry.library)])].sort(),
+  };
+}
+
 // ------------------------------------------------------------- ranking --
 // Deterministic tiers, best first (D82): the name the agent already knows,
 // then a synonym it reached for, then the phrase somewhere in either, then
@@ -269,14 +286,15 @@ export function findSymbols(
       why: match.why,
     });
   }
-  // Within a tier the house glyphs answer first (D121): a brandless word —
-  // "queue", "database", "gateway" — is a request for the idea, and the
-  // house draws ideas. A vendor's own words still win naturally: they score
-  // on names the house does not carry.
-  const house = (hit: SymbolHit): number => (hit.symbol.startsWith("docent/") ? 0 : 1);
+  // Within a tier the shelves rank (D121, D130): the person's own word
+  // first — they named the item, so the word is theirs — then the house
+  // glyphs, then the vendors. A vendor's own words still win naturally:
+  // they score on names the others do not carry.
+  const shelf = (hit: SymbolHit): number =>
+    hit.symbol.startsWith("my/") ? 0 : hit.symbol.startsWith("docent/") ? 1 : 2;
   hits.sort(
     (a, b) =>
-      b.score - a.score || house(a) - house(b) || compare(a.name, b.name) || compare(a.symbol, b.symbol),
+      b.score - a.score || shelf(a) - shelf(b) || compare(a.name, b.name) || compare(a.symbol, b.symbol),
   );
   return hits.slice(0, limit);
 }

@@ -21,7 +21,13 @@ import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar, type ExportContext } from "../export";
 import { listProjects, listScenes, loadScene } from "../portfolio/client";
 import catalogJson from "../../public/libraries/catalog.json";
-import { answerFindSymbol, loadCatalog, type SymbolCatalog } from "../libraries/catalog";
+import {
+  answerFindSymbol,
+  loadCatalog,
+  withRuntimeSymbols,
+  type SymbolCatalog,
+} from "../libraries/catalog";
+import { runtimeSymbols } from "../authoring/symbols";
 
 /** Above this many components, get_scene_graph answers with the outline (D45). */
 export const WALL_THRESHOLD = 150;
@@ -35,11 +41,15 @@ export const UNSAVED_CHANGES =
   "The canvas has unsaved changes — save or discard them first.";
 
 /**
- * The bundled symbol catalog (D81), parsed once: `find_symbol` reads static
- * data, so it needs no canvas and never touches the scene (D82).
+ * The bundled symbol catalog (D81), parsed once, with the person's own
+ * runtime shelf in front of it where a canvas is attached (D130): this
+ * executor runs IN the page, so the registry the adapter fills is right
+ * here. A dispatcher with no canvas has an empty registry and answers from
+ * the bundled shelves alone.
  */
 let catalog: SymbolCatalog | null = null;
-const symbolCatalog = (): SymbolCatalog => (catalog ??= loadCatalog(catalogJson));
+const symbolCatalog = (): SymbolCatalog =>
+  withRuntimeSymbols((catalog ??= loadCatalog(catalogJson)), runtimeSymbols());
 
 /** What the outline says of a paragraph: its first sentence, capped (D45). */
 const opener = (text: string | null | undefined) =>

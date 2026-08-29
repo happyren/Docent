@@ -50,9 +50,15 @@ try {
   );
 }
 
-/** One tool call: answered here when it needs no canvas, relayed otherwise. */
+/**
+ * One tool call: answered here when it needs no canvas, relayed otherwise.
+ * find_symbol goes to the CANVAS when one is connected (D130): the page's
+ * catalog carries the person's own named library items as `my/<name>`, which
+ * this process cannot see. With no canvas the bundled shelves answer, which
+ * is everything a canvasless client could place anyway.
+ */
 async function callTool(tool, params) {
-  if (tool === "find_symbol" && lookUpSymbol) return lookUpSymbol(params);
+  if (tool === "find_symbol" && lookUpSymbol && !canvasStream) return lookUpSymbol(params);
   return callCanvas(tool, params);
 }
 

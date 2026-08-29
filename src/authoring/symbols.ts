@@ -34,14 +34,38 @@ export interface SymbolEntry {
 const SYMBOLS: readonly SymbolEntry[] = (catalog as { symbols: SymbolEntry[] }).symbols;
 const BY_ID = new Map(SYMBOLS.map((entry) => [entry.symbol, entry]));
 
-/** The catalog entry for a symbol id, or null when the catalog has no such item. */
-export function symbolEntry(symbol: string): SymbolEntry | null {
-  return BY_ID.get(symbol.trim().toLowerCase()) ?? null;
+/**
+ * The runtime half of the vocabulary (D130): the person's own named library
+ * items, registered by the adapter whenever the library changes. Empty in a
+ * dispatcher with no canvas — the storeless Node server keeps to the
+ * bundled shelves, because a personal library needs a person.
+ */
+let RUNTIME: readonly SymbolEntry[] = [];
+let RUNTIME_BY_ID = new Map<string, SymbolEntry>();
+
+export function registerRuntimeSymbols(entries: readonly SymbolEntry[]): void {
+  RUNTIME = entries;
+  RUNTIME_BY_ID = new Map(entries.map((entry) => [entry.symbol, entry]));
 }
 
-/** Every symbol id the catalog knows, in catalog order. */
+export function runtimeSymbols(): readonly SymbolEntry[] {
+  return RUNTIME;
+}
+
+/** The bundled items' own ids — how the adapter tells a merge from a person's import. */
+export function bundledItemIds(): ReadonlySet<string> {
+  return new Set(SYMBOLS.map((entry) => entry.itemId));
+}
+
+/** The catalog entry for a symbol id, or null when the catalog has no such item. */
+export function symbolEntry(symbol: string): SymbolEntry | null {
+  const wanted = symbol.trim().toLowerCase();
+  return BY_ID.get(wanted) ?? RUNTIME_BY_ID.get(wanted) ?? null;
+}
+
+/** Every symbol id the catalog knows, in catalog order — the person's first. */
 export function symbolIds(): string[] {
-  return SYMBOLS.map((entry) => entry.symbol);
+  return [...RUNTIME.map((entry) => entry.symbol), ...SYMBOLS.map((entry) => entry.symbol)];
 }
 
 /**

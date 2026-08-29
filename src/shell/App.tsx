@@ -18,7 +18,7 @@ import {
   writeSceneFile,
 } from "./scene-file";
 import { exportSceneBytes, exportSceneFile, importSceneFile } from "./desktop-files";
-import { alertDialog } from "./dialogs";
+import { alertDialog, confirmDialog } from "./dialogs";
 import { copyText } from "./clipboard";
 import { arrangeMoves, computeTiers, trailAt } from "../scene/tiers";
 import { tidyOps, type TidyScope } from "../authoring/tidy";
@@ -87,6 +87,7 @@ type DocentMenuId =
   | "export-mermaid"
   | "export-sidecar"
   | "export-pdf"
+  | "clear-canvas"
   | "present"
   | "library"
   | "insert-icon"
@@ -171,6 +172,7 @@ const PALETTE_ORDER: readonly DocentActionId[] = [
   "export-mermaid",
   "export-sidecar",
   "export-pdf",
+  "clear-canvas",
   "present",
   "library",
   "insert-icon",
@@ -1485,6 +1487,18 @@ export function App() {
       title: "Export PDF…",
       run: exportPdfFile,
     },
+    // D109's orphan, housed (D128): destructive, so it asks through the one
+    // channel every destructive question uses (D102), then wipes.
+    "clear-canvas": {
+      title: "Clear canvas…",
+      run: () => {
+        void (async () => {
+          if (!(await confirmDialog("Clear the canvas? Everything on it is removed and this cannot be undone.")))
+            return;
+          canvasRef.current?.clearScene();
+        })();
+      },
+    },
     present: { title: "Present", shortcut: KEY.present, run: () => presentation.enter() },
     library: {
       title: "Shape library",
@@ -2099,6 +2113,8 @@ export function App() {
         <SettingsModal
           theme={canvasTheme}
           onTheme={(next) => canvasRef.current?.setTheme(next)}
+          canvasBackground={canvasRef.current?.getCanvasBackground() ?? "#ffffff"}
+          onCanvasBackground={(color) => canvasRef.current?.setCanvasBackground(color)}
           detailMarkers={detailMarkers}
           onDetailMarkers={setDetailMarkers}
           agentCanEdit={agentCanEdit}

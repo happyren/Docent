@@ -2526,6 +2526,28 @@ body {
   color: var(--docent-accent-text);
 }
 
+/* The paper's colours (D129): round swatches, the chosen one ringed in the
+   accent — the same economy as the theme segment beside it. */
+.docent-settings-swatches {
+  flex: none;
+  display: flex;
+  gap: 8px;
+}
+
+.docent-settings-swatches button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--docent-hairline);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.docent-settings-swatches button.is-active {
+  outline: 2px solid var(--docent-accent);
+  outline-offset: 1px;
+}
+
 .docent-settings-endpoint {
   flex: none;
   max-width: 55%;

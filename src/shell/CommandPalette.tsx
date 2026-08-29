@@ -26,17 +26,12 @@ import {
 } from "./palette";
 import { folderOf, leafOf } from "../portfolio/tree";
 import catalogJson from "../../public/libraries/catalog.json";
-import { findSymbols, loadCatalog } from "../libraries/catalog";
+import { findSymbols, loadCatalog, withRuntimeSymbols } from "../libraries/catalog";
+import { runtimeSymbols } from "../authoring/symbols";
 import { renderSymbolThumbnail } from "../adapter";
 
-/** The checked-in catalog (D81), parsed once — icon mode's whole world. */
+/** The checked-in catalog (D81), parsed once — icon mode's bundled half. */
 const CATALOG = loadCatalog(catalogJson);
-
-/** What an empty icon query opens on: the house vocabulary (D119, D124). */
-const HOUSE_STARTER: PaletteSymbol[] = CATALOG.symbols
-  .filter((entry) => entry.symbol.startsWith("docent/"))
-  .slice(0, PALETTE_LIMIT)
-  .map((entry) => ({ symbol: entry.symbol, name: entry.name, library: entry.library }));
 
 /** The two doors (D124): Cmd+K, and Cmd+Shift+K for icons. */
 export type PaletteMode = "commands" | "icons";
@@ -161,23 +156,34 @@ export function CommandPalette({
     };
   }, [loadScenes]);
 
-  // Icon mode (D124): the catalog's own ranking, so a word answers the same
-  // way at the keyboard as over MCP (D82, D121); nothing typed opens on the
-  // house vocabulary. Command mode never sees an icon — that mix is what
-  // D124 undid.
+  // Icon mode (D124): the catalog's own ranking over the bundled shelves
+  // plus the person's own (D130) — read once per open, which is when the
+  // library could last have changed. A word answers the same way at the
+  // keyboard as over MCP (D82, D121); nothing typed opens on the person's
+  // shelf and then the house vocabulary. Command mode never sees an icon —
+  // that mix is what D124 undid.
+  const [catalog] = useState(() => withRuntimeSymbols(CATALOG, runtimeSymbols()));
+  const starter = useMemo<PaletteSymbol[]>(
+    () =>
+      catalog.symbols
+        .filter((entry) => entry.symbol.startsWith("my/") || entry.symbol.startsWith("docent/"))
+        .slice(0, PALETTE_LIMIT)
+        .map((entry) => ({ symbol: entry.symbol, name: entry.name, library: entry.library })),
+    [catalog],
+  );
   const entries = useMemo(() => {
     if (mode === "icons") {
       const symbols = query.trim()
-        ? findSymbols(CATALOG, query, { limit: PALETTE_LIMIT }).map((hit) => ({
+        ? findSymbols(catalog, query, { limit: PALETTE_LIMIT }).map((hit) => ({
             symbol: hit.symbol,
             name: hit.name,
             library: hit.library,
           }))
-        : HOUSE_STARTER;
+        : starter;
       return iconEntries(symbols);
     }
     return matchPalette(query, commands, scenes);
-  }, [mode, query, commands, scenes]);
+  }, [mode, query, commands, scenes, catalog, starter]);
 
   // A shrinking list must never leave the cursor pointing past its end.
   const active = Math.min(cursor, Math.max(entries.length - 1, 0));

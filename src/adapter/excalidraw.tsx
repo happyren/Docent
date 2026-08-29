@@ -33,8 +33,15 @@ import "@excalidraw/excalidraw/index.css";
 import type { LegendRule, Scenario, SceneLink, SceneSnapshot } from "./snapshot";
 import { parseLegendRules, parseSceneLink, snapshotFromRawElements } from "./snapshot";
 import { bindingFocus, dropCollinear, outlinePoint } from "../authoring/route";
-import { symbolEntry } from "../authoring/symbols";
+import {
+  bundledItemIds,
+  registerRuntimeSymbols,
+  runtimeSymbols,
+  symbolEntry,
+} from "../authoring/symbols";
+import type { SymbolEntry } from "../libraries/catalog";
 import { houseTreatment } from "./treatment";
+import { buildPersonalEntries, type PersonalItem } from "./personal";
 
 // Excalidraw's zoom limits (MIN_ZOOM/MAX_ZOOM are not runtime-exported).
 const ZOOM_MIN = 0.1;
@@ -326,6 +333,13 @@ export interface DocentCanvasHandle {
    * (D120's person rule). False when the catalog has no such symbol.
    */
   insertLibraryItem(symbol: string): Promise<boolean>;
+  /** Wipe the scene (D128). The caller has already asked and been answered. */
+  clearScene(): void;
+  /** The paper's colour (D129), read and written where it lives: appState. */
+  getCanvasBackground(): string;
+  setCanvasBackground(color: string): void;
+  /** The person's own named library items as runtime entries (D130). */
+  getPersonalSymbols(): readonly SymbolEntry[];
   /**
    * Toggle Excalidraw's library sidebar. Upstream's own trigger button is the
    * only other way in, and the desktop shell hides it in favour of a native
@@ -979,10 +993,29 @@ function libraryElements(library: string): Promise<RawLibraryElement[][]> {
   return pending;
 }
 
+/**
+ * The personal shelf (D130): the drawings behind the runtime entries, kept
+ * at the same positions `buildPersonalEntries` numbered them. Registered by
+ * the mounted canvas whenever the library changes; the thumbnails cached
+ * for the old shelf are dropped, because the drawing behind `my/<name>` may
+ * be a different drawing now.
+ */
+let personalDrawings: readonly RawLibraryElement[][] = [];
+
+function registerPersonalLibrary(items: readonly PersonalItem[]): void {
+  const { entries, drawings } = buildPersonalEntries(items, bundledItemIds());
+  personalDrawings = drawings as unknown as readonly RawLibraryElement[][];
+  registerRuntimeSymbols(entries);
+  for (const key of [...symbolThumbnails.keys()]) {
+    if (key.startsWith("my/")) symbolThumbnails.delete(key);
+  }
+}
+
 /** The elements of one library item, deep-cloned so the cache stays pristine. */
 async function libraryItem(library: string, index: number): Promise<RawLibraryElement[]> {
-  const items = await libraryElements(library);
-  const item = items[index];
+  // The personal shelf lives in memory, not at a URL (D130).
+  const item =
+    library === "personal" ? personalDrawings[index] : (await libraryElements(library))[index];
   if (!item?.length) throw new Error(`Unknown library item: ${library}#${index}`);
   return JSON.parse(JSON.stringify(item)) as RawLibraryElement[];
 }
@@ -1547,6 +1580,23 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
         captureUpdate: CaptureUpdateAction.NEVER,
       });
     },
+
+    clearScene: () => {
+      api.resetScene();
+    },
+
+    getCanvasBackground: () => api.getAppState().viewBackgroundColor,
+
+    setCanvasBackground: (color) => {
+      // In appState, where it saves, exports and diffs unchanged (D129) —
+      // and into history, the way upstream's own picker records it.
+      api.updateScene({
+        appState: { viewBackgroundColor: color },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+
+    getPersonalSymbols: () => runtimeSymbols(),
 
     insertLibraryItem: async (symbol) => {
       const entry = symbolEntry(symbol);
@@ -2766,6 +2816,17 @@ export function ExcalidrawCanvas({
     <Excalidraw
       excalidrawAPI={handleApi}
       onChange={handleChange}
+      onLibraryChange={(items) => {
+        // The runtime vocabulary (D130): named items of the person's own
+        // library, taught to the catalog every time the shelf changes.
+        registerPersonalLibrary(
+          (items as readonly { id?: unknown; name?: unknown; elements?: unknown }[]).map((item) => ({
+            id: String(item.id ?? ""),
+            name: typeof item.name === "string" ? item.name : null,
+            elements: Array.isArray(item.elements) ? (item.elements as PersonalItem["elements"]) : [],
+          })),
+        );
+      }}
       UIOptions={{
         // Docent owns the file lifecycle; disable Excalidraw's built-in
         // open/save pathways so there is exactly one.

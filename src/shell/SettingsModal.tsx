@@ -4,14 +4,24 @@
  * same handler its menu twin runs (B4), so the dialog can never disagree with
  * the menus about what is on.
  */
+import { useState } from "react";
 import type { ReactNode } from "react";
 
 import { Switch } from "./PluginsModal";
+
+/** Upstream's own per-theme paper colours — the choices its picker offers. */
+const PAPER_SWATCHES: Record<"light" | "dark", readonly string[]> = {
+  light: ["#ffffff", "#f8f9fa", "#f5faff", "#fffce8", "#fdf8f6"],
+  dark: ["#121212", "#161718", "#13171c", "#181605", "#1b1615"],
+};
 
 export interface SettingsModalProps {
   /** The canvas theme the chrome is already following (D107). */
   theme: "light" | "dark";
   onTheme: (theme: "light" | "dark") => void;
+  /** The paper's colour (D129) — the scene's own, through the adapter. */
+  canvasBackground: string;
+  onCanvasBackground: (color: string) => void;
   detailMarkers: boolean;
   onDetailMarkers: (on: boolean) => void;
   agentCanEdit: boolean;
@@ -46,6 +56,8 @@ function Row({
 export function SettingsModal({
   theme,
   onTheme,
+  canvasBackground,
+  onCanvasBackground,
   detailMarkers,
   onDetailMarkers,
   agentCanEdit,
@@ -54,6 +66,9 @@ export function SettingsModal({
   onConnectBridge,
   onClose,
 }: SettingsModalProps) {
+  // Shown as chosen the moment it is clicked; the scene is the truth and
+  // the adapter writes it there, but a dialog must not lag its own click.
+  const [paper, setPaper] = useState(canvasBackground);
   return (
     <div className="docent-modal-backdrop" onClick={onClose}>
       <div className="docent-modal docent-settings" onClick={(e) => e.stopPropagation()}>
@@ -76,6 +91,25 @@ export function SettingsModal({
                 >
                   {option === "light" ? "Light" : "Dark"}
                 </button>
+              ))}
+            </div>
+          </Row>
+          <Row title="Canvas background" hint="The paper's colour — saved with the scene.">
+            <div className="docent-settings-swatches" role="radiogroup" aria-label="Canvas background">
+              {PAPER_SWATCHES[theme].map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  role="radio"
+                  aria-checked={paper === color}
+                  aria-label={color}
+                  className={paper === color ? "is-active" : ""}
+                  style={{ background: color }}
+                  onClick={() => {
+                    setPaper(color);
+                    onCanvasBackground(color);
+                  }}
+                />
               ))}
             </div>
           </Row>

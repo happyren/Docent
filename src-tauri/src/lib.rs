@@ -54,6 +54,7 @@ enum MenuAction {
     ExportMermaid,
     ExportSidecar,
     ExportPdf,
+    ClearCanvas,
     Present,
     Library,
     InsertIcon,
@@ -73,7 +74,7 @@ enum MenuAction {
 impl MenuAction {
     /// Every action, in menu-bar order — Settings leads because on macOS the
     /// application menu it lives in comes before File.
-    const ALL: [Self; 24] = [
+    const ALL: [Self; 25] = [
         Self::Settings,
         Self::New,
         Self::Open,
@@ -84,6 +85,7 @@ impl MenuAction {
         Self::ExportMermaid,
         Self::ExportSidecar,
         Self::ExportPdf,
+        Self::ClearCanvas,
         Self::Present,
         Self::Library,
         Self::InsertIcon,
@@ -114,6 +116,7 @@ impl MenuAction {
             Self::ExportMermaid => "export-mermaid",
             Self::ExportSidecar => "export-sidecar",
             Self::ExportPdf => "export-pdf",
+            Self::ClearCanvas => "clear-canvas",
             Self::Present => "present",
             Self::Library => "library",
             Self::InsertIcon => "insert-icon",
@@ -143,6 +146,7 @@ impl MenuAction {
             Self::ExportMermaid => "Export Mermaid…",
             Self::ExportSidecar => "Export Semantic JSON…",
             Self::ExportPdf => "Export PDF…",
+            Self::ClearCanvas => "Clear Canvas…",
             Self::Present => "Present",
             Self::Library => "Shape Library",
             Self::InsertIcon => "Insert Icon…",
@@ -195,6 +199,8 @@ impl MenuAction {
             | Self::ExportMermaid
             | Self::ExportSidecar
             | Self::ExportPdf
+            // A wipe is a thing you go looking for, never a chord (D128).
+            | Self::ClearCanvas
             | Self::Welcome
             | Self::CheckUpdates
             | Self::AgentEndpoint => None,
@@ -461,6 +467,10 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             // The PDF crosses the file channel now (D116), so it stands with
             // the other exports instead of being offered only on the web.
             &item(app, MenuAction::ExportPdf)?,
+            // Destructive, so it stands apart, behind the shell's own
+            // confirm (D128, D102).
+            &PredefinedMenuItem::separator(app)?,
+            &item(app, MenuAction::ClearCanvas)?,
             // macOS keeps Settings and Quit in the application menu; the
             // others put both here, which is where their conventions look.
             #[cfg(not(target_os = "macos"))]
@@ -930,7 +940,7 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 22] = [
+    const FRONTEND_IDS: [&str; 23] = [
         "settings",
         "new",
         "open",
@@ -941,6 +951,7 @@ mod tests {
         "export-mermaid",
         "export-sidecar",
         "export-pdf",
+        "clear-canvas",
         "present",
         "library",
         "insert-icon",
