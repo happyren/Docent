@@ -2087,6 +2087,56 @@ body {
   );
 }
 
+/* …and it says where you are (D136): the open scene's trail — project ›
+   folders › scene — standing in the band, in the metadata voice (D107).
+   Furniture, not control: no pointer, so drag and double-click zoom keep
+   landing on the strip beneath; z-index lifts the words over the wash the
+   ::after paints on top of its children. The 96px margins clear the traffic
+   lights on the left and stay symmetric so "centred" means the window's
+   centre. Middle segments give way first; the scene's own name gives way
+   last (D92 caps a path at 8 short segments, so this is a rainy-day rule). */
+.docent-titlebar-trail {
+  position: absolute;
+  top: 0;
+  left: 96px;
+  right: 96px;
+  height: 34px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  pointer-events: none;
+  font-family: var(--docent-font-body);
+  font-size: var(--docent-meta-size);
+  letter-spacing: var(--docent-meta-tracking);
+  color: var(--docent-muted);
+  white-space: nowrap;
+}
+.docent-titlebar-part {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 18ch;
+  flex-shrink: 1;
+}
+.docent-titlebar-part:last-child {
+  color: var(--docent-fg);
+  max-width: 36ch;
+  flex-shrink: 0.25;
+}
+.docent-titlebar-sep {
+  color: var(--docent-faint);
+  flex-shrink: 0;
+}
+.docent-titlebar-dirty {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--docent-accent);
+  flex-shrink: 0;
+}
+
 /* ── The tools dock left (D110) ────────────────────────────────────────────
    Upstream draws its drawing toolbar as a horizontal island across the top;
    Docent stands it on the left edge, which is where every tool a drawing

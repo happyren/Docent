@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExcalidrawCanvas } from "../adapter";
 import type { DocentCanvasHandle } from "../adapter";
 import { connectAgentBridge, type AgentBridge } from "../agent/bridge";
@@ -48,6 +48,7 @@ import { SelectionToolbar } from "./SelectionToolbar";
 import { OVERVIEW, usePresentation } from "./usePresentation";
 import { useDrill } from "./useDrill";
 import { CommandPalette, type PaletteMode } from "./CommandPalette";
+import { sceneTrail } from "./scene-trail";
 import type { PaletteCommand, PaletteScene } from "./palette";
 
 const UNTITLED = "untitled.excalidraw";
@@ -1962,9 +1963,27 @@ export function App() {
         .join(" ")}
     >
       {/* Somewhere to move a borderless window by (D108): a strip along the
-          very top, above the canvas and clear of every island. */}
+          very top, above the canvas and clear of every island. The band also
+          says where you are (D136): the scene's trail, pointer-transparent so
+          every event still lands on the strip that drags. */}
       {hasOverlayTitleBar && (
-        <div className="docent-titlebar-drag" data-tauri-drag-region />
+        <div className="docent-titlebar-drag" data-tauri-drag-region>
+          <span className="docent-titlebar-trail">
+            {dirty && (
+              <span className="docent-titlebar-dirty" title="Unsaved changes" />
+            )}
+            {sceneTrail(fileName).map((part, i) => (
+              <Fragment key={`${i}:${part}`}>
+                {i > 0 && (
+                  <span aria-hidden className="docent-titlebar-sep">
+                    ›
+                  </span>
+                )}
+                <span className="docent-titlebar-part">{part}</span>
+              </Fragment>
+            ))}
+          </span>
+        </div>
       )}
       <main
         className="docent-canvas"
