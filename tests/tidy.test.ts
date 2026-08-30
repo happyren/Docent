@@ -406,3 +406,16 @@ describe("tidy hugs the frame (D101)", () => {
     }
   });
 });
+
+describe("tidy draws in architect ink (D143)", () => {
+  it("patches every sketch-stroked member down to roughness 0, changelog still empty", () => {
+    // The hand-drawn fixture carries the old wobble (roughness 1) on every
+    // shape and arrow; one tidy brings the whole frame to the single-pass
+    // hand — as a style patch, so the meaning changelog stays empty (D73).
+    const result = plan(tidyOps(handDrawn, { frame: "F" }), handDrawn, idSource(31));
+    const inked = new Set((result.write.patches ?? []).filter((p) => p.style?.roughness === 0).map((p) => p.id));
+    for (const id of ["gateway", "orders", "db", "e1", "e2"]) expect(inked, id).toContain(id);
+    const after = simulate(handDrawn, result.write);
+    expect(describeMeaningChange(handDrawn, after).changelog).toBe("");
+  });
+});

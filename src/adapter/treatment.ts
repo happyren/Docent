@@ -20,8 +20,8 @@ interface TreatableElement {
 
 const SCRIBBLE_FILLS = new Set(["hachure", "cross-hatch", "zigzag"]);
 
-/** The canvas's own hand: Excalidraw's default roughness. */
-const HOUSE_ROUGHNESS = 1;
+/** Architect ink (D143): the single-pass hand, and only it. */
+const HOUSE_ROUGHNESS = 0;
 /** The house stroke weight (A31): bold, and no bolder. */
 const HOUSE_WEIGHT = 2;
 

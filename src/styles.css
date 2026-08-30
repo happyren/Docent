@@ -2735,6 +2735,16 @@ body {
   display: none;
 }
 
+/* Sloppiness retires from the panel (D143): the house draws architect ink
+   and only architect — every rougher hand strokes twice, and an arrow
+   wearing two lines is not one arrow. The tool default is asserted at
+   launch, so nothing the panel can no longer say is ever needed.
+   UPSTREAM-VERSION-SENSITIVE, keyed to the control's own radio-group name:
+   if an upgrade renames it, the options return and nothing breaks. */
+.docent-app fieldset:has(input[name="sloppiness"]) {
+  display: none;
+}
+
 /* Doubled class: upstream sets its dark variables at .excalidraw.theme--dark
    and loads after this sheet, so an equal selector loses the tie. */
 .excalidraw.theme--dark.theme--dark {

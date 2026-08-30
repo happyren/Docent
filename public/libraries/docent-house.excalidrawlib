@@ -17,7 +17,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-user-group"
@@ -46,7 +46,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-user-group"
@@ -115,7 +115,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -144,7 +144,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -173,7 +173,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -219,7 +219,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -265,7 +265,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -311,7 +311,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -357,7 +357,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -403,7 +403,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -449,7 +449,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -495,7 +495,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-service-group"
@@ -548,7 +548,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -577,7 +577,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -623,7 +623,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -669,7 +669,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -698,7 +698,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -727,7 +727,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-server-group"
@@ -763,7 +763,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-function-group"
@@ -794,7 +794,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-function-group"
@@ -840,7 +840,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-function-group"
@@ -893,7 +893,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-database-group"
@@ -922,7 +922,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-database-group"
@@ -968,7 +968,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-database-group"
@@ -1014,7 +1014,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-database-group"
@@ -1083,7 +1083,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-cache-group"
@@ -1114,7 +1114,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-cache-group"
@@ -1187,7 +1187,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-storage-group"
@@ -1216,7 +1216,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-storage-group"
@@ -1277,7 +1277,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-document-group"
@@ -1339,7 +1339,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-document-group"
@@ -1389,7 +1389,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-document-group"
@@ -1435,7 +1435,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-document-group"
@@ -1488,7 +1488,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-queue-group"
@@ -1519,7 +1519,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-queue-group"
@@ -1565,7 +1565,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-queue-group"
@@ -1611,7 +1611,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-queue-group"
@@ -1664,7 +1664,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1693,7 +1693,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1739,7 +1739,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1785,7 +1785,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1831,7 +1831,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1860,7 +1860,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1889,7 +1889,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-topic-group"
@@ -1925,7 +1925,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-event-group"
@@ -1954,7 +1954,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-event-group"
@@ -2000,7 +2000,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-event-group"
@@ -2046,7 +2046,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-event-group"
@@ -2092,7 +2092,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-event-group"
@@ -2145,7 +2145,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-stream-group"
@@ -2211,7 +2211,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-stream-group"
@@ -2277,7 +2277,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-stream-group"
@@ -2350,7 +2350,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-gateway-group"
@@ -2379,7 +2379,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-gateway-group"
@@ -2425,7 +2425,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-gateway-group"
@@ -2478,7 +2478,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2509,7 +2509,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2555,7 +2555,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2601,7 +2601,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2647,7 +2647,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2678,7 +2678,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2709,7 +2709,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-load-balancer-group"
@@ -2747,7 +2747,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-scheduler-group"
@@ -2776,7 +2776,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-scheduler-group"
@@ -2822,7 +2822,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-scheduler-group"
@@ -2868,7 +2868,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-scheduler-group"
@@ -2921,7 +2921,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-lock-group"
@@ -2952,7 +2952,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-lock-group"
@@ -3021,7 +3021,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-cloud-group"
@@ -3122,7 +3122,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-terminal-group"
@@ -3153,7 +3153,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-terminal-group"
@@ -3203,7 +3203,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-terminal-group"
@@ -3256,7 +3256,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-metrics-group"
@@ -3302,7 +3302,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-metrics-group"
@@ -3348,7 +3348,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-metrics-group"
@@ -3409,7 +3409,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-browser-group"
@@ -3440,7 +3440,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-browser-group"
@@ -3486,7 +3486,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-browser-group"
@@ -3515,7 +3515,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-browser-group"
@@ -3551,7 +3551,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-mobile-group"
@@ -3582,7 +3582,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-mobile-group"
@@ -3628,7 +3628,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-mobile-group"
@@ -3681,7 +3681,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "dashed",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-external-group"
@@ -3712,7 +3712,7 @@
      "fillStyle": "solid",
      "strokeWidth": 2,
      "strokeStyle": "solid",
-     "roughness": 1,
+     "roughness": 0,
      "opacity": 100,
      "groupIds": [
       "dh-external-group"

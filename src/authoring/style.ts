@@ -19,7 +19,9 @@ export const DEFAULT_STYLE: WriteStyle = {
   fillStyle: "solid",
   strokeWidth: 2,
   strokeStyle: "solid",
-  roughness: 1,
+  // Architect ink (D143): single-pass strokes — a rougher hand draws each
+  // stroke twice, and a long arrow wearing two lines reads as two arrows.
+  roughness: 0,
   roundness: 3,
   opacity: 100,
   fontFamily: 5,
@@ -64,7 +66,8 @@ function lookOf(elements: SnapshotElement[], base: WriteStyle): WriteStyle {
     fillStyle: mode(elements.map((e) => e.fillStyle)) ?? base.fillStyle,
     strokeWidth: mode(elements.map((e) => e.strokeWidth)) ?? base.strokeWidth,
     strokeStyle: mode(elements.map((e) => e.strokeStyle)) ?? base.strokeStyle,
-    roughness: mode(elements.map((e) => e.look.roughness)) ?? base.roughness,
+    // The vote learns everything but the hand: architect ink is pinned (D143).
+    roughness: 0,
     roundness: roundness === undefined ? base.roundness : roundness === 0 ? null : roundness,
     opacity: mode(elements.map((e) => e.opacity)) ?? base.opacity,
     fontFamily: base.fontFamily,

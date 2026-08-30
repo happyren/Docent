@@ -2834,6 +2834,15 @@ export function ExcalidrawCanvas({
       const theme = api.getAppState().theme;
       lastThemeRef.current = theme;
       onThemeChange?.(theme === "dark" ? "dark" : "light");
+      // Architect ink (D143): the person's tool draws single-pass strokes.
+      // Asserted at every launch — the sloppiness options are off the
+      // panel, so a persisted rougher default would have no way back.
+      if (api.getAppState().currentItemRoughness !== 0) {
+        api.updateScene({
+          appState: { currentItemRoughness: 0 },
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
       onReady?.(makeHandle(api));
       void loadBundledLibraries(api, (library) => library.eager);
     },

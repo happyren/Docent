@@ -16,7 +16,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -116,7 +116,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -153,7 +153,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -197,7 +197,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -232,7 +232,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -276,7 +276,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "dashed",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -313,7 +313,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -357,7 +357,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -394,7 +394,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -438,7 +438,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -475,7 +475,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [
         "legend-5nxzhtkg"
@@ -519,7 +519,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -550,7 +550,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "note": "Draw anything — it is Excalidraw underneath, untouched. The tools live on the left rail; hide them with cmd backslash."
+          "note": "Draw anything \u2014 it is Excalidraw underneath, untouched. The tools live on the left rail; hide them with cmd backslash."
         }
       }
     },
@@ -567,7 +567,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -598,7 +598,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "note": "Select any shape and give it a kind, an intent, logic. The legend maps style to meaning — that is what agents and exports read."
+          "note": "Select any shape and give it a kind, an intent, logic. The legend maps style to meaning \u2014 that is what agents and exports read."
         }
       }
     },
@@ -615,7 +615,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -646,7 +646,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "note": "This step has a deeper layer. Click the corner chip — or select it and press the dive button — and the camera takes you down a tier.",
+          "note": "This step has a deeper layer. Click the corner chip \u2014 or select it and press the dive button \u2014 and the camera takes you down a tier.",
           "detail": {
             "frameId": "QUxEl2QtMMVyLKyFfYdW"
           }
@@ -666,7 +666,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -697,7 +697,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "note": "Connect Claude or any MCP client — Settings shows the endpoint, already listening. Agents author meaning; Docent draws it in your diagram's own style."
+          "note": "Connect Claude or any MCP client \u2014 Settings shows the endpoint, already listening. Agents author meaning; Docent draws it in your diagram's own style."
         }
       }
     },
@@ -714,7 +714,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -758,7 +758,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "dashed",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -797,7 +797,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -824,7 +824,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "note": "The overview shows tier one only — frames and what connects them."
+          "note": "The overview shows tier one only \u2014 frames and what connects them."
         }
       }
     },
@@ -841,7 +841,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -889,7 +889,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -933,7 +933,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": null,
@@ -949,7 +949,7 @@
       "locked": false,
       "customData": {
         "docent": {
-          "narrative": "Five steps and you know the app. Use the arrow keys to walk them — each stop is spoken where a voice is installed — and press Escape when you are ready to draw."
+          "narrative": "Five steps and you know the app. Use the arrow keys to walk them \u2014 each stop is spoken where a voice is installed \u2014 and press Escape when you are ready to draw."
         }
       },
       "name": "Welcome to Docent"
@@ -967,7 +967,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": null,
@@ -1001,7 +1001,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1038,7 +1038,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1075,7 +1075,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1112,7 +1112,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1149,7 +1149,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1186,7 +1186,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1223,7 +1223,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1260,7 +1260,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1297,7 +1297,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1334,7 +1334,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1415,7 +1415,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1452,7 +1452,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1511,7 +1511,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1548,7 +1548,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1607,7 +1607,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1644,7 +1644,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1703,7 +1703,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1740,7 +1740,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "JhbmW5rd4WV42x3yl6tv",
@@ -1816,7 +1816,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1875,7 +1875,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1912,7 +1912,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",
@@ -1971,7 +1971,7 @@
       "fillStyle": "solid",
       "strokeWidth": 2,
       "strokeStyle": "solid",
-      "roughness": 1,
+      "roughness": 0,
       "opacity": 100,
       "groupIds": [],
       "frameId": "QUxEl2QtMMVyLKyFfYdW",

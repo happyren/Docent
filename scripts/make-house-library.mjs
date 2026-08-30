@@ -10,7 +10,7 @@
  *   node scripts/make-house-library.mjs --check  # exits 1 if it would change
  *
  * The drawing discipline is the house's (A31): one ink `#1e1e1e`, one stroke
- * weight 2, transparent grounds, roughness 1 so Excalidraw's own hand draws
+ * weight 2, transparent grounds, roughness 0 — architect ink (D143), one pass
  * the wobble — the glyphs are clean geometry and the canvas makes them
  * hand-drawn, which is exactly how a person's shapes get their look.
  */
@@ -45,7 +45,7 @@ function base(id, type, group, extra = {}) {
     fillStyle: "solid",
     strokeWidth: WEIGHT,
     strokeStyle: "solid",
-    roughness: 1,
+    roughness: 0,
     opacity: 100,
     // One group per glyph (D132): a drag moves the drawing, never a stroke.
     groupIds: [group],

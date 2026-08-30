@@ -1124,6 +1124,46 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           noteGrow(frameSource, box);
           laidBoxes.push(box);
         }
+        // Architect ink (D143): the formatter finishes the job — every
+        // sketch-stroked member of the scope comes down to the single-pass
+        // hand, edges included. Style only, so D73's semantic changelog
+        // stays empty; the freehand pen is never among these types.
+        {
+          const INKED = new Set(["rectangle", "ellipse", "diamond", "arrow", "line"]);
+          const architect = (sourceId: string) => {
+            const el = elements.get(sourceId);
+            if (!el || !INKED.has(el.type) || !((el.look?.roughness ?? 0) > 0)) return;
+            // One patch per element: the ink rides whatever the layout
+            // already wrote for it.
+            const standing = write.patches.find((p) => p.id === sourceId);
+            if (standing) standing.style = { ...standing.style, roughness: 0 };
+            else write.patches.push({ id: sourceId, style: { roughness: 0 } });
+            touched.push(sourceId);
+          };
+          for (const n of members) {
+            architect(n.sourceId);
+            if (n.symbol) {
+              // A symbol's ink lives on its group's members, not its carrier.
+              const carrier = elements.get(n.sourceId);
+              const group = carrier?.groupIds?.[carrier.groupIds.length - 1];
+              if (group) {
+                for (const el of elements.values()) {
+                  if (el.groupIds?.includes(group)) architect(el.id);
+                }
+              }
+            }
+          }
+          for (const e of graph.edges) {
+            if (e.frameId === frameGraphId && !removed.has(e.sourceId)) architect(e.sourceId);
+          }
+          if (frameGraphId === null) {
+            // The legend's samples are furniture, not members — but they are
+            // drawn ink, and the scope that owns Layer 1 owns them too.
+            for (const el of elements.values()) {
+              if (el.docent?.legendSample) architect(el.id);
+            }
+          }
+        }
         // Tidy hugs the frame (D101): the border comes back at the members'
         // bounds plus the standard room, with no memory of the acreage a
         // write had grown — the asking includes the border. An empty frame
@@ -2047,7 +2087,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
 // simulation — the snapshot a write would produce
 // ---------------------------------------------------------------------------
 
-const LOOK_DEFAULT = { roughness: 1, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
+const LOOK_DEFAULT = { roughness: 0, roundness: 3, fontFamily: 5, fontSize: 20, textAlign: "center", startArrowhead: null, endArrowhead: "arrow", arrowType: "round" };
 
 function emptyDocent(): SnapshotElement["docent"] {
   return { detailFrameId: null, link: null, tags: [], note: null, intents: [], logic: null, narrative: null, order: null, legend: null, genre: null, scenarios: [], proposal: null, legendSample: false, refine: null, composite: {}, symbol: null };
