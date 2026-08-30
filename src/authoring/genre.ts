@@ -23,7 +23,8 @@ export type GenreId =
   | "event-flow"
   | "data-flow"
   | "lifecycle"
-  | "explainer";
+  | "explainer"
+  | "options";
 
 /** One word of a genre's vocabulary, in the terms `define_kind` speaks (D77). */
 export interface GenreKind {
@@ -133,6 +134,21 @@ export const GENRES: Readonly<Record<GenreId, GenreProfile>> = {
     guidance:
       "Lifecycle. Components are states; edges are transitions labelled with their trigger; a guard is logic on the transition. The first state you author is the entry, and every machine ends somewhere — give it at least one terminal state (kind terminal). Cycles are normal here — retries return; the router draws the return.",
   },
+  options: {
+    id: "options",
+    name: "Solution options",
+    posture: "map",
+    kinds: [
+      { kind: "question", tone: "caution", shape: "diamond" },
+      { kind: "option", tone: "neutral" },
+      { kind: "win", tone: "positive" },
+      { kind: "cost", tone: "danger" },
+      { kind: "context", tone: "inactive" },
+    ],
+    when: "choosing between candidate solutions — options, wins, and costs side by side",
+    guidance:
+      "Solution options — a decision argued on one canvas (D140). The QUESTION is a diamond standing outside the options: its label is the decision, and one edge runs to each option, labelled with what distinguishes the candidate. ONE FRAME PER OPTION, named for it; inside, the option node summarises the approach in a sentence, and its wins (green) and costs (red) link FROM it — one sentence each, edges labelled like 'gains' or 'pays'. Shared constraints and givens are context (grey), outside every frame. There is no free lunch: every option declares at least one cost, or the lint says so. An option too deep for one frame becomes a SIBLING SCENE in the decision's folder: draw it whole, record its case with define_proposal({title, against, wins, costs}), then weigh({folder}) gathers the matrix and compare({against}) flips the live canvas between the futures. Loop: draw, validate, tidy — then present the decision.",
+  },
 };
 
 /** The ids, in the order the menu says them (D91). */
@@ -143,6 +159,7 @@ export const GENRE_IDS: readonly GenreId[] = [
   "data-flow",
   "lifecycle",
   "explainer",
+  "options",
 ];
 
 const normalize = (s: string): string =>
@@ -312,6 +329,30 @@ export function genreFindings(graph: SceneGraph, profile: GenreProfile): GenreFi
             `${profile.name}: decision "${name(node)}" has an unlabelled branch — label each leaving edge with its answer`,
           );
         }
+      }
+      break;
+    }
+    case "options": {
+      // The decision's honesty (D140): every option declares a price, a
+      // decision offers a real choice, and every win or cost belongs to
+      // an option.
+      const options = graph.nodes.filter((n) => kindOf(n) === "option");
+      if (options.length === 1) {
+        say(options[0].id, `${profile.name}: one option is a conclusion wearing a question's clothes — draw the alternative, even the do-nothing one`);
+      }
+      for (const option of options) {
+        const pays = graph.edges.some((e) => e.from === option.id && kindOf(to(e)) === "cost");
+        if (!pays) {
+          say(option.id, `${profile.name}: option "${name(option)}" declares no cost — there is no free lunch, only an undeclared price`);
+        }
+      }
+      for (const node of graph.nodes) {
+        const kind = kindOf(node);
+        if (kind !== "win" && kind !== "cost") continue;
+        const held = graph.edges.some(
+          (e) => (e.from === node.id && kindOf(to(e)) === "option") || (e.to === node.id && kindOf(from(e)) === "option"),
+        );
+        if (!held) say(node.id, `${profile.name}: ${kind} "${name(node)}" belongs to no option — link it from the option that ${kind === "win" ? "gains" : "pays"} it`);
       }
       break;
     }

@@ -249,6 +249,45 @@ describe("event flow speaks command, event, read model (D88)", () => {
   });
 });
 
+describe("the options genre keeps the decision honest (D140)", () => {
+  const kinds = [
+    ["option", TONE_LOOK.neutral.fill],
+    ["win", TONE_LOOK.positive.fill],
+    ["cost", TONE_LOOK.danger.fill],
+  ] as const;
+
+  it("is quiet when every option pays and every win and cost is held", () => {
+    const scene = sceneOf([
+      carrier("options", kinds),
+      ...node("a", 0, 0, "Managed queue", TONE_LOOK.neutral.fill),
+      ...node("aw", 300, 0, "No ops burden", TONE_LOOK.positive.fill),
+      ...node("ac", 300, 200, "Vendor lock-in", TONE_LOOK.danger.fill),
+      ...node("b", 0, 400, "Self-hosted", TONE_LOOK.neutral.fill),
+      ...node("bc", 300, 400, "On-call pages", TONE_LOOK.danger.fill),
+      ...link("e1", "a", "aw", "gains"),
+      ...link("e2", "a", "ac", "pays"),
+      ...link("e3", "b", "bc", "pays"),
+    ]);
+    expect(genreSaid(scene, "Solution options:")).toEqual([]);
+  });
+
+  it("names the free lunch, the lone option, and the adrift cost", () => {
+    const scene = sceneOf([
+      carrier("options", kinds),
+      ...node("a", 0, 0, "Managed queue", TONE_LOOK.neutral.fill),
+      ...node("w", 300, 0, "No ops burden", TONE_LOOK.positive.fill),
+      ...node("c", 600, 0, "Vendor lock-in", TONE_LOOK.danger.fill),
+      ...link("e1", "a", "w", "gains"),
+    ]);
+    expect(genreSaid(scene, "Solution options:")).toEqual([
+      'Solution options: one option is a conclusion wearing a question\'s clothes — draw the alternative, even the do-nothing one',
+      'Solution options: option "Managed queue" declares no cost — there is no free lunch, only an undeclared price',
+      'Solution options: cost "Vendor lock-in" belongs to no option — link it from the option that pays it',
+    ]);
+    expect(lint(scene).findings.filter((f) => f.message.startsWith("Solution options:")).every((f) => f.level === "info")).toBe(true);
+  });
+});
+
 describe("the explainer tells one story in steps (D125)", () => {
   const kinds = [
     ["step", TONE_LOOK.neutral.fill],

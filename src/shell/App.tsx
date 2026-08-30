@@ -1107,13 +1107,28 @@ export function App() {
           }
         : null,
     authoring: {
-      saveScene: async () => {
+      saveScene: async (target) => {
         const source = portfolioSourceRef.current;
-        if (!source) throw new Error("This scene is a loose file — the person saves it; create_scene to work in the portfolio");
-        await savePortfolioScene(source.project, source.scene, prepareSceneForSave());
-        markClean(null);
-        notePortfolioSave(source.project);
-        return { ...source };
+        if (!target && !source) {
+          throw new Error(
+            "This scene is a loose file — the person saves it; create_scene to work in the portfolio, or save_scene({project, scene}) to place a copy",
+          );
+        }
+        const project = target?.project ?? source?.project;
+        if (!project) throw new Error("save_scene({scene}) on a loose file needs {project} too");
+        const scene = target?.scene ?? source!.scene;
+        await savePortfolioScene(project, scene, prepareSceneForSave());
+        if (target) {
+          // Save-as (D141): the copy becomes the open scene. Element ids
+          // persist (I6), so an option saved this way DESCENDS from its
+          // base and the lens can price the change between them.
+          fsHandleRef.current = null;
+          portfolioSourceRef.current = { project, scene };
+          syncSceneUrl({ project, scene });
+        }
+        markClean(target ? `${project}/${scene}` : null);
+        notePortfolioSave(project);
+        return { project, scene };
       },
       createScene: async (project, scene) => {
         await savePortfolioScene(project, scene, EMPTY_SCENE);
@@ -1158,7 +1173,7 @@ export function App() {
       isDirty: () => current().isDirty(),
       currentScene: () => current().currentScene(),
       authoring: {
-        saveScene: () => current().authoring!.saveScene(),
+        saveScene: (target) => current().authoring!.saveScene(target),
         createScene: (project, scene) => current().authoring!.createScene(project, scene),
         binding: (project) => current().authoring!.binding(project),
         createBranch: (project, name) => current().authoring!.createBranch(project, name),

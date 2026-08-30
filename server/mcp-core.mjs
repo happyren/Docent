@@ -31,6 +31,7 @@ const GENRE_MENU = [
   ["data-flow", "pipelines: sources to consumers, contracts on the edges"],
   ["lifecycle", "one thing's states and transitions — orders, documents, jobs"],
   ["explainer", "explaining anything that runs in order — a sequence, a concept, a plan"],
+  ["options", "choosing between candidate solutions — options, wins, and costs side by side"],
 ];
 
 /**
@@ -47,7 +48,7 @@ export const INSTRUCTIONS = [
   "Narrate with the author's own words: every entity carries legend-applied meaning (kind, mapped properties), intents, notes, logic, and frame narratives, each labeled with its provenance — prefer `declared` facts over your own paraphrase, and say when something is `inferred`.",
   "Everything is read-only: you may move the camera, highlight, pulse flows, narrate, present, and open scenes, never edit. Move in ID-space with focus (a component is framed with its neighbourhood; padding is the zoom), dive/climb, and present — there are no pixel coordinates.",
   "Narration may be SPOKEN aloud on the desktop (a voice plugin): write narration as prose to be read — short sentences, the author's words. The camera waits for the voice, not you: narrate() returns as soon as speech starts, and focus/highlight/flow/present/dive wait for the sentence in flight before they move — so ONE CALL PER STOP: focus({id, narrate:'…'}) flies there and speaks on arrival. Never spell numbers or symbols out; they are read the way an engineer says them.",
-  `GENRES: a diagram has a category, and Docent knows six — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
+  `GENRES: a diagram has a category, and Docent knows seven — ${GENRE_MENU.map(([id, when]) => `${id} (${when})`).join("; ")}. use_genre({genre}), or create_scene({project, scene, genre}), records the choice beside the legend, seeds that genre's kinds, turns on its lint and its layout posture, and answers with its full guidance — the menu is short because the recipe arrives when you order it. The loop: use_genre → draw with the seeded kinds → validate → tidy.`,
   "SCENARIOS: define_scenario({name, path, description}) names an ordered path of edges — one request's story told over the map you already drew, kept as meaning, not as a second diagram. Replay it: flow({scenario}) pulses the path with numbered step badges, script_tour({scenario}) walks and speaks it. One map carries as many scenarios as it has stories.",
   "PROPOSALS (S24): to explore a design change, create_branch and redraw — the branch IS the shadow replica. compare({against:'base'}) overlays the live canvas against what the change departs from: dashed ghosts where things were removed, green tints on additions, amber on changes, and the answer carries the counts and both craft scores. define_proposal({title, wins, costs}) records the argument beside the legend, where it exports and the outline says it. Then present: the case travels with the diagram, and merging the branch is accepting it.",
   "SCENE LINKS: dive when it is this diagram going deeper (a detail layer); link when it is another diagram's story. update({id, link:{scene, project?, at?}}) authors one — `scene` is a path list_projects answered with, `at` the component to arrive on, null clears it — and validate() checks every target still exists.",
@@ -646,8 +647,15 @@ export const TOOLS = [
   {
     name: "save_scene",
     description:
-      "Save the open scene back to the portfolio project it came from — the same save the person makes. On a bound project the checkpointer commits it to the branch; opening a pull request stays the person's.\nExample: save_scene()",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      "Save the open scene back to the portfolio project it came from — the same save the person makes. On a bound project the checkpointer commits it to the branch; opening a pull request stays the person's. With {scene} it is SAVE-AS (D141): a copy lands at that path and becomes the open scene — element ids persist, so an option saved into a decision's folder DESCENDS from its base and compare/weigh can price the change.\nExample: save_scene({scene:'billing-rework/async-mailer'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scene: { type: "string", description: "Save-as: the path the copy lands at, and the canvas rebinds to it" },
+        project: { type: "string", description: "With scene — defaults to the open project" },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "create_scene",
@@ -658,7 +666,7 @@ export const TOOLS = [
       properties: {
         project: { type: "string" },
         scene: { type: "string" },
-        genre: { type: "string", description: "architecture, request, event-flow, data-flow, or lifecycle" },
+        genre: { type: "string", description: "One of the seven genres — use_genre’s menu names them" },
       },
       required: ["project", "scene"],
       additionalProperties: false,
@@ -707,6 +715,21 @@ export const TOOLS = [
         wins: { type: "array", items: { type: "string" }, description: "What the change buys, one sentence each" },
         costs: { type: "array", items: { type: "string" }, description: "What it spends, one sentence each" },
         clear: { type: "boolean", description: "True removes the recorded case" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "weigh",
+    description:
+      "Gather a decision's sibling option scenes into the matrix (S24, D141): per option its recorded case (title, wins, costs — define_proposal), its distance from the base its case names (added/removed/changed, the compare arithmetic) and its craft score. Options live as scenes in the decision's folder; an option with no case says so loudly. weigh is the table — compare({against}) is the sight: flip the live canvas between futures.\nExample: weigh({folder:'billing-rework'})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        folder: { type: "string", description: "The decision's folder — every scene under it is an option" },
+        options: { type: "array", items: { type: "string" }, description: "Explicit option scene paths, instead of a folder" },
+        project: { type: "string", description: "Defaults to the open scene's project" },
+        against: { type: "string", description: "A common base scene path — overrides what each case names" },
       },
       additionalProperties: false,
     },

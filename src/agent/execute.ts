@@ -17,6 +17,8 @@ import { GENRE_IDS, genreOf, type GenreProfile } from "../authoring/genre";
 import type { LintFinding, Op } from "../authoring/ops";
 import type { TidyScope } from "../authoring/tidy";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
+import { compareGraphs } from "../scene/compare";
+import { craftScore } from "../authoring/score";
 import { applyLegend } from "../export/legend";
 import { exportFrameSidecar, exportScene, exportSidecar, type ExportContext } from "../export";
 import { listProjects, listScenes, loadBase, loadScene } from "../portfolio/client";
@@ -313,8 +315,12 @@ export interface AgentShellHooks {
   currentScene(): { project: string; scene: string } | null;
   /** Authoring (S19, D65): the store's own routes, never Git beyond a branch. */
   authoring?: {
-    /** Save the canvas back where it came from; rejects for a loose file. */
-    saveScene(): Promise<{ project: string; scene: string }>;
+    /**
+     * Save the canvas back where it came from — or, with a target, save a
+     * COPY there and make it the open scene (save-as, D141): ids persist,
+     * so an option saved this way descends from its base.
+     */
+    saveScene(target?: { project?: string; scene: string }): Promise<{ project: string; scene: string }>;
     /** Create an empty scene in a project and open it. */
     createScene(project: string, scene: string): Promise<void>;
     /** Where the open scene's project stands with GitHub, or null when unbound. */
@@ -853,6 +859,79 @@ export async function execute(
         next: `replay it: flow({scenario:'${name}'}) pulses the path with numbered steps, script_tour({scenario:'${name}'}) walks and speaks it`,
       };
     }
+    case "weigh": {
+      // The decision matrix (D141): sibling option scenes, gathered. Reads
+      // only — the lens (compare) stays the live half.
+      const current = shell.currentScene();
+      const project = String(params.project ?? current?.project ?? "");
+      if (!project) throw new Error("weigh needs a project — open a portfolio scene or pass {project}");
+      let optionPaths: string[];
+      if (Array.isArray(params.options) && (params.options as unknown[]).length) {
+        optionPaths = (params.options as unknown[]).map(String);
+      } else if (typeof params.folder === "string" && params.folder.trim()) {
+        const folder = String(params.folder).trim().replace(/\/+$/, "");
+        const all = await listScenes(project);
+        optionPaths = all.map((s) => s.name).filter((n) => n.startsWith(`${folder}/`));
+        if (!optionPaths.length) {
+          throw new Error(`no scenes under "${project}/${folder}" — a decision's options live as sibling scenes in its folder (D140)`);
+        }
+      } else {
+        throw new Error("weigh needs {folder} or {options: [scene paths]}");
+      }
+      // Bases resolve once each: the common one when given, else what each
+      // option's own case names (D135's against — 'base'/'saved' need the
+      // scene itself, so only a path resolves here).
+      const baseGraphs = new Map<string, SceneGraph | null>();
+      const baseFor = async (name: string | undefined): Promise<{ name: string; graph: SceneGraph } | null> => {
+        const wanted = String(params.against ?? name ?? "").trim();
+        if (!wanted || wanted === "base" || wanted === "saved") return null;
+        const [p, path] = wanted.includes("/") && wanted.split("/")[0] === project
+          ? [project, wanted.slice(project.length + 1)]
+          : [project, wanted];
+        if (!baseGraphs.has(wanted)) {
+          try {
+            baseGraphs.set(wanted, buildSceneGraph(snapshotFromSceneJSON(await loadScene(p, path))));
+          } catch {
+            baseGraphs.set(wanted, null);
+          }
+        }
+        const graph = baseGraphs.get(wanted);
+        return graph ? { name: wanted, graph } : null;
+      };
+      const options = [];
+      for (const scenePath of optionPaths) {
+        const snapshot = snapshotFromSceneJSON(await loadScene(project, scenePath));
+        const graph = buildSceneGraph(snapshot);
+        const proposal = graph.proposal;
+        const base = await baseFor(proposal?.against);
+        const counts = base ? compareGraphs(base.graph, graph).counts : null;
+        // An option that shares no ids with its base was drawn from
+        // scratch, and the diff degenerates to everything-added —
+        // loudness (I5) beats a meaningless number.
+        const size = graph.nodes.length + graph.edges.length;
+        const notes: string[] = [];
+        if (!proposal) notes.push("no case — define_proposal in that scene records its argument (D135)");
+        if (counts && size > 0 && counts.changed === 0 && counts.added >= size) {
+          notes.push(
+            "shares no ids with its base — open_scene the base and save_scene({scene}) a copy into the folder first, so the lens can price the change (I6)",
+          );
+        }
+        options.push({
+          scene: scenePath,
+          case: proposal ? { title: proposal.title, wins: proposal.wins, costs: proposal.costs } : null,
+          ...(notes.length ? { note: notes.join("; ") } : {}),
+          against: base?.name ?? proposal?.against ?? null,
+          counts,
+          craft: craftScore(snapshot, graph).score,
+        });
+      }
+      return {
+        decision: typeof params.folder === "string" ? params.folder : null,
+        options,
+        next:
+          "the matrix is the table; the lens is the sight — open_scene an option and compare({against:{project, scene}}) to flip the canvas between futures",
+      };
+    }
     case "define_proposal": {
       // The case is meaning (D135): recorded beside the legend, cleared the
       // same way.
@@ -957,8 +1036,22 @@ export async function execute(
       return { undone: commands.undoAgentEdit() };
     case "save_scene": {
       if (!shell.authoring) throw new Error("Saving is not available here");
-      const saved = await shell.authoring.saveScene();
-      return { saved, next: "the checkpointer lands it on the branch; the person opens the pull request" };
+      // Save-as (D141): a target places a copy and rebinds the canvas to
+      // it — how an option descends from its base with its ids intact.
+      const target =
+        typeof params.scene === "string" && params.scene.trim()
+          ? {
+              scene: String(params.scene).trim(),
+              ...(typeof params.project === "string" && params.project.trim() ? { project: String(params.project).trim() } : {}),
+            }
+          : undefined;
+      const saved = await shell.authoring.saveScene(target);
+      return {
+        saved,
+        next: target
+          ? "the copy is the open scene now — edit it into the option, define_proposal its case, save_scene"
+          : "the checkpointer lands it on the branch; the person opens the pull request",
+      };
     }
     case "create_scene": {
       if (!shell.authoring) throw new Error("Creating scenes is not available here");

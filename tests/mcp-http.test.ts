@@ -110,6 +110,7 @@ describe("mcp streamable http", () => {
       "update",
       "use_genre",
       "validate",
+      "weigh",
     ]);
     for (const tool of body.result.tools) {
       expect(tool.description, tool.name).toContain("Example:");
@@ -258,7 +259,7 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(39);
+    expect(tools.result.tools).toHaveLength(40);
   });
 
   it("relays tool calls, including their errors", async () => {
