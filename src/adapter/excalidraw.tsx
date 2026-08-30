@@ -1505,7 +1505,11 @@ export function makeHandle(api: ExcalidrawImperativeAPI): DocentCanvasHandle {
       const data = await loadFromBlob(blob, api.getAppState(), null);
       api.updateScene({
         elements: data.elements,
-        appState: data.appState,
+        // loadFromBlob threads the CURRENT appState's isLoading through the
+        // restore — and a scene loaded at page mount (URL params) can catch
+        // it still true from Excalidraw's own init, leaving the "Loading
+        // scene…" overlay up forever. Our load is done; say so.
+        appState: { ...data.appState, isLoading: false },
         captureUpdate: CaptureUpdateAction.NEVER,
       });
       if (data.files) {

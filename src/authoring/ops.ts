@@ -22,6 +22,7 @@ import {
   chooseSidesWithLine,
   dropCollinear,
   edgeWiggles,
+  labelAir,
   NUDGE,
   nudgeRoutes,
   type NudgeRoute,
@@ -1741,7 +1742,17 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       taken.push(choice.line);
     }
   }
-  const ports = assignPorts(jobs, endBoxes, ROUTE_PAD, chosen);
+  // The words each edge carries, known before the seats are dealt (D142):
+  // a labelled edge's seat claims its label's air in the spread, and every
+  // later port walk honours the sibling seats' claims.
+  const jobOf = new Map(jobs.map((j) => [j.id, j]));
+  const labelOf = (id: string): string | null =>
+    jobOf.get(id)?.arrow?.label ?? graph.edges.find((e) => e.sourceId === id)?.label ?? null;
+  const airOf = (id: string): number | undefined => {
+    const label = labelOf(id);
+    return label ? labelAir(edgeLabelSize(label, house.arrow.style.fontSize).height) : undefined;
+  };
+  const ports = assignPorts(jobs, endBoxes, ROUTE_PAD, chosen, airOf);
   // The whole drawn polyline of each routed edge — port, turns, port.
   const lines = new Map<string, Point[]>();
   const endsOf = new Map<string, { start: Point; end: Point }>();
@@ -1763,7 +1774,6 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       lines.set(job.id, [head, ...turns, tail]);
     }
   }
-  const jobOf = new Map(jobs.map((j) => [j.id, j]));
   // Fan legs must not cross each other (D75): the ports of a side are
   // ordered by where the other ends stand, but a routed line among straight
   // ones — or a two-way pair whose halves took different ways — can still
@@ -1876,7 +1886,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // onto a seat another edge holds, so the fans D75 spread stay spread.
   {
     const seatCoord = (side: string, at: Point) => (side === "left" || side === "right" ? at[1] : at[0]);
-    const seats = new Map<string, { id: string; which: "start" | "end"; c: number }[]>();
+    const seats = new Map<string, { id: string; which: "start" | "end"; c: number; air: number }[]>();
     for (const j of jobs) {
       const p = ports.get(j.id);
       if (!p) continue;
@@ -1886,7 +1896,9 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       ] as const) {
         const key = `${node}|${port.side}`;
         const list = seats.get(key) ?? [];
-        list.push({ id: j.id, which, c: seatCoord(port.side, port.at) });
+        // A seat carries its words (D142): its claim travels with it, and
+        // every walk below honours the sum of the two claims.
+        list.push({ id: j.id, which, c: seatCoord(port.side, port.at), air: airOf(j.id) ?? NUDGE / 2 });
         seats.set(key, list);
       }
     }
@@ -1894,12 +1906,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
       if (!endsOf.has(id)) continue;
       const job = jobOf.get(id)!;
       const port = ports.get(id)!;
+      const myAir = airOf(id) ?? NUDGE / 2;
       const seatFree = (which: "start" | "end", side: string, pos: number) => {
         const node = which === "start" ? job.from : job.to;
         const held = seats.get(`${node}|${side}`) ?? [];
-        // Half the nudge gap: two settled runs this close diverge at once,
-        // and the side's own spread (D75) already sits tighter than a nudge.
-        return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < NUDGE / 2);
+        // The sum of the two claims (D142): a walk may not converge two
+        // labelled legs below the air their words need.
+        return held.some((s) => !(s.id === id && s.which === which) && Math.abs(s.c - pos) < s.air + myAir);
       };
       // The other lines as they stand — a settled line must not tangle
       // them, and edges settled earlier are seen settled.
@@ -1941,15 +1954,13 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
   // the nudge as fixed neighbours — a scope's tidy must not lay its lines
   // onto a stranger's at a stroke's width.
   {
-    const labelOf = (id: string): string | null =>
-      jobOf.get(id)?.arrow?.label ?? graph.edges.find((e) => e.sourceId === id)?.label ?? null;
-    const airOf = (label: string | null) =>
+    const heightOf = (label: string | null) =>
       label ? { labelHeight: edgeLabelSize(label, house.arrow.style.fontSize).height } : {};
     const batch = [...lines].map(([id, points]) => ({
       id,
       points,
       obstacles: around(jobOf.get(id)!.from, jobOf.get(id)!.to),
-      ...airOf(labelOf(id)),
+      ...heightOf(labelOf(id)),
     }));
     const standing: NudgeRoute[] = [];
     for (const e of graph.edges) {
@@ -1963,7 +1974,7 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
         points: absolutePoints(el.x, el.y, el.points),
         obstacles: [],
         locked: true,
-        ...airOf(e.label),
+        ...heightOf(e.label),
       });
     }
     // Every component's outline joins the corridors as a wall (D139): a

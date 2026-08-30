@@ -975,3 +975,25 @@ describe("a passing line keeps its distance (D139)", () => {
     expect(out.has("__wall:w")).toBe(false);
   });
 });
+
+describe("a seat carries its words (D142)", () => {
+  it("spreads labelled seats to their labels' air and leaves bare sides alone", () => {
+    const source = box("src", 0, 0, 200, 72);
+    const upper = box("up", 500, -80, 200, 72);
+    const lower = box("down", 500, 120, 200, 72);
+    const nodes = new Map([source, upper, lower].map((n) => [n.id, n]));
+    const edges = [
+      { id: "e_gain", from: "src", to: "up" },
+      { id: "e_pay", from: "src", to: "down" },
+    ];
+    const bare = assignPorts(edges, nodes);
+    const bareGap = Math.abs(bare.get("e_gain")!.start.at[1] - bare.get("e_pay")!.start.at[1]);
+    // Two labelled seats claim 14 each; the span (70% of 72) holds the 28.
+    const aired = assignPorts(edges, nodes, ROUTE_PAD, undefined, () => 14);
+    const airedGap = Math.abs(aired.get("e_gain")!.start.at[1] - aired.get("e_pay")!.start.at[1]);
+    expect(airedGap).toBeGreaterThanOrEqual(28 - 0.5);
+    expect(airedGap).toBeGreaterThan(bareGap);
+    // Without claims, the legacy seats stand to the unit.
+    expect(assignPorts(edges, nodes, ROUTE_PAD, undefined, () => undefined)).toEqual(bare);
+  });
+});

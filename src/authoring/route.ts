@@ -268,6 +268,7 @@ export function assignPorts(
   nodes: ReadonlyMap<string, PortNode>,
   clearance = ROUTE_PAD,
   sides?: ReadonlyMap<string, SidePair>,
+  airOf?: (edgeId: string) => number | undefined,
 ): Map<string, PortEnds> {
   interface Slot {
     edgeId: string;
@@ -308,8 +309,40 @@ export function assignPorts(
     const side = list[0].side;
     const along = side === "top" || side === "bottom" ? node.width : node.height;
     const middle = side === "top" || side === "bottom" ? node.x + node.width / 2 : node.y + node.height / 2;
+    const positions = list.map((_, i) => middle + ((i + 1) / (list.length + 1) - 0.5) * PORT_SPAN * along);
+    if (airOf) {
+      // A seat carries its words (D142): a labelled edge's seat claims its
+      // label's air; a bare edge's claim is exactly half its even share, so
+      // a side with no labels keeps its legacy seats to the unit. Adjacent
+      // claims are honoured by the corridors' own relax, clamped to the
+      // span — where the span cannot fit the words, the seats stay short,
+      // honestly.
+      const bare = (PORT_SPAN * along) / (list.length + 1) / 2;
+      const airs = list.map((slot) => Math.max(bare, airOf(slot.edgeId) ?? 0));
+      const lo = middle - (PORT_SPAN * along) / 2;
+      const hi = middle + (PORT_SPAN * along) / 2;
+      for (let sweep = 0; sweep < 4 * list.length + 8; sweep++) {
+        let moved = false;
+        for (let k = 0; k + 1 < positions.length; k++) {
+          const need = airs[k] + airs[k + 1];
+          const deficit = need - (positions[k + 1] - positions[k]);
+          if (deficit <= 0.01) continue;
+          const a = Math.max(lo, positions[k] - deficit / 2);
+          const b = Math.min(hi, a + need > positions[k + 1] ? a + need : positions[k + 1]);
+          if (Math.abs(a - positions[k]) > 0.01) {
+            positions[k] = a;
+            moved = true;
+          }
+          if (Math.abs(b - positions[k + 1]) > 0.01) {
+            positions[k + 1] = b;
+            moved = true;
+          }
+        }
+        if (!moved) break;
+      }
+    }
     for (let i = 0; i < list.length; i++) {
-      const pos = middle + ((i + 1) / (list.length + 1) - 0.5) * PORT_SPAN * along;
+      const pos = positions[i];
       const port = portAt(node, node.shape, side, pos, clearance);
       const slot = half.get(list[i].edgeId) ?? {};
       if (list[i].which === 0) slot.start = port;
@@ -1112,6 +1145,11 @@ const SAME_LINE = 0.5;
 
 /** Breathing room between a label's edge and the next line (D138). */
 const LABEL_MARGIN = 4;
+
+/** The air a label claims around its line (D138, D142) — or a bare wire's share. */
+export function labelAir(labelHeight?: number): number {
+  return labelHeight ? labelHeight / 2 + LABEL_MARGIN : NUDGE / 2;
+}
 /** How close two runs must sit before they count as one corridor (D138). */
 const CORRIDOR = 32;
 
