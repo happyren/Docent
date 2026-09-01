@@ -52,6 +52,12 @@ export interface GraphNode {
    * component drawn as a shape.
    */
   symbol: string | null;
+  /**
+   * Source ids of the drawings that decorate this component (D144): a
+   * label-less, symbol-less composite sitting wholly inside this box is
+   * an ornament, not a component — it travels with its host.
+   */
+  ornaments: string[];
   bounds: { x: number; y: number; width: number; height: number };
   style: {
     strokeColor: string;
@@ -393,6 +399,37 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
       !isLegendCarrier(el) &&
       !compositeOf.has(el.id),
   );
+  // An icon in a box is the box's ornament (D144): a label-less,
+  // symbol-less composite whose whole extent sits inside exactly one
+  // component's box decorates that component — it takes no slot of its
+  // own, its members resolve to the host, and it travels with it.
+  const ornamentHost = new Map<string, SnapshotElement>();
+  for (const [groupId, { members }] of compositeGroups) {
+    const owned = members.filter((m) => compositeOf.get(m.id) === groupId);
+    if (!owned.length) continue;
+    if (owned.some((m) => m.docent.symbol !== null)) continue;
+    if (owned.some((m) => labelFor(m, byId) !== null)) continue;
+    const extent = unionBounds(owned);
+    const hosts = plainNodeElements.filter((host) => {
+      const box = boundsOf(host);
+      return (
+        extent.x >= box.x - 2 &&
+        extent.y >= box.y - 2 &&
+        extent.x + extent.width <= box.x + box.width + 2 &&
+        extent.y + extent.height <= box.y + box.height + 2
+      );
+    });
+    if (hosts.length !== 1) continue;
+    ornamentHost.set(groupId, hosts[0]);
+    representativeOf.delete(groupId);
+  }
+  const ornamentsOf = new Map<string, string[]>();
+  for (const [groupId, host] of ornamentHost) {
+    const owned = (compositeGroups.get(groupId)?.members ?? []).filter((m) => compositeOf.get(m.id) === groupId);
+    const list = ornamentsOf.get(host.id) ?? [];
+    list.push(...owned.map((m) => m.id).sort());
+    ornamentsOf.set(host.id, list);
+  }
   const representatives = [...representativeOf.values()];
   const nodeElements = [...plainNodeElements, ...representatives];
 
@@ -410,6 +447,9 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
   for (const [memberId, groupId] of compositeOf) {
     const rep = representativeOf.get(groupId);
     if (rep) graphId.set(memberId, graphId.get(rep.id)!);
+    // An ornament's members resolve to the box they decorate (D144).
+    const host = ornamentHost.get(groupId);
+    if (host) graphId.set(memberId, graphId.get(host.id)!);
   }
 
   const frames: GraphFrame[] = frameElements
@@ -466,6 +506,7 @@ export function buildSceneGraph(snapshot: SceneSnapshot): SceneGraph {
           ? { members: parts.length, provenance: composite.provenance }
           : null,
         symbol,
+        ornaments: ornamentsOf.get(el.id) ?? [],
         bounds: composite ? unionBounds(parts) : boundsOf(el),
         style: styleOf(el),
       };

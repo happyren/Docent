@@ -1094,17 +1094,30 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           relaid.add(n.sourceId);
           const box = boxes.get(n.id);
           if (!box) continue;
-          if (n.symbol) {
-            // A symbol keeps the size the library drew it at (D85): it takes
+          if (n.symbol || n.composite) {
+            // A drawing keeps the size it was drawn at (D85, D144): it takes
             // the place the layout gives it, centred in a row that may be
-            // taller. The patch names its carrier, and the whole group —
-            // the icon's elements and the label — goes with it (D83).
+            // taller — and it travels WHOLE. A symbol's patch names its
+            // carrier and the adapter walks the group (D83); a symbol-less
+            // composite has no carrier the adapter knows, so every member
+            // is stepped by the same delta here.
             const carrier = elements.get(n.sourceId);
             const dx = box.x + Math.round((box.width - n.bounds.width) / 2) - n.bounds.x;
             const dy = box.y + Math.round((box.height - n.bounds.height) / 2) - n.bounds.y;
             if (carrier && (dx !== 0 || dy !== 0)) {
-              write.patches.push({ id: n.sourceId, x: carrier.x + dx, y: carrier.y + dy });
-              touched.push(n.sourceId);
+              if (n.symbol) {
+                write.patches.push({ id: n.sourceId, x: carrier.x + dx, y: carrier.y + dy });
+                touched.push(n.sourceId);
+              } else {
+                const outer = carrier.groupIds?.[carrier.groupIds.length - 1];
+                const travellers = outer
+                  ? [...elements.values()].filter((el) => el.groupIds?.includes(outer))
+                  : [carrier];
+                for (const m of travellers) {
+                  write.patches.push({ id: m.id, x: m.x + dx, y: m.y + dy });
+                  touched.push(m.id);
+                }
+              }
             }
             const kept = { x: n.bounds.x + dx, y: n.bounds.y + dy, width: n.bounds.width, height: n.bounds.height };
             noteGrow(frameSource, kept);
@@ -1120,6 +1133,18 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
             }
             write.patches.push(patch);
             touched.push(n.sourceId);
+            // The ornaments ride along (D144): each keeps its place from the
+            // host's top-left corner.
+            const odx = box.x - n.bounds.x;
+            const ody = box.y - n.bounds.y;
+            if (odx !== 0 || ody !== 0) {
+              for (const id of n.ornaments) {
+                const m = elements.get(id);
+                if (!m) continue;
+                write.patches.push({ id, x: m.x + odx, y: m.y + ody });
+                touched.push(id);
+              }
+            }
           }
           noteGrow(frameSource, box);
           laidBoxes.push(box);
@@ -1142,8 +1167,8 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
           };
           for (const n of members) {
             architect(n.sourceId);
-            if (n.symbol) {
-              // A symbol's ink lives on its group's members, not its carrier.
+            if (n.symbol || n.composite) {
+              // A drawing's ink lives on its group's members, not its carrier.
               const carrier = elements.get(n.sourceId);
               const group = carrier?.groupIds?.[carrier.groupIds.length - 1];
               if (group) {
@@ -1152,6 +1177,8 @@ export function plan(ops: readonly Op[], snapshot: SceneSnapshot, nextId: () => 
                 }
               }
             }
+            // Ornaments are drawn ink too (D144, D143).
+            for (const id of n.ornaments) architect(id);
           }
           for (const e of graph.edges) {
             if (e.frameId === frameGraphId && !removed.has(e.sourceId)) architect(e.sourceId);

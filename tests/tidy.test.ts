@@ -419,3 +419,68 @@ describe("tidy draws in architect ink (D143)", () => {
     expect(describeMeaningChange(handDrawn, after).changelog).toBe("");
   });
 });
+
+describe("a drawing travels whole, an icon in a box is an ornament (D144)", () => {
+  const dbase = {
+    angle: 0, strokeColor: "#1e1e1e", backgroundColor: "transparent", strokeStyle: "solid",
+    fillStyle: "solid", strokeWidth: 2, roughness: 0, roundness: { type: 3 }, opacity: 100,
+    groupIds: [], frameId: "F", isDeleted: false, locked: false, boundElements: [],
+  };
+  const wrapped = snapshotFromRawElements([
+    { ...dbase, id: "F", type: "frame", name: "Core", frameId: null, x: 0, y: 0, width: 900, height: 400 },
+    { ...dbase, id: "wrap", type: "rectangle", x: 500, y: 100, width: 120, height: 120,
+      boundElements: [{ id: "wrap_t", type: "text" }], customData: { docent: { intents: ["buffers raw ticks"] } } },
+    { ...dbase, id: "wrap_t", type: "text", x: 510, y: 180, width: 100, height: 20, text: "Ingest SQS", containerId: "wrap", fontFamily: 5, fontSize: 16 },
+    { ...dbase, id: "ic1", type: "rectangle", x: 530, y: 115, width: 60, height: 45, groupIds: ["gAWS"], backgroundColor: "#e195a0" },
+    { ...dbase, id: "ic2", type: "line", x: 540, y: 125, width: 40, height: 25, groupIds: ["gAWS"], points: [[0, 0], [40, 25]] },
+    { ...dbase, id: "svc", type: "rectangle", x: 100, y: 100, width: 200, height: 80,
+      boundElements: [{ id: "svc_t", type: "text" }, { id: "e1", type: "arrow" }] },
+    { ...dbase, id: "svc_t", type: "text", x: 110, y: 130, width: 180, height: 20, text: "A very long service label here", containerId: "svc", fontFamily: 5, fontSize: 20 },
+    { ...dbase, id: "e1", type: "arrow", x: 300, y: 140, width: 200, height: 20, roundness: { type: 2 },
+      points: [[0, 0], [200, 20]], startBinding: { elementId: "svc" }, endBinding: { elementId: "ic1" }, endArrowhead: "arrow" },
+  ] as never);
+
+  it("adopts the contained icon as the box's ornament, and binds its arrows to the host", () => {
+    const g = buildSceneGraph(wrapped);
+    expect(g.nodes.map((n) => n.sourceId).sort()).toEqual(["svc", "wrap"]);
+    expect(g.nodes.find((n) => n.sourceId === "wrap")!.ornaments).toEqual(["ic1", "ic2"]);
+    // The arrow was drawn INTO the icon; it reads as an edge to the box.
+    const e = g.edges.find((x) => x.sourceId === "e1")!;
+    expect(g.nodes.find((n) => n.id === e.to)!.sourceId).toBe("wrap");
+  });
+
+  it("moves the ornament with its host under tidy, member for member", () => {
+    const r = plan(tidyOps(wrapped, { frame: "F" }), wrapped, idSource(60));
+    const after = simulate(wrapped, r.write);
+    const at = (id: string) => {
+      const el = after.elements.find((e) => e.id === id)!;
+      return { x: el.x, y: el.y };
+    };
+    const dwrap = { x: at("wrap").x - 500, y: at("wrap").y - 100 };
+    expect({ x: at("ic1").x - 530, y: at("ic1").y - 115 }).toEqual(dwrap);
+    expect({ x: at("ic2").x - 540, y: at("ic2").y - 125 }).toEqual(dwrap);
+  });
+
+  it("steps a free-standing composite whole and never resizes it to a sibling's share", () => {
+    const free = snapshotFromRawElements([
+      { ...dbase, id: "F", type: "frame", name: "Core", frameId: null, x: 0, y: 0, width: 900, height: 400 },
+      { ...dbase, id: "ic1", type: "rectangle", x: 530, y: 115, width: 60, height: 45, groupIds: ["gAWS"], backgroundColor: "#e195a0" },
+      { ...dbase, id: "ic2", type: "line", x: 540, y: 125, width: 40, height: 25, groupIds: ["gAWS"], points: [[0, 0], [40, 25]] },
+      { ...dbase, id: "svc", type: "rectangle", x: 100, y: 100, width: 360, height: 120,
+        boundElements: [{ id: "svc_t", type: "text" }, { id: "e1", type: "arrow" }] },
+      { ...dbase, id: "svc_t", type: "text", x: 110, y: 130, width: 340, height: 20, text: "A very long service label here", containerId: "svc", fontFamily: 5, fontSize: 20 },
+      { ...dbase, id: "e1", type: "arrow", x: 460, y: 140, width: 70, height: 0, roundness: { type: 2 },
+        points: [[0, 0], [70, 0]], startBinding: { elementId: "svc" }, endBinding: { elementId: "ic1" }, endArrowhead: "arrow" },
+    ] as never);
+    const r = plan(tidyOps(free, { frame: "F" }), free, idSource(61));
+    const after = simulate(free, r.write);
+    const one = after.elements.find((e) => e.id === "ic1")!;
+    const two = after.elements.find((e) => e.id === "ic2")!;
+    // Whole travel: the two members keep their 10,10 offset exactly.
+    expect(two.x - one.x).toBe(10);
+    expect(two.y - one.y).toBe(10);
+    // Kept size: no sibling's shared width lands on a drawing.
+    expect(one.width).toBe(60);
+    expect(one.height).toBe(45);
+  });
+});
