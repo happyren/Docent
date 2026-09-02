@@ -992,11 +992,16 @@ fn a_link_refuses_what_it_must() {
     let repo = repo_dir("docent-repo-refuse");
     let root_json = serde_json::to_string(&repo.to_string_lossy().into_owned()).unwrap();
 
-    // A directory that does not exist.
+    // A directory that does not exist — an absolute path on every platform
+    // (the Windows train lesson: a path is only absolute with its drive).
+    let ghost = std::env::temp_dir().join(unique_name("docent-ghost"));
     let missing = put(
         port,
         "/api/projects/ghost/link",
-        Some(r#"{"root":"/no/such/dir/docent-test"}"#),
+        Some(&format!(
+            r#"{{"root":{}}}"#,
+            serde_json::to_string(&ghost.to_string_lossy().into_owned()).unwrap()
+        )),
     );
     assert_eq!(missing.status, 400);
     assert!(missing.body.contains("not a directory"), "{}", missing.body);
