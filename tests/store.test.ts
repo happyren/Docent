@@ -63,6 +63,21 @@ afterAll(async () => {
 });
 
 describe("portfolio store", () => {
+  it("refuses link routes loudly — linked projects are the desktop's (S25, D146)", async () => {
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      const res = await fetch(`${BASE}/api/projects/myrepo/link`, {
+        method,
+        ...(method === "PUT"
+          ? { headers: { "content-type": "application/json" }, body: JSON.stringify({ root: "/tmp/x" }) }
+          : {}),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toContain("desktop capability");
+    }
+  });
+
+
   it("reports health", async () => {
     const res = await fetch(`${BASE}/api/health`);
     expect(await res.json()).toEqual({ ok: true });

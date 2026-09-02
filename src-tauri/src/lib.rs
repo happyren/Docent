@@ -231,6 +231,15 @@ impl NativeDialog {
 }
 
 impl store::Dialogs for NativeDialog {
+    fn pick_directory(&self) -> Option<PathBuf> {
+        self.on_main(|| {
+            rfd::FileDialog::new()
+                .set_title("Link a Code Repository")
+                .pick_folder()
+        })
+        .flatten()
+    }
+
     fn pick_open(&self) -> Option<PathBuf> {
         self.on_main(|| {
             rfd::FileDialog::new()

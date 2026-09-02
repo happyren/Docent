@@ -56,6 +56,21 @@ export async function importSceneFile(): Promise<ImportedSceneFile | null> {
   return { name: result.name ?? "", content: result.content };
 }
 
+/**
+ * Raise the folder picker and link a project to the chosen directory (S25,
+ * D146): the picked directory is the diagram directory, and the project takes
+ * the folder's name. Null when cancelled.
+ */
+export async function linkProjectFolder(): Promise<{ project: string; root: string } | null> {
+  const result = await postToShell<{ project?: string; root?: string; canceled?: boolean }>(
+    "/desktop/link-project",
+  );
+  if (result.canceled || typeof result.project !== "string" || typeof result.root !== "string") {
+    return null;
+  }
+  return { project: result.project, root: result.root };
+}
+
 /** Raise the save dialog and write `content`. False when cancelled. */
 export async function exportSceneFile(
   name: string,

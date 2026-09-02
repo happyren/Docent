@@ -95,8 +95,14 @@ import {
   reviewProject,
   type PushedReview,
 } from "../review/session";
+import { linkProjectFolder } from "./desktop-files";
 import { snapshotFromSceneJSON } from "../adapter/snapshot";
 import { describeMeaningChange } from "../scene/diff";
+
+/** The desktop shell announces itself before the page loads (S13). */
+const isDesktopShell = Boolean(
+  (window as { __DOCENT_DESKTOP__?: boolean }).__DOCENT_DESKTOP__,
+);
 import { alertDialog, confirmDialog } from "./dialogs";
 import { ReviewPanel, type ReviewJump } from "./ReviewPanel";
 import { portfolioThumbnail } from "./sceneThumbnails";
@@ -1450,11 +1456,24 @@ export function PortfolioModal({
       setSelected(id);
     });
 
-  const removeProject = (id: string, count: number, bound?: boolean) => {
+  // Link a code repo (S25, D146): the native folder picker names the
+  // directory, the folder names the project, and the person's own git
+  // carries what Docent saves there.
+  const linkRepo = () =>
+    run(async () => {
+      const linked = await linkProjectFolder();
+      if (!linked) return;
+      await refreshProjects();
+      setSelected(linked.project);
+    });
+
+  const removeProject = (id: string, count: number, bound?: boolean, linked?: string) => {
     // A bound project's scenes are in someone's repository, and deleting a
     // project here must never reach into it — so the confirmation says exactly
     // what goes and what stays.
-    const question = bound
+    const question = linked
+      ? `Unlink "${id}"?\n\nThe files stay where they are (${linked}) — only the link is forgotten.`
+      : bound
       ? `Delete project "${id}"?\n\nIts GitHub connection and its local folder go. ` +
         "Nothing is deleted on GitHub."
       : `Delete project "${id}"${
@@ -1828,16 +1847,24 @@ export function PortfolioModal({
                         read-only
                       </span>
                     )}
+                    {p.linked && (
+                      <span
+                        className="docent-portfolio-readonly"
+                        title={`Lives at ${p.linked} — your own git carries it (S25)`}
+                      >
+                        linked
+                      </span>
+                    )}
                     <span className="docent-portfolio-meta">
                       {p.scenes} scene{p.scenes === 1 ? "" : "s"}
                     </span>
                     <button
                       className="docent-portfolio-delete"
-                      title="Delete project"
+                      title={p.linked ? "Unlink project — the files stay" : "Delete project"}
                       disabled={busy}
                       onClick={(e) => {
                         e.stopPropagation();
-                        removeProject(p.id, p.scenes, p.bound);
+                        removeProject(p.id, p.scenes, p.bound, p.linked);
                       }}
                     >
                       ✕
@@ -1856,6 +1883,15 @@ export function PortfolioModal({
                 <button disabled={busy || !newProject.trim()} onClick={() => void addProject()}>
                   Add
                 </button>
+                {isDesktopShell && (
+                  <button
+                    disabled={busy}
+                    title="Link a folder in a code repo — scenes save there as plain files, and your own git carries them"
+                    onClick={() => void linkRepo()}
+                  >
+                    Link repo…
+                  </button>
+                )}
               </div>
             </aside>
             <section className="docent-portfolio-scenes">

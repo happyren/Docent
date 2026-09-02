@@ -1714,6 +1714,17 @@ async function handle(req, res) {
     }
   }
 
+  // Link routes (S25, D146): a linked project lives on the PERSON'S disk,
+  // which a deployed store cannot and must not roam — the refusal is the
+  // contract, spoken the same for every verb.
+  if (parts.length === 4 && parts[3] === "link") {
+    checkName(parts[2], "project");
+    throw new HttpError(
+      400,
+      "linked projects are a desktop capability — this store cannot reach your disk",
+    );
+  }
+
   // Binding routes (S14). Every one of them validates the project name first,
   // so a malformed name never reaches the bindings file either.
   if (parts.length === 4 && parts[3] === "binding") {

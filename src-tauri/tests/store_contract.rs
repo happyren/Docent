@@ -922,3 +922,142 @@ fn entries(dir: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
+// ---------------------------------------------------------------------------
+// linked projects (S25, D145-D147)
+// ---------------------------------------------------------------------------
+
+/// A directory playing the part of the person's code repo: outside the
+/// portfolio, cleaned up with the test.
+fn repo_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(unique_name(name));
+    fs::create_dir_all(&dir).expect("repo dir");
+    dir
+}
+
+#[test]
+fn linked_project_lives_with_its_code() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    let repo = repo_dir("docent-repo");
+    let root = repo.to_string_lossy().into_owned();
+
+    // Link, read the link back, and see the project in the listing.
+    let linked = put(
+        port,
+        "/api/projects/myrepo/link",
+        Some(&format!(r#"{{"root":{}}}"#, serde_json::to_string(&root).unwrap())),
+    );
+    assert_eq!(linked.status, 201, "{}", linked.body);
+    let told = get(port, "/api/projects/myrepo/link");
+    assert_eq!(told.status, 200);
+    assert!(told.body.contains("root"), "{}", told.body);
+    let listing = get(port, "/api/projects");
+    assert!(listing.body.contains(r#""id":"myrepo""#), "{}", listing.body);
+    assert!(listing.body.contains(r#""linked":"#), "{}", listing.body);
+
+    // Scenes flow through the one resolution door (D145): the file lands in
+    // the repo, nested per D92, and reads back through the same routes.
+    let saved = put(
+        port,
+        "/api/projects/myrepo/scenes/docs%2Farchitecture",
+        Some(SCENE),
+    );
+    assert_eq!(saved.status, 200, "{}", saved.body);
+    assert!(
+        repo.join("docs").join("architecture.excalidraw").is_file(),
+        "scene lands where the code lives"
+    );
+    let read = get(port, "/api/projects/myrepo/scenes/docs%2Farchitecture");
+    assert_eq!(read.status, 200);
+
+    // Deleting a linked project IS unlinking it (D145): the entry goes, the
+    // person's files do not.
+    let gone = delete(port, "/api/projects/myrepo");
+    assert_eq!(gone.status, 200);
+    assert!(gone.body.contains("unlinked"), "{}", gone.body);
+    assert!(
+        repo.join("docs").join("architecture.excalidraw").is_file(),
+        "unlink touches nothing"
+    );
+    assert_eq!(get(port, "/api/projects/myrepo/link").status, 404);
+
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_link_refuses_what_it_must() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    let repo = repo_dir("docent-repo-refuse");
+    let root_json = serde_json::to_string(&repo.to_string_lossy().into_owned()).unwrap();
+
+    // A directory that does not exist.
+    let missing = put(
+        port,
+        "/api/projects/ghost/link",
+        Some(r#"{"root":"/no/such/dir/docent-test"}"#),
+    );
+    assert_eq!(missing.status, 400);
+    assert!(missing.body.contains("not a directory"), "{}", missing.body);
+
+    // A relative path.
+    let relative = put(port, "/api/projects/rel/link", Some(r#"{"root":"docs"}"#));
+    assert_eq!(relative.status, 400);
+    assert!(relative.body.contains("absolute"), "{}", relative.body);
+
+    // Inside the portfolio: no aliasing (D145).
+    let inside = fixture.data_dir().join("plain");
+    fs::create_dir_all(&inside).unwrap();
+    let aliased = put(
+        port,
+        "/api/projects/alias/link",
+        Some(&format!(
+            r#"{{"root":{}}}"#,
+            serde_json::to_string(&inside.to_string_lossy().into_owned()).unwrap()
+        )),
+    );
+    assert_eq!(aliased.status, 400);
+    assert!(aliased.body.contains("inside the portfolio"), "{}", aliased.body);
+
+    // A name that already is a portfolio project.
+    let collided = put(port, "/api/projects/plain/link", Some(&format!(r#"{{"root":{root_json}}}"#)));
+    assert_eq!(collided.status, 400);
+    assert!(collided.body.contains("already a portfolio project"), "{}", collided.body);
+
+    // A linked project refuses a GitHub binding, loudly (D147).
+    assert_eq!(
+        put(port, "/api/projects/myrepo2/link", Some(&format!(r#"{{"root":{root_json}}}"#))).status,
+        201
+    );
+    let bound = put(
+        port,
+        "/api/projects/myrepo2/binding",
+        Some(r#"{"owner":"o","repo":"r","branch":"main","token":"t"}"#),
+    );
+    assert_eq!(bound.status, 400, "{}", bound.body);
+    assert!(bound.body.contains("git stays your own"), "{}", bound.body);
+
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn the_person_links_through_the_folder_picker() {
+    let repo = repo_dir("MyService");
+    // The stub answers the picker with the repo the person "chose".
+    let fixture = Fixture::with_dialog(&repo.to_string_lossy());
+    let port = fixture.port();
+
+    let linked = post(port, "/desktop/link-project", None);
+    assert_eq!(linked.status, 201, "{}", linked.body);
+    // The project takes the folder's name (D146).
+    assert!(linked.body.contains(r#""project":"MyService"#), "{}", linked.body);
+
+    // Cancelling answers like every other dialog route.
+    let cancelled = Fixture::new();
+    let answer = post(cancelled.port(), "/desktop/link-project", None);
+    assert_eq!(answer.status, 200);
+    assert!(answer.body.contains("canceled"), "{}", answer.body);
+
+    let _ = fs::remove_dir_all(&repo);
+}

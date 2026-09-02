@@ -76,6 +76,10 @@ const DIALOG_TITLE: &str = "Docent";
 pub trait Dialogs: Send + Sync + 'static {
     /// The open dialog. `None` is a cancelled dialog, not a failure.
     fn pick_open(&self) -> Option<PathBuf>;
+
+    /// A native folder picker (S25, D146): the person chooses the directory a
+    /// linked project lives at. `None` when they cancel.
+    fn pick_directory(&self) -> Option<PathBuf>;
     /// The save dialog, seeded with `suggested_name`.
     fn pick_save(&self, suggested_name: &str) -> Option<PathBuf>;
     /// A question with two answers. `true` is the affirmative, exactly as
@@ -165,6 +169,10 @@ impl StubDialog {
 }
 
 impl Dialogs for StubDialog {
+    fn pick_directory(&self) -> Option<PathBuf> {
+        self.answer()
+    }
+
     fn pick_open(&self) -> Option<PathBuf> {
         self.answer()
     }
@@ -393,6 +401,9 @@ fn dispatch(
         }
         return match part(1) {
             Some("import") if segments.len() == 2 => import_file(dialogs),
+            Some("link-project") if segments.len() == 2 => {
+                link_project_dialog(context, dialogs, request)
+            }
             Some("export") if segments.len() == 2 => export_file(dialogs, request),
             Some("confirm") if segments.len() == 2 => ask(dialogs, request, AskKind::Confirm),
             Some("alert") if segments.len() == 2 => ask(dialogs, request, AskKind::Alert),
@@ -426,6 +437,15 @@ fn dispatch(
             ));
         }
         if method == Method::Delete {
+            check_name(project, "project")?;
+            // A linked project's delete IS its unlink (D145): the entry is
+            // forgotten and not one file is touched — the repo is the
+            // person's.
+            let mut links = load_links(data_dir);
+            if links.remove(project.as_str()).is_some() {
+                save_links(data_dir, &links)?;
+                return Ok(Reply::ok(r#"{"ok":true,"unlinked":true}"#));
+            }
             let dir = project_dir(data_dir, project)?;
             // Deleting a bound project unbinds it and removes the working copy
             // and its sync state. Nothing on GitHub is touched — the
@@ -441,6 +461,38 @@ fn dispatch(
             }
             return Ok(Reply::ok(r#"{"ok":true}"#));
         }
+    }
+
+    // Link routes (S25, D145): where a linked project lives, told and
+    // forgotten. Forgetting is idempotent, like unbinding.
+    if segments.len() == 4 && part(3) == Some("link") {
+        let project = &segments[2];
+        check_name(project, "project")?;
+        if method == Method::Get {
+            let links = load_links(data_dir);
+            let root = links.get(project.as_str()).ok_or_else(|| {
+                HttpError::new(404, format!("no link for project: {project}"))
+            })?;
+            return Ok(Reply::ok(
+                serde_json::json!({ "root": root.to_string_lossy() }).to_string(),
+            ));
+        }
+        if method == Method::Put {
+            let body = read_body(request)?;
+            let value = object_body(&body, "link")?;
+            let root = value.get("root").and_then(|value| value.as_str()).ok_or_else(|| {
+                HttpError::new(400, "link needs {root}: an absolute directory path")
+            })?;
+            return link_project(context, project, Path::new(root));
+        }
+        if method == Method::Delete {
+            let mut links = load_links(data_dir);
+            if links.remove(project.as_str()).is_some() {
+                save_links(data_dir, &links)?;
+            }
+            return Ok(Reply::ok(r#"{"ok":true}"#));
+        }
+        return Err(HttpError::new(404, "not found"));
     }
 
     // Binding routes (S14). Every one of them validates the project name
@@ -800,6 +852,14 @@ struct PullRequestAnswer {
 }
 
 fn put_binding(context: &Context, project: &str, body: &str) -> Result<Reply> {
+    // A linked project's git stays the person's (D147): one identity per
+    // project, told loudly at the door.
+    if load_links(context.data_dir.as_path()).contains_key(project) {
+        return Err(HttpError::new(
+            400,
+            format!("\"{project}\" is linked to a folder — a linked project's git stays your own; unlink it first"),
+        ));
+    }
     let input: serde_json::Value =
         serde_json::from_str(body).map_err(|_| HttpError::new(400, "body is not JSON"))?;
     let mut binding = github::normalize_binding(&input)?;
@@ -1153,8 +1213,125 @@ fn check_name(name: &str, what: &str) -> Result<()> {
     ))
 }
 
+// ---------------------------------------------------------------------------
+// linked projects (S25, D145)
+// ---------------------------------------------------------------------------
+
+fn links_file(data_dir: &Path) -> PathBuf {
+    data_dir.join(".docent").join("links.json")
+}
+
+/// The portfolio's memory of which projects live with their code (D145):
+/// project name -> the absolute directory the person picked. Read fresh per
+/// request, like everything else this store knows.
+fn load_links(data_dir: &Path) -> std::collections::BTreeMap<String, PathBuf> {
+    let Ok(text) = fs::read_to_string(links_file(data_dir)) else {
+        return std::collections::BTreeMap::new();
+    };
+    serde_json::from_str::<std::collections::BTreeMap<String, String>>(&text)
+        .map(|map| map.into_iter().map(|(name, root)| (name, PathBuf::from(root))).collect())
+        .unwrap_or_default()
+}
+
+fn save_links(data_dir: &Path, links: &std::collections::BTreeMap<String, PathBuf>) -> Result<()> {
+    let file = links_file(data_dir);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(internal)?;
+    }
+    let map: std::collections::BTreeMap<&String, String> = links
+        .iter()
+        .map(|(name, root)| (name, root.to_string_lossy().into_owned()))
+        .collect();
+    fs::write(&file, serde_json::to_string_pretty(&map).map_err(json)?).map_err(internal)
+}
+
+/// The one gate a link passes (D145): an absolute directory that exists, not
+/// inside the portfolio (no aliasing), a name that is neither a portfolio
+/// project nor a bound one — one identity per project, and git stays the
+/// person's (D147).
+fn link_project(context: &Context, project: &str, root: &Path) -> Result<Reply> {
+    let data_dir = context.data_dir.as_path();
+    check_name(project, "project")?;
+    if !root.is_absolute() {
+        return Err(HttpError::new(400, "link needs {root}: an absolute directory path"));
+    }
+    if !root.is_dir() {
+        return Err(HttpError::new(400, format!("not a directory: {}", root.display())));
+    }
+    let canonical = root.canonicalize().map_err(internal)?;
+    if let Ok(portfolio) = data_dir.canonicalize() {
+        if canonical.starts_with(&portfolio) {
+            return Err(HttpError::new(
+                400,
+                "that directory is inside the portfolio — a link points where the code lives",
+            ));
+        }
+    }
+    if data_dir.join(project).is_dir() {
+        return Err(HttpError::new(
+            400,
+            format!("\"{project}\" is already a portfolio project — pick another name"),
+        ));
+    }
+    if github::load_bindings(data_dir).contains_key(project) {
+        return Err(HttpError::new(
+            400,
+            format!("\"{project}\" is bound to GitHub — a linked project's git stays your own; unbind it first"),
+        ));
+    }
+    let mut links = load_links(data_dir);
+    links.insert(project.to_string(), canonical.clone());
+    save_links(data_dir, &links)?;
+    Ok(Reply::new(
+        201,
+        serde_json::json!({ "project": project, "root": canonical.to_string_lossy() }).to_string(),
+    ))
+}
+
+/// The person picks the directory (D146): a native folder dialog; the picked
+/// directory IS the diagram directory, and the project takes the folder's
+/// name unless the body names one. Cancelling answers like the other dialog
+/// routes do.
+fn link_project_dialog(
+    context: &Context,
+    dialogs: &dyn Dialogs,
+    request: &mut Request,
+) -> Result<Reply> {
+    let body = read_body(request)?;
+    let named = if body.trim().is_empty() {
+        None
+    } else {
+        object_body(&body, "link")?
+            .get("project")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let Some(root) = dialogs.pick_directory() else {
+        return Ok(Reply::ok(r#"{"canceled":true}"#));
+    };
+    let project = match named {
+        Some(name) => name,
+        None => root
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    if !valid_name(&project) {
+        return Err(HttpError::new(
+            400,
+            format!("the folder's name \"{project}\" is not a valid project name — rename it or pass {{project}}"),
+        ));
+    }
+    link_project(context, &project, &root)
+}
+
 fn project_dir(data_dir: &Path, project: &str) -> Result<PathBuf> {
     check_name(project, "project")?;
+    // A linked project lives with its code (S25): the registry is the one
+    // detour, taken here so every scene route follows without change (D145).
+    if let Some(root) = load_links(data_dir).remove(project) {
+        return Ok(root);
+    }
     Ok(data_dir.join(project))
 }
 
@@ -1252,6 +1429,9 @@ struct ProjectInfo {
     /// byte-identical to what this store answered before bindings existed.
     #[serde(skip_serializing_if = "is_false")]
     bound: bool,
+    /// Present only on linked projects (S25): the directory they live at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    linked: Option<String>,
     /// What the last bind-time probe learned, when it learned anything — the
     /// modal marks a read-only project from this rather than asking for every
     /// project's binding, and it is still not a network call because it comes
@@ -1277,6 +1457,7 @@ fn list_projects(context: &Context) -> Result<Reply> {
     // Created on demand so a fresh profile lists empty instead of erroring.
     fs::create_dir_all(data_dir).map_err(internal)?;
     let bindings = github::load_bindings(data_dir);
+    let links = load_links(data_dir);
     let mut projects = Vec::new();
     for entry in fs::read_dir(data_dir).map_err(internal)? {
         let entry = entry.map_err(internal)?;
@@ -1286,6 +1467,11 @@ fn list_projects(context: &Context) -> Result<Reply> {
         let id = entry.file_name().to_string_lossy().into_owned();
         // The bindings dotfile's own directory is not a project (D27).
         if id.starts_with('.') {
+            continue;
+        }
+        // A hand-made directory shadowed by a link is not listed twice; the
+        // resolution door prefers the link, so the listing does too (D145).
+        if links.contains_key(&id) {
             continue;
         }
         // A bound project counts its working copy exactly like any other
@@ -1304,7 +1490,23 @@ fn list_projects(context: &Context) -> Result<Reply> {
             scenes,
             updated_at: updated_at.map(iso8601),
             bound: binding.is_some(),
+            linked: None,
             can_write: binding.and_then(|binding| binding.can_write),
+        });
+    }
+    // Linked projects count their scenes where they live (S25) — the same
+    // recursive read, on the directory the person picked.
+    for (id, root) in &links {
+        let mut scenes = 0_usize;
+        let mut updated_at: Option<u128> = None;
+        count_scenes(root, 0, &mut scenes, &mut updated_at);
+        projects.push(ProjectInfo {
+            id: id.clone(),
+            scenes,
+            updated_at: updated_at.map(iso8601),
+            bound: false,
+            linked: Some(root.to_string_lossy().into_owned()),
+            can_write: None,
         });
     }
     sort_by(&mut projects, |project| &project.id);

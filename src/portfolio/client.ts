@@ -22,6 +22,8 @@ export interface ProjectInfo {
   updatedAt: string | null;
   /** Present only on projects bound to a GitHub repository (S14). */
   bound?: boolean;
+  /** Present only on linked projects (S25): the directory they live at. */
+  linked?: string;
   /**
    * What the last bind-time probe learned about writing to the bound
    * repository. Absent means nothing is known — only `false` is worth showing,
