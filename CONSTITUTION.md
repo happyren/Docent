@@ -353,6 +353,7 @@ the scene graph, not a parallel store. There is one graph; intent is attributes 
 | D145 *(A47, 2026-09-02)* | **The link is a registry; resolution is one door.** A linked project is an entry in the portfolio's own `.docent/links.json` — project name → absolute directory — and `project_dir`, the single choke point every scene route already passes through, consults it first: read, write, list, delete, save-as and weigh all follow without one of them changing. A link must name a directory that exists, must not collide with a portfolio project or a bound name, and must not sit inside the portfolio itself (no aliasing). UNLINK removes the entry and nothing else — deleting a linked project IS unlinking it, and the repo's files are the person's, always | One resolution door means the whole store speaks the capability at once; a registry in the portfolio means the repo never carries a byte of Docent's bookkeeping |
 | D146 *(A47, 2026-09-02)* | **The person links, on the desktop.** Linking is a native directory-picker act: `/desktop/link-project`, app-origin-gated like every dialog route; the picked directory IS the diagram directory, and the project takes the folder's name unless the person names it. The deployed store refuses the link routes loudly — a server must not roam its host's disk. The modal shows a linked project with the root it lives at, and offers **Unlink** where Delete would stand | Choosing a directory on the person's disk is a trust decision with a native idiom; a picker the person drives is the whole consent story |
 | D147 *(A47, 2026-09-02)* | **Git stays the person's, absolutely.** A linked project cannot take a GitHub binding and a bound project cannot be linked; there are no sync verbs, no base copies, no checkpointer, no trunk lock — agents see an unbound project and the person sees their own repository. Docent's entire footprint in the repo is the `.excalidraw` files it was asked to save | The user's words: "I have my own workflow" — a tool that respects a workflow is one that cannot be found in its reflog |
+| D148 *(A48, 2026-09-02)* | **One gesture opens a repo** *(extends D146)*. File → Open Repo Folder… raises the folder picker and does the whole journey: picking a folder links it (re-picking an already-linked folder is IDEMPOTENT — same root, same project, no fuss; a name linked to a different root refuses loudly), and the portfolio opens on that project with every diagram the recursive listing detects — when exactly one scene lives there, it opens itself, unless unsaved work stands on the canvas, in which case the modal opens instead and nothing is lost. Desktop-only, like the picker it wraps; the palette carries the same row | "Open this repo in Docent" should cost what it says: one gesture — the linking is bookkeeping the person should never have to think about twice |
 | D53 *(A10, 2026-08-22)* | **The engine is a plugin, the weights are never ours, and nothing leaves the machine.** The PocketTTS provider lives in its own repository (`happyren/docent-pocket-tts`, MIT): a manifest that runs `pocket-tts serve` through `uvx`, its voice list with each voice's license, and install notes. Docent bundles no model, no weights, no Python: the plugin downloads Kyutai's weights (CC-BY-4.0) on first run and attributes them; the Plugins panel shows the licenses. Provider URLs are loopback only — a manifest naming any other host is refused — so narration text cannot be sent anywhere silently | I7 holds (the runtime set is unchanged; a plugin is the person's installation, like a shape library is a static file — D23), the app stays a 7 MB binary, the weights' license obligations stay with the artifact that carries them, and "local TTS" means local by construction rather than by configuration |
 
 New decisions append here with a number, a one-line rationale, and a date.
@@ -488,6 +489,16 @@ plugin). Rationale: once narration is spoken, the agent is the narrator — it
 goes where the question goes and should not move before it has finished the
 sentence — and what it says must sound like an engineer, not a reader of
 digits.
+
+**A48 — 2026-09-02.** Open-repo amendment. Added D148, extending D146
+(File → Open Repo Folder… does the whole journey in one gesture — pick,
+link or idempotently re-open, then straight to the detected diagrams,
+the lone scene opening itself when the canvas is clean). Also in this
+cycle, a field fix without a decision: the GitHub form's grid tracks
+refused to shrink below 220 units and a narrow window clipped the form
+against the column's own overflow — tracks now yield to the column.
+Rationale: the maintainer's words — "just open this repo in Docent" —
+described a single gesture, and A47 had built everything but the verb.
 
 **A47 — 2026-09-02.** Local-repo amendment. Added S25 and D145–D147 (a
 project can live with its code: a links registry in the portfolio maps a
