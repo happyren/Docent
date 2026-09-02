@@ -47,6 +47,7 @@ enum MenuAction {
     Settings,
     New,
     Open,
+    OpenRepo,
     Import,
     Save,
     SaveAs,
@@ -74,10 +75,11 @@ enum MenuAction {
 impl MenuAction {
     /// Every action, in menu-bar order — Settings leads because on macOS the
     /// application menu it lives in comes before File.
-    const ALL: [Self; 25] = [
+    const ALL: [Self; 26] = [
         Self::Settings,
         Self::New,
         Self::Open,
+        Self::OpenRepo,
         Self::Import,
         Self::Save,
         Self::SaveAs,
@@ -109,6 +111,7 @@ impl MenuAction {
             Self::Settings => "settings",
             Self::New => "new",
             Self::Open => "open",
+            Self::OpenRepo => "open-repo",
             Self::Import => "import",
             Self::Save => "save",
             Self::SaveAs => "save-as",
@@ -139,6 +142,7 @@ impl MenuAction {
             Self::Settings => "Settings…",
             Self::New => "New Scene…",
             Self::Open => "Open…",
+            Self::OpenRepo => "Open Repo Folder…",
             Self::Import => "Import Scene File…",
             Self::Save => "Save",
             Self::SaveAs => "Save As…",
@@ -189,7 +193,9 @@ impl MenuAction {
             Self::Tidy => Some("Alt+Shift+F"),
             // Checking for updates is a thing you go looking for, not a thing
             // you reach for mid-draw, so it claims no chord.
-            Self::ExportFile
+            // Linking a repo is a once-per-repo act, not a chord.
+            Self::OpenRepo
+            | Self::ExportFile
             | Self::Legend
             | Self::Arrange
             | Self::DetailMarkers
@@ -465,6 +471,7 @@ fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         &[
             &item(app, MenuAction::New)?,
             &item(app, MenuAction::Open)?,
+            &item(app, MenuAction::OpenRepo)?,
             &item(app, MenuAction::Import)?,
             &PredefinedMenuItem::separator(app)?,
             &item(app, MenuAction::Save)?,
@@ -949,10 +956,11 @@ mod tests {
     /// written out literally in the same order as the union there. A rename on
     /// either side should fail here rather than silently turn a menu item into
     /// a no-op.
-    const FRONTEND_IDS: [&str; 23] = [
+    const FRONTEND_IDS: [&str; 24] = [
         "settings",
         "new",
         "open",
+        "open-repo",
         "import",
         "save",
         "save-as",

@@ -17,7 +17,7 @@ import {
   pickSceneFile,
   writeSceneFile,
 } from "./scene-file";
-import { exportSceneBytes, exportSceneFile, importSceneFile } from "./desktop-files";
+import { exportSceneBytes, exportSceneFile, importSceneFile, linkProjectFolder } from "./desktop-files";
 import { snapshotFromSceneJSON } from "../adapter/snapshot";
 import { alertDialog, confirmDialog } from "./dialogs";
 import { copyText } from "./clipboard";
@@ -83,6 +83,7 @@ type DocentMenuId =
   | "settings"
   | "new"
   | "open"
+  | "open-repo"
   | "import"
   | "save"
   | "save-as"
@@ -838,6 +839,9 @@ export function App() {
     setPortfolioIntent(intent);
     setPortfolioOpen(true);
   }, []);
+  // Where Open Repo Folder… lands (D148): the freshly linked project, so the
+  // modal opens already looking at the detected diagrams.
+  const portfolioFocusRef = useRef<string | null>(null);
   /**
    * The one scene loader (S12). Every way in but a followed link (D96) is
    * the reader changing context themselves, so the cross-scene trail goes
@@ -1195,6 +1199,28 @@ export function App() {
   // directions that must cross to a loose file on disk go through the shell's
   // native dialogs. Only the native menu reaches these — the handler map below
   // is installed in the desktop shell alone.
+  /**
+   * One gesture opens a repo (D148): pick the folder, link it (or re-open
+   * the existing link — the picker is idempotent), then straight to what it
+   * holds: a lone detected scene opens itself when the canvas is clean;
+   * anything else, the portfolio opens on the project.
+   */
+  const openRepoFolder = useCallback(async () => {
+    try {
+      const linked = await linkProjectFolder();
+      if (!linked) return;
+      const scenes = await listScenes(linked.project);
+      if (scenes.length === 1 && !dirty) {
+        await openPortfolioScene(linked.project, scenes[0].name);
+        return;
+      }
+      portfolioFocusRef.current = linked.project;
+      openPortfolio("browse");
+    } catch (err) {
+      await alertDialog(err instanceof Error ? err.message : String(err));
+    }
+  }, [dirty, openPortfolio, openPortfolioScene]);
+
   const importSceneIntoCanvas = useCallback(async () => {
     const handle = canvasRef.current;
     if (!handle) return;
@@ -1487,6 +1513,11 @@ export function App() {
         if (isDesktop) openPortfolio("browse");
         else void openScene();
       },
+    },
+    "open-repo": {
+      title: "Open repo folder…",
+      available: isDesktop,
+      run: () => void openRepoFolder(),
     },
     import: {
       title: "Import scene file…",
@@ -2213,8 +2244,10 @@ export function App() {
           onSaveScene={savePortfolioSceneAs}
           suggestedName={(fileName ?? UNTITLED).replace(/\.excalidraw$/i, "").replace(/^[^/]*\//, "")}
           intent={portfolioIntent}
+          initialProject={portfolioFocusRef.current}
           onClose={() => {
             setPortfolioOpen(false);
+            portfolioFocusRef.current = null;
             // A branch cut, a branch switched, a binding protected: the strip
             // is where the lock changes, so this is when to re-ask (D104).
             void refreshTrunkLock(portfolioSourceRef.current);

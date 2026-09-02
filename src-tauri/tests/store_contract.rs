@@ -1066,3 +1066,35 @@ fn the_person_links_through_the_folder_picker() {
 
     let _ = fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn repicking_a_linked_folder_is_idempotent() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+    let repo = repo_dir("docent-repo-again");
+    let other = repo_dir("docent-repo-other");
+    let root_json = serde_json::to_string(&repo.to_string_lossy().into_owned()).unwrap();
+
+    assert_eq!(
+        put(port, "/api/projects/again/link", Some(&format!(r#"{{"root":{root_json}}}"#))).status,
+        201
+    );
+    // The same folder again: same project, no fuss (D148).
+    let again = put(port, "/api/projects/again/link", Some(&format!(r#"{{"root":{root_json}}}"#)));
+    assert_eq!(again.status, 200, "{}", again.body);
+    assert!(again.body.contains("existing"), "{}", again.body);
+    // The same name for a different folder: refused, loudly.
+    let stolen = put(
+        port,
+        "/api/projects/again/link",
+        Some(&format!(
+            r#"{{"root":{}}}"#,
+            serde_json::to_string(&other.to_string_lossy().into_owned()).unwrap()
+        )),
+    );
+    assert_eq!(stolen.status, 400, "{}", stolen.body);
+    assert!(stolen.body.contains("already linked"), "{}", stolen.body);
+
+    let _ = fs::remove_dir_all(&repo);
+    let _ = fs::remove_dir_all(&other);
+}

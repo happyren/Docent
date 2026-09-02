@@ -1280,6 +1280,23 @@ fn link_project(context: &Context, project: &str, root: &Path) -> Result<Reply> 
         ));
     }
     let mut links = load_links(data_dir);
+    if let Some(existing) = links.get(project) {
+        if existing == &canonical {
+            // Re-picking the linked folder is idempotent (D148): same root,
+            // same project, nothing to redo.
+            return Ok(Reply::ok(
+                serde_json::json!({ "project": project, "root": canonical.to_string_lossy(), "existing": true })
+                    .to_string(),
+            ));
+        }
+        return Err(HttpError::new(
+            400,
+            format!(
+                "\"{project}\" is already linked to {} — unlink it first or pick another name",
+                existing.display()
+            ),
+        ));
+    }
     links.insert(project.to_string(), canonical.clone());
     save_links(data_dir, &links)?;
     Ok(Reply::new(

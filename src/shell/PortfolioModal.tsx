@@ -1251,6 +1251,8 @@ export interface PortfolioModalProps {
   /** Suggested name for "save current scene" (current file name). */
   suggestedName: string;
   intent?: PortfolioIntent;
+  /** The project the modal opens looking at (D148) — a freshly linked repo. */
+  initialProject?: string | null;
   onClose: () => void;
   /**
    * Show a review change in the canvas (D48): open the scene if it is not
@@ -1277,6 +1279,7 @@ export function PortfolioModal({
   onSaveScene,
   suggestedName,
   intent = "browse",
+  initialProject = null,
   onClose,
   onShowChange,
   onSceneMoved,
@@ -1286,7 +1289,7 @@ export function PortfolioModal({
   // The Review view (D48) stands in for the body while it is open.
   const [reviewing, setReviewing] = useState(false);
   const [projects, setProjects] = useState<ProjectInfo[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(initialProject);
   const [scenes, setScenes] = useState<SceneInfo[]>([]);
   const [newProject, setNewProject] = useState("");
   const [saveName, setSaveName] = useState(suggestedName);

@@ -975,8 +975,17 @@ body {
 
 .docent-portfolio-github-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* The tracks yield to the column (A48 field fix): a fixed 220 minimum
+     overflowed a narrow window straight into the column's own overflow
+     clip, cutting the form off mid-input. min() caps the floor at the
+     container's width, so the fields wrap and shrink instead. */
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 10px;
+  min-width: 0;
+}
+
+.docent-portfolio-github-form .docent-field {
+  min-width: 0;
 }
 
 .docent-portfolio-github-form input {
@@ -987,6 +996,8 @@ body {
   padding: 5px 8px;
   font-size: 13px;
   font-family: inherit;
+  width: 100%;
+  min-width: 0;
 }
 
 .docent-portfolio-github-advanced {
