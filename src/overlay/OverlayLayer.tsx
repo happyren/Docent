@@ -22,6 +22,7 @@ import type { SceneReader } from "../command/api";
 import type { DetailBadge, LinkBadge, LogicMark } from "../scene/detailBadges";
 import { edgePath, shapePath } from "./geometry";
 import type { OverlayState, OverlayStore } from "./state";
+import { TONE_LOOK } from "../authoring/palette";
 
 const FLOW_UNITS_PER_SECOND = 500;
 const GLOW_COLOR = "#ffd43b";
@@ -561,6 +562,34 @@ export function OverlayLayer({
               </text>
             </g>
           ))}
+          {/* Status marks (D150): an author's verdict as a glyph chip at a
+              corner — the palette's tones, the note as the tooltip. */}
+          {overlay.statusMarks.map((m) => {
+            const s = 20;
+            const tone =
+              m.state === "ok" ? TONE_LOOK.positive : m.state === "fail" ? TONE_LOOK.danger : m.state === "warn" ? TONE_LOOK.caution : TONE_LOOK.neutral;
+            const glyph = m.state === "ok" ? "✓" : m.state === "fail" ? "✕" : m.state === "warn" ? "!" : "•";
+            const x = m.corner.endsWith("right") ? m.bounds.x + m.bounds.width - s / 2 : m.bounds.x - s / 2;
+            const y = m.corner.startsWith("bottom") ? m.bounds.y + m.bounds.height - s / 2 : m.bounds.y - s / 2;
+            return (
+              <g key={`status:${m.by}:${m.id}`} className={`docent-status-mark docent-status-${m.state}`} transform={`translate(${x} ${y})`}>
+                <title>{`${m.by}: ${m.state}${m.note ? ` — ${m.note}` : ""}`}</title>
+                <circle cx={s / 2} cy={s / 2} r={s / 2} fill={tone.stroke} stroke="#ffffff" strokeWidth={2} />
+                <text
+                  x={s / 2}
+                  y={s / 2 + 1}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={13}
+                  fontWeight={700}
+                  fontFamily="ui-sans-serif, system-ui, sans-serif"
+                  fill="#ffffff"
+                >
+                  {glyph}
+                </text>
+              </g>
+            );
+          })}
           {badges.map((b) => {
             const s = b.size;
             return (

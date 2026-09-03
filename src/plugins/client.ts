@@ -34,6 +34,12 @@ export interface PluginInfo {
   license?: unknown;
   voices?: { id: string; license?: string; description?: string }[];
   homepage?: string;
+  /** A face the plugin has (D151): a loopback URL the shell opens as a window. */
+  panel?: { title: string; url: string };
+  /** The mark namespaces this plugin authors (D150, D152). */
+  marks?: string[];
+  /** Exclusive claims a running plugin already holds (D152) — told before the click. */
+  conflicts?: { with: string; over: string }[];
   /** The route the page talks to, relative to the plugins base. */
   route: string;
   log?: string;

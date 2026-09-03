@@ -97,6 +97,39 @@ pub struct Manifest {
     /// A link the panel offers — the plugin's home.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    /// A face (D151): a loopback URL the shell opens as a window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<Panel>,
+    /// The mark namespaces this plugin authors (D150) — exclusive claims (D152).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<String>,
+}
+
+/// A plugin's face (D151): what the window is called, and where it points.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Panel {
+    pub title: String,
+    pub url: String,
+}
+
+/// A claim a running plugin already holds (D152), named before the click.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Conflict {
+    pub with: String,
+    pub over: String,
+}
+
+/// The exclusive claims a manifest makes (D152): one voice, one author per
+/// mark namespace. Shared claims — control, a panel — are not listed.
+pub fn exclusive_claims(manifest: &Manifest) -> Vec<String> {
+    let mut claims = Vec::new();
+    if manifest.contracts.iter().any(|c| c == "speech/1") {
+        claims.push("speech/1".to_string());
+    }
+    for namespace in &manifest.marks {
+        claims.push(format!("marks:{namespace}"));
+    }
+    claims
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,63}$` — a name is also a path segment and a route.
@@ -152,6 +185,22 @@ fn refusal(manifest: &Manifest, folder: &str) -> Option<String> {
                     "url must be loopback (http://127.0.0.1 or localhost), not {url}"
                 ));
             }
+        }
+    }
+    if let Some(panel) = &manifest.panel {
+        if panel.title.trim().is_empty() {
+            return Some("panel.title is empty".to_string());
+        }
+        if !is_loopback(&panel.url) {
+            return Some(format!(
+                "panel.url must be loopback (http://127.0.0.1 or localhost), not {}",
+                panel.url
+            ));
+        }
+    }
+    for namespace in &manifest.marks {
+        if !valid_plugin_name(namespace) {
+            return Some(format!("marks namespace is not a valid name: {namespace}"));
         }
     }
     None
@@ -216,6 +265,13 @@ pub struct Listed {
     pub voices: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub homepage: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub panel: Option<Panel>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub marks: Vec<String>,
+    /// Exclusive claims a running plugin already holds (D152).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<Conflict>,
     /// The path the page talks to, relative to the plugins base.
     pub route: String,
     /// Where the process writes what it says, for the person to read.
@@ -342,6 +398,8 @@ impl Host {
                             license: None,
                             voices: None,
                             homepage: None,
+                            panel: None,
+                            marks: Vec::new(),
                         };
                         found.insert(
                             folder,
@@ -405,9 +463,32 @@ impl Host {
         }
     }
 
+    /// The exclusive claims of `name` that a RUNNING plugin already holds
+    /// (D152), each naming the holder. Live holders only: a plugin that is
+    /// stopped holds nothing.
+    fn conflicts_of(plugins: &BTreeMap<String, Plugin>, name: &str) -> Vec<Conflict> {
+        let Some(mine) = plugins.get(name) else {
+            return Vec::new();
+        };
+        let claims = exclusive_claims(&mine.manifest);
+        let mut conflicts = Vec::new();
+        for (other, plugin) in plugins {
+            if other == name || !matches!(plugin.status, Status::Running | Status::Starting) {
+                continue;
+            }
+            for claim in exclusive_claims(&plugin.manifest) {
+                if claims.contains(&claim) {
+                    conflicts.push(Conflict { with: other.clone(), over: claim });
+                }
+            }
+        }
+        conflicts
+    }
+
     pub fn list(&self) -> Vec<Listed> {
         let enabled = self.settings().enabled;
-        self.lock()
+        let plugins = self.lock();
+        plugins
             .values()
             .map(|plugin| Listed {
                 name: plugin.manifest.name.clone(),
@@ -419,6 +500,9 @@ impl Host {
                 license: plugin.manifest.license.clone(),
                 voices: plugin.manifest.voices.clone(),
                 homepage: plugin.manifest.homepage.clone(),
+                panel: plugin.manifest.panel.clone(),
+                marks: plugin.manifest.marks.clone(),
+                conflicts: Self::conflicts_of(&plugins, &plugin.manifest.name),
                 route: format!("/plugins/{}", plugin.manifest.name),
                 log: plugin
                     .manifest
@@ -445,6 +529,14 @@ impl Host {
                     self.remember(name, true);
                 }
                 return Ok(());
+            }
+            // The registry's referee (D152): a claim a running plugin holds is
+            // not handed out twice, and the refusal names the holder.
+            if let Some(conflict) = Self::conflicts_of(&plugins, name).into_iter().next() {
+                return Err(format!(
+                    "{name} claims {} — {} holds it while it runs; stop {} first",
+                    conflict.over, conflict.with, conflict.with
+                ));
             }
             (plugin.manifest.clone(), plugin.dir.clone())
         };
@@ -489,6 +581,9 @@ impl Host {
             .env("PATH", provider_path())
             .env("DOCENT_PLUGIN_PORT", port.to_string())
             .env("DOCENT_HOST_PID", std::process::id().to_string())
+            // The pen (D149): a plugin declaring control/1 is handed the
+            // desktop's own MCP endpoint — the agent's door, and nothing else.
+            .envs(self.control_env(&manifest))
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(err_log));
@@ -507,6 +602,25 @@ impl Host {
         }
         self.watch(name.to_string(), base, run.health, Some(()));
         Ok(())
+    }
+
+    /// `DOCENT_MCP_URL` for a plugin that holds the pen (D149): the endpoint
+    /// the shell recorded in the config directory beside the plugins folder.
+    /// Absent when the manifest makes no such claim, or nothing is recorded.
+    fn control_env(&self, manifest: &Manifest) -> Vec<(String, String)> {
+        if !manifest.contracts.iter().any(|c| c == "control/1") {
+            return Vec::new();
+        }
+        let Some(config_dir) = self.dir.parent() else {
+            return Vec::new();
+        };
+        match fs::read_to_string(config_dir.join("mcp-port")) {
+            Ok(port) if port.trim().parse::<u16>().is_ok() => vec![(
+                "DOCENT_MCP_URL".to_string(),
+                format!("http://127.0.0.1:{}/mcp", port.trim()),
+            )],
+            _ => Vec::new(),
+        }
     }
 
     /// Disable: stop it and forget it.
@@ -1131,6 +1245,8 @@ mod tests {
             license: None,
             voices: None,
             homepage: None,
+            panel: None,
+            marks: Vec::new(),
         }
     }
 
@@ -1212,5 +1328,69 @@ mod tests {
         fs::write(log_file(&dir), "").unwrap();
         assert_eq!(last_words(&dir), None);
         let _ = fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn a_face_must_be_loopback_and_a_namespace_must_be_a_name() {
+        let mut faced = manifest(None, Some("http://127.0.0.1:9000"));
+        faced.panel = Some(Panel { title: "Notebook".into(), url: "https://example.com/lab".into() });
+        let why = refusal(&faced, "demo").expect("a wide-web face is refused");
+        assert!(why.contains("panel.url"), "{why}");
+        faced.panel = Some(Panel { title: "Notebook".into(), url: "http://localhost:8888/lab".into() });
+        assert_eq!(refusal(&faced, "demo"), None);
+
+        let mut marking = manifest(None, Some("http://127.0.0.1:9000"));
+        marking.marks = vec!["AWS Health".into()];
+        let why = refusal(&marking, "demo").expect("a namespace that is not a name is refused");
+        assert!(why.contains("marks namespace"), "{why}");
+        marking.marks = vec!["aws-health".into()];
+        assert_eq!(refusal(&marking, "demo"), None);
+    }
+
+    #[test]
+    fn exclusive_claims_are_the_voice_and_the_namespaces() {
+        let mut m = manifest(None, Some("http://127.0.0.1:9000"));
+        m.contracts = vec!["control/1".into(), "speech/1".into()];
+        m.marks = vec!["aws-health".into(), "ci".into()];
+        assert_eq!(
+            exclusive_claims(&m),
+            vec!["speech/1".to_string(), "marks:aws-health".to_string(), "marks:ci".to_string()]
+        );
+        // The pen and a face are shared: they claim nothing exclusive.
+        let mut shared = manifest(None, Some("http://127.0.0.1:9000"));
+        shared.contracts = vec!["control/1".into()];
+        shared.panel = Some(Panel { title: "Face".into(), url: "http://127.0.0.1:1/".into() });
+        assert!(exclusive_claims(&shared).is_empty());
+    }
+
+    #[test]
+    fn the_registry_names_the_holder_of_a_live_claim() {
+        let plugin = |name: &str, contracts: Vec<&str>, marks: Vec<&str>, status: Status| {
+            let mut m = manifest(None, Some("http://127.0.0.1:9000"));
+            m.name = name.into();
+            m.contracts = contracts.into_iter().map(String::from).collect();
+            m.marks = marks.into_iter().map(String::from).collect();
+            Plugin { manifest: m, dir: PathBuf::from("/tmp"), status, base: None, child: None }
+        };
+        let mut plugins = BTreeMap::new();
+        plugins.insert("pocket-tts".to_string(), plugin("pocket-tts", vec!["speech/1"], vec![], Status::Running));
+        plugins.insert("other-voice".to_string(), plugin("other-voice", vec!["speech/1"], vec![], Status::Stopped));
+        plugins.insert("aws-health".to_string(), plugin("aws-health", vec!["control/1"], vec!["aws-health"], Status::Running));
+        plugins.insert("aws-health-2".to_string(), plugin("aws-health-2", vec!["control/1"], vec!["aws-health"], Status::Stopped));
+        plugins.insert("ci".to_string(), plugin("ci", vec!["control/1"], vec!["ci"], Status::Stopped));
+
+        // A second voice, while one runs: named.
+        assert_eq!(
+            Host::conflicts_of(&plugins, "other-voice"),
+            vec![Conflict { with: "pocket-tts".into(), over: "speech/1".into() }]
+        );
+        // A second author of a running namespace: named.
+        assert_eq!(
+            Host::conflicts_of(&plugins, "aws-health-2"),
+            vec![Conflict { with: "aws-health".into(), over: "marks:aws-health".into() }]
+        );
+        // Its own namespace, and the pen, conflict with nobody.
+        assert!(Host::conflicts_of(&plugins, "ci").is_empty());
+        // A stopped holder holds nothing: the running voice sees no conflict.
+        assert!(Host::conflicts_of(&plugins, "pocket-tts").is_empty());
     }
 }

@@ -237,6 +237,36 @@ impl NativeDialog {
 }
 
 impl store::Dialogs for NativeDialog {
+    fn open_window(&self, title: &str, url: &str) -> bool {
+        let app = self.app.clone();
+        let title = title.to_string();
+        let url = url.to_string();
+        self.on_main(move || {
+            let Ok(parsed) = url.parse::<tauri::Url>() else {
+                return false;
+            };
+            // One window per face: opening it twice focuses the one there is.
+            let label = format!(
+                "panel-{}",
+                title
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+                    .to_lowercase()
+            );
+            if let Some(existing) = app.get_webview_window(&label) {
+                let _ = existing.set_focus();
+                return true;
+            }
+            WebviewWindowBuilder::new(&app, label, WebviewUrl::External(parsed))
+                .title(title)
+                .inner_size(980.0, 720.0)
+                .build()
+                .is_ok()
+        })
+        .unwrap_or(false)
+    }
+
     fn pick_directory(&self) -> Option<PathBuf> {
         self.on_main(|| {
             rfd::FileDialog::new()

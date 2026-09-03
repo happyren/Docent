@@ -805,6 +805,43 @@ export async function execute(
           "run it as is with tour({steps}) — or rewrite the `inferred` lines in your own words first, keeping the `declared` ones; for a guided walkthrough, present({action:'enter', mode:'guided'}) before the tour",
       };
     }
+    case "mark_status": {
+      // Status marks (D150): an author's verdicts on components, on the
+      // overlay only. `by` is the namespace — a plugin's name, an agent's.
+      const by = typeof params.by === "string" ? params.by.trim() : "";
+      if (!by) throw new Error("mark_status needs {by}: who is marking — a plugin's name, or yours");
+      if (params.clear === true) {
+        commands.clearStatus(by);
+        return { cleared: by, next: "mark_status({by, marks:[…]}) marks again" };
+      }
+      const marks = params.marks as unknown;
+      if (!Array.isArray(marks) || !marks.length) {
+        throw new Error("mark_status needs {marks:[{id, state}]} — state is ok, fail, warn, or note — or {clear:true}");
+      }
+      const states = new Set(["ok", "fail", "warn", "note"]);
+      const corners = new Set(["top-left", "top-right", "bottom-left", "bottom-right"]);
+      const wanted = marks.map((raw, i) => {
+        const m = (raw ?? {}) as { id?: unknown; state?: unknown; note?: unknown; corner?: unknown };
+        if (typeof m.id !== "string" || !m.id) throw new Error(`mark ${i}: needs an id`);
+        if (typeof m.state !== "string" || !states.has(m.state)) throw new Error(`mark ${i} (${m.id}): state must be ok, fail, warn, or note`);
+        if (m.corner !== undefined && (typeof m.corner !== "string" || !corners.has(m.corner))) {
+          throw new Error(`mark ${i} (${m.id}): corner must be top-left, top-right, bottom-left, or bottom-right`);
+        }
+        return {
+          id: m.id,
+          state: m.state as "ok" | "fail" | "warn" | "note",
+          ...(typeof m.note === "string" && m.note ? { note: m.note } : {}),
+          ...(typeof m.corner === "string" ? { corner: m.corner as "top-left" | "top-right" | "bottom-left" | "bottom-right" } : {}),
+        };
+      });
+      const answer = commands.markStatus(by, wanted);
+      return {
+        by,
+        ...answer,
+        ...(answer.unknown.length ? { note: `${answer.unknown.length} id(s) name nothing on this canvas — find({query}) to look them up` } : {}),
+        next: "the marks stand until mark_status({by, clear:true}) or clear_effects",
+      };
+    }
     case "clear_effects":
       commands.clearEffects();
       void commands.narrate({ text: null });

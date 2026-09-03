@@ -62,6 +62,22 @@ export interface CompareMark {
   bounds: { x: number; y: number; width: number; height: number };
 }
 
+/**
+ * A status mark (D150): one author's verdict on one component, drawn as a
+ * glyph chip at a corner of the component's bounds — pre-resolved by the
+ * command, like the ghosts' (I2). Namespaced by `by`: an author's new set
+ * replaces its old one, and two authors mark one drawing without erasing
+ * each other.
+ */
+export interface StatusMark {
+  id: string;
+  by: string;
+  state: "ok" | "fail" | "warn" | "note";
+  note?: string;
+  corner: "top-left" | "top-right" | "bottom-left" | "bottom-right";
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
 export interface OverlayState {
   highlight: HighlightState | null;
   flow: FlowState | null;
@@ -70,6 +86,8 @@ export interface OverlayState {
   ghosts: GhostState[];
   /** The compare lens's marks (D134); [] when the lens is off. */
   compareMarks: CompareMark[];
+  /** Status marks (D150), every author's together; [] when none stand. */
+  statusMarks: StatusMark[];
 }
 
 type Listener = (state: OverlayState) => void;
@@ -81,6 +99,7 @@ export class OverlayStore {
     steps: [],
     ghosts: [],
     compareMarks: [],
+    statusMarks: [],
   };
   private listeners = new Set<Listener>();
   private generation = 0;
@@ -170,7 +189,33 @@ export class OverlayStore {
     });
   }
 
+  /**
+   * Replace one author's status marks (D150): the author's old set goes,
+   * every other author's stands. Same set is a no-op.
+   */
+  setStatusMarks(by: string, marks: StatusMark[]): void {
+    const others = this.state.statusMarks.filter((m) => m.by !== by);
+    const mine = this.state.statusMarks.filter((m) => m.by === by);
+    if (
+      mine.length === marks.length &&
+      mine.every((m, i) => m.id === marks[i].id && m.state === marks[i].state && m.note === marks[i].note && m.corner === marks[i].corner)
+    ) {
+      return;
+    }
+    this.emit({
+      ...this.state,
+      statusMarks: [...others, ...marks.map((m) => ({ ...m, bounds: { ...m.bounds } }))],
+    });
+  }
+
+  /** Clear one author's status marks, or every author's (D150). */
+  clearStatusMarks(by?: string): void {
+    const kept = by === undefined ? [] : this.state.statusMarks.filter((m) => m.by !== by);
+    if (kept.length === this.state.statusMarks.length) return;
+    this.emit({ ...this.state, statusMarks: kept });
+  }
+
   clear(): void {
-    this.emit({ highlight: null, flow: null, steps: [], ghosts: [], compareMarks: [] });
+    this.emit({ highlight: null, flow: null, steps: [], ghosts: [], compareMarks: [], statusMarks: [] });
   }
 }

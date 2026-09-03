@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EdgeGeometry } from "../src/adapter";
 import { CommandAPI, type SceneReader } from "../src/command/api";
+import { OverlayStore } from "../src/overlay/state";
 import type { CameraEngine } from "../src/camera/engine";
 import { edgePath, shapePath } from "../src/overlay/geometry";
 import { mergeOverlapping, spotlightHoles } from "../src/overlay/OverlayLayer";
-import { OverlayStore } from "../src/overlay/state";
 import { snapshotFromSceneJSON } from "../src/adapter/snapshot";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -360,5 +360,54 @@ describe("overlay geometry (D4)", () => {
     const d = shapePath("diamond", { x: 0, y: 0, width: 100, height: 60 }, 5);
     expect(d.endsWith("Z")).toBe(true);
     expect(d).toContain("M50 -5");
+  });
+});
+
+describe("status marks are namespaced by author (D150)", () => {
+  const bounds = { x: 0, y: 0, width: 100, height: 50 };
+  const mark = (by: string, id: string, state: "ok" | "fail" | "warn" | "note") => ({
+    id,
+    by,
+    state,
+    corner: "top-left" as const,
+    bounds,
+  });
+
+  it("replaces one author's set and leaves the others standing", () => {
+    const store = new OverlayStore();
+    store.setStatusMarks("aws-health", [mark("aws-health", "n_api", "ok"), mark("aws-health", "n_db", "fail")]);
+    store.setStatusMarks("ci", [mark("ci", "n_api", "warn")]);
+    expect(store.get().statusMarks.map((m) => `${m.by}:${m.id}:${m.state}`).sort()).toEqual([
+      "aws-health:n_api:ok",
+      "aws-health:n_db:fail",
+      "ci:n_api:warn",
+    ]);
+    // A new set from one author is that author's whole word.
+    store.setStatusMarks("aws-health", [mark("aws-health", "n_db", "ok")]);
+    expect(store.get().statusMarks.map((m) => `${m.by}:${m.id}:${m.state}`).sort()).toEqual([
+      "aws-health:n_db:ok",
+      "ci:n_api:warn",
+    ]);
+  });
+
+  it("clears one author or every author, and the same set is a no-op", () => {
+    const store = new OverlayStore();
+    let emits = 0;
+    store.subscribe(() => {
+      emits += 1;
+    });
+    const base = emits;
+    store.setStatusMarks("a", [mark("a", "n1", "ok")]);
+    store.setStatusMarks("a", [mark("a", "n1", "ok")]);
+    expect(emits - base).toBe(1);
+    store.setStatusMarks("b", [mark("b", "n2", "note")]);
+    store.clearStatusMarks("a");
+    expect(store.get().statusMarks.map((m) => m.by)).toEqual(["b"]);
+    store.clearStatusMarks();
+    expect(store.get().statusMarks).toEqual([]);
+    // clear() takes the marks with everything else (I2: effects are ephemeral).
+    store.setStatusMarks("a", [mark("a", "n1", "fail")]);
+    store.clear();
+    expect(store.get().statusMarks).toEqual([]);
   });
 });

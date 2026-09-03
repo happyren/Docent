@@ -1098,3 +1098,47 @@ fn repicking_a_linked_folder_is_idempotent() {
     let _ = fs::remove_dir_all(&repo);
     let _ = fs::remove_dir_all(&other);
 }
+
+// ---------------------------------------------------------------------------
+// a plugin's face (S26, D151)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn open_panel_opens_a_loopback_window_and_nothing_else() {
+    let fixture = Fixture::new();
+    let port = fixture.port();
+
+    let opened = post(
+        port,
+        "/desktop/open-panel",
+        Some(r#"{"title":"AWS Health Notebook","url":"http://127.0.0.1:8888/lab"}"#),
+    );
+    assert_eq!(opened.status, 200, "{}", opened.body);
+    assert!(opened.body.contains(r#""opened":true"#), "{}", opened.body);
+    // The stub recorded the window it would have opened: title and URL.
+    let asked = fixture.asked();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].kind, AskKind::OpenWindow);
+    assert_eq!(asked[0].title, "AWS Health Notebook");
+    assert_eq!(asked[0].message, "http://127.0.0.1:8888/lab");
+
+    // The wide web is refused (D53): a page cannot open the shell onto it.
+    let refused = post(
+        port,
+        "/desktop/open-panel",
+        Some(r#"{"title":"Nope","url":"https://example.com"}"#),
+    );
+    assert_eq!(refused.status, 400, "{}", refused.body);
+    assert!(refused.body.contains("loopback"), "{}", refused.body);
+    assert_eq!(fixture.asked().len(), 1, "a refusal raises nothing");
+
+    // And only the app's own origin may ask at all, like every dialog route.
+    let stranger = send(
+        port,
+        "POST",
+        "/desktop/open-panel",
+        Some(r#"{"title":"x","url":"http://127.0.0.1:1/"}"#),
+        Some("https://evil.example"),
+    );
+    assert_eq!(stranger.status, 403);
+}

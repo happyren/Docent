@@ -20,6 +20,7 @@ import type { CameraEngine } from "../camera/engine";
 import { buildSceneGraph, type SceneGraph } from "../scene/graph";
 import { computeTiers } from "../scene/tiers";
 import type { HighlightStyle, OverlayStore, StepBadge } from "../overlay/state";
+import type { StatusMark } from "../overlay/state";
 import type { SceneWrite } from "../adapter/excalidraw";
 import { idSource, lint, plan, PlanError, simulate, type LintReport, type Op } from "../authoring/ops";
 import { tidyTargets, type TidyScope } from "../authoring/tidy";
@@ -846,6 +847,48 @@ export class CommandAPI {
         current: craftScore(current, currentGraph).score,
       },
     };
+  }
+
+  /**
+   * Status marks (D150): one author's verdicts on components, as glyph
+   * chips on the overlay — never in the scene (I2). Bounds are resolved
+   * here, like the compare lens's; ids nothing stands at are answered
+   * loudly, never dropped in silence (I5). An author's new set replaces
+   * its old one.
+   */
+  markStatus(
+    by: string,
+    marks: readonly { id: string; state: "ok" | "fail" | "warn" | "note"; note?: string; corner?: StatusMark["corner"] }[],
+  ): { marked: string[]; unknown: string[] } {
+    const graph = buildSceneGraph(this.reader.getSceneSnapshot());
+    const boundsOf = (sourceId: string) =>
+      graph.nodes.find((n) => n.sourceId === sourceId)?.bounds ??
+      graph.frames.find((f) => f.sourceId === sourceId)?.bounds ??
+      null;
+    const resolved: StatusMark[] = [];
+    const unknown: string[] = [];
+    for (const mark of marks) {
+      const bounds = boundsOf(mark.id);
+      if (!bounds) {
+        unknown.push(mark.id);
+        continue;
+      }
+      resolved.push({
+        id: mark.id,
+        by,
+        state: mark.state,
+        ...(mark.note ? { note: mark.note } : {}),
+        corner: mark.corner ?? "top-left",
+        bounds,
+      });
+    }
+    this.overlay.setStatusMarks(by, resolved);
+    return { marked: resolved.map((m) => m.id), unknown };
+  }
+
+  /** Clear one author's status marks, or every author's (D150). */
+  clearStatus(by?: string): void {
+    this.overlay.clearStatusMarks(by);
   }
 
   /** Put the lens down (D134). */

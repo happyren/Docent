@@ -103,6 +103,81 @@ during a presentation, and paces the camera: every camera command waits for
 the speech in flight before it moves, and a tour step lasts at least as long
 as its speech. An agent's `narrate` call returns as soon as the voice starts.
 
+### `control/1` — the pen (S26, D149)
+
+A plugin that declares `control/1` receives, at launch, the environment
+variable **`DOCENT_MCP_URL`** — the desktop's own MCP endpoint
+(`http://127.0.0.1:<port>/mcp`). That endpoint is the whole agent surface:
+every read (`get_outline`, `read_frame`, `find`, `get_scene_graph`…), every
+write (`edit`, `define_*`, `tidy`…), the camera, the overlay (`highlight`,
+`flow`, `mark_status`), `compare` and `weigh`. There is no second API: a
+plugin holds exactly what an agent holds, under the same **Agent can edit**
+switch and the same orange agent-at-work frame. Speak JSON-RPC over HTTP the
+way any MCP client does; the `tools/list` answer is the reference.
+
+### Marks — the health grammar (D150)
+
+`mark_status({by, marks:[{id, state, note?, corner?}]})` draws a glyph chip
+on a component: `ok` ✓ (green), `fail` ✕ (red), `warn` ! (amber), `note` •
+(grey), at `top-left` unless a corner is named; the note is the tooltip.
+Marks are overlay only — never in the scene file, never in an export — and
+are **namespaced by `by`**: an author's new set replaces its old one, other
+authors' marks stand. `mark_status({by, clear:true})` clears one author;
+`clear_effects` clears all.
+
+A plugin that authors marks declares its namespaces in the manifest:
+
+```json
+"marks": ["aws-health"]
+```
+
+so the registry can hold one author per namespace (see *Exclusive claims*).
+
+### `panel` — a face (D151)
+
+```json
+"panel": { "title": "Notebook", "url": "http://127.0.0.1:8888/lab" }
+```
+
+Loopback only, like every plugin URL. The Plugins panel offers **Open
+panel**, and the shell opens a native window at that URL beside the canvas —
+a notebook, a console, a dashboard. It is a window, not an iframe: no plugin
+code ever runs in Docent's page.
+
+### Exclusive claims — the registry's referee (D152)
+
+| Claim | Exclusivity |
+|---|---|
+| `speech/1` | one voice — a second speech provider is refused while one runs |
+| `marks: ["<namespace>"]` | one author per namespace — a second plugin declaring a running plugin's namespace is refused |
+| `control/1` | shared — many may hold the pen; the agent frame serialises them |
+| `panel` | shared — every face is its own window |
+
+A refused plugin says who holds the claim; the listing carries each plugin's
+`conflicts` so the panel can say it before the click.
+
+### A worked example — the health plugin
+
+A plugin that runs a notebook, asks a test API in AWS about resources, and
+paints the answers onto the diagram needs three manifest lines and one tool:
+
+```json
+{
+  "name": "aws-health",
+  "contracts": ["control/1"],
+  "marks": ["aws-health"],
+  "panel": { "title": "AWS Health Notebook", "url": "http://127.0.0.1:8888/lab" },
+  "run": { "command": "uvx", "args": ["aws-health-plugin", "--port", "{port}"], "health": "/" }
+}
+```
+
+At launch it reads `DOCENT_MCP_URL`, calls `find({query:'payments-db'})`
+to learn the component's id, asks AWS, and calls
+`mark_status({by:'aws-health', marks:[{id, state:'fail', note:'3 of 40 checks red'}]})`.
+The tick or cross appears on the box; the notebook is one click away in
+the Plugins panel. Everything it does with AWS is its own process's
+business.
+
 ## Writing one
 
 1. Make a program that answers a contract on `127.0.0.1:$DOCENT_PLUGIN_PORT`

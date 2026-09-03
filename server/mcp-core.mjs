@@ -364,6 +364,34 @@ export const TOOLS = [
     },
   },
   {
+    name: "mark_status",
+    description:
+      "Put a status mark on components (S26, D150, overlay only — nothing is written): a glyph chip at a corner of each component — ok ✓, fail ✕, warn !, note • — with the note as its tooltip. `by` is the author's namespace (a plugin's name, or yours): your new set replaces your old one, other authors' marks stand. mark_status({by, clear:true}) clears yours; clear_effects clears all. Unknown ids are answered, never dropped.\nExample: mark_status({by:'aws-health', marks:[{id:'n_api', state:'ok', note:'42 tests passed'}, {id:'n_db', state:'fail', note:'latency p99 2.1s'}]})",
+    inputSchema: {
+      type: "object",
+      properties: {
+        by: { type: "string", description: "Who is marking — the namespace the marks belong to" },
+        marks: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              state: { type: "string", enum: ["ok", "fail", "warn", "note"] },
+              note: { type: "string", description: "The tooltip — what the verdict rests on" },
+              corner: { type: "string", enum: ["top-left", "top-right", "bottom-left", "bottom-right"], description: "Default top-left" },
+            },
+            required: ["id", "state"],
+            additionalProperties: false,
+          },
+        },
+        clear: { type: "boolean", description: "True removes this author's marks" },
+      },
+      required: ["by"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "flow",
     description:
       "Animate a light pulse traveling each edge end-to-end, in order — multi-hop request tracing. Give it a `path` of edge ids, or a `scenario` name to replay the path the author already declared, which also numbers the steps on the overlay while it runs. Exactly one of the two. Resolves when the pulse finishes (loop: first cycle).\nExample: flow({path:['e_req','e_verify','e_query']}) traces client → gateway → auth → database; flow({scenario:'Checkout'}) replays the declared story with numbered steps.",

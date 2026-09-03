@@ -71,6 +71,18 @@ export async function linkProjectFolder(): Promise<{ project: string; root: stri
   return { project: result.project, root: result.root };
 }
 
+/**
+ * Open a plugin's face (D151): the shell opens a native window at the
+ * plugin's loopback URL beside the canvas. False when the shell refused.
+ */
+export async function openPluginPanel(title: string, url: string): Promise<boolean> {
+  const result = await postToShell<{ opened?: boolean }>(
+    "/desktop/open-panel",
+    JSON.stringify({ title, url }),
+  );
+  return result.opened === true;
+}
+
 /** Raise the save dialog and write `content`. False when cancelled. */
 export async function exportSceneFile(
   name: string,

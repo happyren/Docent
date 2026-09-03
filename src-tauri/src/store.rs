@@ -80,6 +80,10 @@ pub trait Dialogs: Send + Sync + 'static {
     /// A native folder picker (S25, D146): the person chooses the directory a
     /// linked project lives at. `None` when they cancel.
     fn pick_directory(&self) -> Option<PathBuf>;
+
+    /// Open a plugin's face (S26, D151): a native window at a loopback URL,
+    /// beside the canvas. False when the shell could not.
+    fn open_window(&self, title: &str, url: &str) -> bool;
     /// The save dialog, seeded with `suggested_name`.
     fn pick_save(&self, suggested_name: &str) -> Option<PathBuf>;
     /// A question with two answers. `true` is the affirmative, exactly as
@@ -103,6 +107,8 @@ pub struct Asked {
 pub enum AskKind {
     Confirm,
     Alert,
+    /// A window the stub would have opened: `title`, and the URL as `message`.
+    OpenWindow,
 }
 
 /// A dialog stand-in for environments that have no display: `cancel` answers
@@ -171,6 +177,11 @@ impl StubDialog {
 impl Dialogs for StubDialog {
     fn pick_directory(&self) -> Option<PathBuf> {
         self.answer()
+    }
+
+    fn open_window(&self, title: &str, url: &str) -> bool {
+        self.record(AskKind::OpenWindow, title, url);
+        true
     }
 
     fn pick_open(&self) -> Option<PathBuf> {
@@ -404,6 +415,7 @@ fn dispatch(
             Some("link-project") if segments.len() == 2 => {
                 link_project_dialog(context, dialogs, request)
             }
+            Some("open-panel") if segments.len() == 2 => open_panel(dialogs, request),
             Some("export") if segments.len() == 2 => export_file(dialogs, request),
             Some("confirm") if segments.len() == 2 => ask(dialogs, request, AskKind::Confirm),
             Some("alert") if segments.len() == 2 => ask(dialogs, request, AskKind::Alert),
@@ -1004,6 +1016,32 @@ fn internal(err: std::io::Error) -> HttpError {
 
 /// Raise the open dialog and hand the page the file's text. The page decides
 /// whether the text is a scene — the same check it applies to `?scene=<url>`.
+/// A plugin's face (D151): the page names a title and a loopback URL, the
+/// shell opens the window. Loopback only, as every plugin URL is (D53) —
+/// the page cannot use this to open the shell onto the wide web.
+fn open_panel(dialogs: &dyn Dialogs, request: &mut Request) -> Result<Reply> {
+    let body = read_body(request)?;
+    let value = object_body(&body, "panel")?;
+    let title = value
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("Plugin");
+    let url = value
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| HttpError::new(400, "open-panel needs {url}: a loopback URL"))?;
+    if !crate::plugins::is_loopback(url) {
+        return Err(HttpError::new(
+            400,
+            format!("panel url must be loopback (http://127.0.0.1 or localhost), not {url}"),
+        ));
+    }
+    let opened = dialogs.open_window(title, url);
+    Ok(Reply::ok(serde_json::json!({ "opened": opened }).to_string()))
+}
+
 fn import_file(dialogs: &dyn Dialogs) -> Result<Reply> {
     let Some(path) = dialogs.pick_open() else {
         return Ok(Reply::ok(r#"{"canceled":true}"#));
@@ -1141,6 +1179,8 @@ fn ask(dialogs: &dyn Dialogs, request: &mut Request, kind: AskKind) -> Result<Re
             dialogs.alert(title, message);
             Ok(Reply::ok(r#"{"ok":true}"#))
         }
+        // A window is opened by its own route, never by asking.
+        AskKind::OpenWindow => Err(HttpError::new(404, "not found")),
     }
 }
 

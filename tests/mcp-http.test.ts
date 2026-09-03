@@ -96,6 +96,7 @@ describe("mcp streamable http", () => {
       "highlight",
       "layout",
       "list_projects",
+      "mark_status",
       "narrate",
       "open_scene",
       "present",
@@ -259,7 +260,7 @@ describe("mcp stdio proxy (clients that require HTTPS remotes)", () => {
       id: 2,
       method: "tools/list",
     })) as { result: { tools: { name: string }[] } };
-    expect(tools.result.tools).toHaveLength(40);
+    expect(tools.result.tools).toHaveLength(41);
   });
 
   it("relays tool calls, including their errors", async () => {

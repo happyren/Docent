@@ -15,6 +15,7 @@ import {
   rescanPlugins,
   type PluginInfo,
 } from "../plugins/client";
+import { openPluginPanel } from "./desktop-files";
 import type { SpeechController, SpeechState } from "../speech/controller";
 import { alertDialog } from "./dialogs";
 
@@ -128,11 +129,26 @@ function PluginCard({
           ))}
         </dl>
       )}
+      {/* The referee's word (D152), before the click. */}
+      {plugin.conflicts && plugin.conflicts.length > 0 && (
+        <p className="docent-plugin-conflict">
+          {plugin.conflicts.map((c) => `${c.with} holds ${c.over}`).join(" · ")} — stop it to enable this one
+        </p>
+      )}
       <footer className="docent-plugin-links">
         {plugin.homepage && (
           <a href={plugin.homepage} target="_blank" rel="noreferrer">
             ↗ home
           </a>
+        )}
+        {plugin.panel && plugin.status.kind === "running" && (
+          <button
+            type="button"
+            title={`Open ${plugin.panel.title} in a window beside the canvas`}
+            onClick={() => void openPluginPanel(plugin.panel!.title, plugin.panel!.url)}
+          >
+            Open panel — {plugin.panel.title}
+          </button>
         )}
         {plugin.status.kind === "running" && (
           <code title="Where the page reaches this plugin">{pluginUrl(plugin.name, "/")}</code>
